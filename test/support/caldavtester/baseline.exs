@@ -29,7 +29,7 @@
   "implicitcopymove.xml" => 96,
   "implicitdefaultcalendar.xml" => 9,
   "implicitdeletecalendar.xml" => 40,
-  "impliciterrors.xml" => 52,
+  "impliciterrors.xml" => 60,
   "implicitfreebusy.xml" => 18,
   "implicitimip.xml" => 44,
   "implicitlarge.xml" => 7,

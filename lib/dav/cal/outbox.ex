@@ -54,6 +54,11 @@ defmodule Dav.Cal.Outbox do
   alias Dav.Web.Store
   alias Dav.Xml
 
+  # The type the suite expects a stored calendar object to report,
+  # parameter included: a client that asked for `charset=utf-8` on the
+  # way in is entitled to see it on the way out.
+  @calendar_type "text/calendar;charset=utf-8"
+
   # iTIP request statuses, RFC 5546 section 3.6.
   @success "2.0;Success"
   @invalid_user "3.7;Invalid calendar user"
@@ -231,7 +236,7 @@ defmodule Dav.Cal.Outbox do
       name = (property(component, "UID") || "message") <> ".ics"
       body = wrap(calendar, component)
 
-      case store.put(inbox.path ++ [name], body, "text/calendar", context) do
+      case store.put(inbox.path ++ [name], body, @calendar_type, context) do
         {:ok, _outcome, _resource} -> :ok
         _refused -> :error
       end

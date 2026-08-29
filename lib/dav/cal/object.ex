@@ -100,7 +100,8 @@ defmodule Dav.Cal.Object do
          :ok <- timezones_present(calendar),
          :ok <- within_limits(calendar),
          :ok <- unique_uid(calendar),
-         :ok <- attendee_allowed(calendar, collection, path, options) do
+         :ok <- attendee_allowed(calendar, collection, path, options),
+         :ok <- organizer_allowed(calendar, collection, options) do
       no_uid_conflict(calendar, collection, path, options)
     end
   end
@@ -366,6 +367,34 @@ defmodule Dav.Cal.Object do
       not attends?(calendar, addresses) -> :ok
       true -> {:error, precondition("attendee-allowed")}
     end
+  end
+
+  # RFC 6638 section 3.2.1. An override answers to a series: it names
+  # the instance it replaces with `RECURRENCE-ID`, and without a
+  # master component there is no series for it to belong to. The
+  # organiser is the only one who could have created such a thing, and
+  # what they have written is an event that describes an exception to
+  # nothing. An attendee's copy is different — the server delivers
+  # single instances to people invited to one Tuesday and not the
+  # series — so only the organiser's own copy is refused.
+  defp organizer_allowed(calendar, collection, options) do
+    addresses = Scheduling.addresses_of(collection, options)
+    {organizer, _parameters} = organizer_of(calendar)
+
+    if organizer in addresses and orphaned?(calendar),
+      do: {:error, precondition("organizer-allowed")},
+      else: :ok
+  end
+
+  defp orphaned?(calendar) do
+    case Enum.filter(calendar.components, &(&1.name in ~w(VEVENT VTODO VPOLL))) do
+      [] -> false
+      scheduled -> Enum.all?(scheduled, &override?/1)
+    end
+  end
+
+  defp override?(component) do
+    Enum.any?(component.properties, &(&1.name == "RECURRENCE-ID"))
   end
 
   defp attends?(calendar, addresses) do

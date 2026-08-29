@@ -49,6 +49,11 @@ defmodule Dav.Cal.Scheduling do
   # use it to tell a re-invitation from a duplicate. A change to a
   # description or an alarm is not one of those; a change to when or
   # where it happens is.
+  # The type the suite expects a stored calendar object to report,
+  # parameter included: a client that asked for `charset=utf-8` on the
+  # way in is entitled to see it on the way out.
+  @calendar_type "text/calendar;charset=utf-8"
+
   @significant ~w(DTSTART DTEND DURATION DUE RRULE RDATE EXDATE LOCATION STATUS)
 
   # A wider list, and a different question. `@significant` asks
@@ -142,7 +147,7 @@ defmodule Dav.Cal.Scheduling do
 
   defp rewrite(resource, calendar, %{store: store, context: context}) do
     if Store.supports?(store, :put) do
-      store.put(resource.path, ICalendar.write(calendar), "text/calendar", context)
+      store.put(resource.path, ICalendar.write(calendar), @calendar_type, context)
     end
 
     :ok
@@ -576,7 +581,7 @@ defmodule Dav.Cal.Scheduling do
         | components: Enum.map(calendar.components, &answered(&1, organizer))
       }
 
-      store.put(resource.path, ICalendar.write(updated), "text/calendar", context)
+      store.put(resource.path, ICalendar.write(updated), @calendar_type, context)
     end
 
     :ok
@@ -614,7 +619,7 @@ defmodule Dav.Cal.Scheduling do
             |> Enum.map(&remembered(&1, change))
       }
 
-      store.put(resource.path, ICalendar.write(updated), "text/calendar", context)
+      store.put(resource.path, ICalendar.write(updated), @calendar_type, context)
     end
 
     :ok
@@ -961,7 +966,7 @@ defmodule Dav.Cal.Scheduling do
 
   defp write(object, body, %{store: store, context: context}) do
     if Store.supports?(store, :put) do
-      store.put(object.path, body, "text/calendar", context)
+      store.put(object.path, body, @calendar_type, context)
     end
 
     :ok
@@ -1149,7 +1154,7 @@ defmodule Dav.Cal.Scheduling do
     if Store.supports?(store, :put) do
       path = collection.path ++ [(uid || "message") <> ".ics"]
 
-      case store.put(path, body, "text/calendar", context) do
+      case store.put(path, body, @calendar_type, context) do
         {:ok, _outcome, resource} -> tag(resource, body, options)
         _refused -> :ok
       end
