@@ -69,6 +69,10 @@ defmodule Dav.Cal.Scheduling do
   # send them a message.
   @bookkeeping ~w(DTSTAMP LAST-MODIFIED CREATED SEQUENCE)
   @maintained ~w(SCHEDULE-STATUS SCHEDULE-AGENT RSVP)
+
+  # The `X-` properties that belong to the event rather than to one
+  # person's copy of it, and so travel with a scheduling message.
+  @public ~w(X-APPLE-STRUCTURED-LOCATION)
   @doc """
   Whether this hook applies — only inside a calendar collection.
 
@@ -862,7 +866,13 @@ defmodule Dav.Cal.Scheduling do
     # matching the invitation it answers.
     normalised =
       for component <- components,
-          do: component |> stamp([], options) |> unstamped() |> without_alarms() |> unagented()
+          do:
+            component
+            |> stamp([], options)
+            |> unstamped()
+            |> without_alarms()
+            |> unagented()
+            |> unextended()
 
     for recipient <- recipients, home = home_of(recipient, options), not is_nil(home) do
       deliver_to(home, recipient, method, normalised, zones, options)
@@ -908,6 +918,20 @@ defmodule Dav.Cal.Scheduling do
     else
       _unreadable -> nil
     end
+  end
+
+  # An `X-` property is private to whoever wrote it unless it is one
+  # of the few that describe the meeting rather than the copy. The
+  # organiser's client may hang anything it likes off its own event —
+  # a colour, a local identifier, a sync marker — and none of it means
+  # the same on an attendee's, where a different client will read it.
+  # A structured location does: it is where everyone is going.
+  defp unextended(component) do
+    %{component | properties: Enum.reject(component.properties, &private?/1)}
+  end
+
+  defp private?(%{name: name}) do
+    String.starts_with?(name, "X-") and name not in @public
   end
 
   # `SCHEDULE-AGENT` says who is expected to deliver *this* message.
@@ -1131,13 +1155,33 @@ defmodule Dav.Cal.Scheduling do
          {:ok, existing} <- ICalendar.parse(body) do
       held = schedulable(existing)
 
-      if resequenced?(components, held),
-        do: Enum.map(components, &carry_organizer(&1, held)),
-        else: Enum.map(components, &carry_over(&1, recipient, held))
+      kept =
+        if resequenced?(components, held),
+          do: Enum.map(components, &carry_organizer(&1, held)),
+          else: Enum.map(components, &carry_over(&1, recipient, held))
+
+      Enum.map(kept, &carry_alarms(&1, held))
     else
       _no_previous_copy -> components
     end
   end
+
+  # The recipient's own alarms survive the update. A scheduling
+  # message carries none — they are personal, and the sender's are
+  # stripped on the way out — so writing the message over the stored
+  # copy silently deleted whatever reminder the attendee had set for
+  # themselves. The event may move; their wish to be told about it
+  # beforehand does not.
+  defp carry_alarms(component, held) do
+    recurrence = value(component, "RECURRENCE-ID")
+
+    case Enum.find(held, &(value(&1, "RECURRENCE-ID") == recurrence)) do
+      nil -> component
+      previous -> %{component | components: alarms_of(previous) ++ component.components}
+    end
+  end
+
+  defp alarms_of(component), do: Enum.filter(component.components, &(&1.name == "VALARM"))
 
   # Being asked again resets the recipient's own answer, but not the
   # record that the answer they gave last time reached the organiser.
