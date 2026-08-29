@@ -86,10 +86,12 @@ defmodule Dav.Cal.FreeBusy do
   def run(%Resource{} = collection, body, depth, options) do
     with {:ok, document} <- Xml.parse(body),
          {:ok, range} <- range_of(document) do
+      floating = collection_zone(collection, options)
+
       periods =
         collection
         |> objects(depth, options)
-        |> Enum.flat_map(&busy(&1, range, options))
+        |> Enum.flat_map(&busy(&1, range, floating, options))
         |> coalesce()
 
       {:ok, {:body, "text/calendar", write(periods, range, [])}}
@@ -129,14 +131,31 @@ defmodule Dav.Cal.FreeBusy do
     end
   end
 
-  defp busy(object, range, options) do
+  defp busy(object, range, floating, options) do
     with {:ok, data} <- read(object, options),
          {:ok, calendar} <- ICalendar.parse(data) do
       calendar.components
       |> Enum.filter(&(&1.name in @considered))
-      |> Enum.flat_map(&periods(&1, range))
+      |> Enum.flat_map(&periods(&1, range, floating))
     else
       _unreadable -> []
+    end
+  end
+
+  # RFC 4791 section 3.1, the same rule the calendar-query follows: an
+  # event written without a zone happens in the collection's
+  # `CALDAV:calendar-timezone`. Reading it as UTC instead moves it by
+  # that offset, which is enough to report someone free during a
+  # meeting they are sitting in.
+  defp collection_zone(collection, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :properties),
+         %{} = properties <- store.properties(collection, context),
+         value when is_binary(value) <-
+           Map.get(properties, {Xml.caldav(), "calendar-timezone"}),
+         [_line, zone] <- Regex.run(~r/^TZID:(.+)$/m, value) do
+      String.trim(zone)
+    else
+      _absent -> nil
     end
   end
 
@@ -152,14 +171,14 @@ defmodule Dav.Cal.FreeBusy do
   # stated by its FREEBUSY properties — it is a report, not an
   # appointment, so its own DTSTART bounds the report rather than
   # marking anyone as occupied.
-  defp periods(%{name: "VEVENT"} = event, range) do
+  defp periods(%{name: "VEVENT"} = event, range, floating) do
     case type(event) do
       nil -> []
-      type -> Enum.map(TimeRange.periods(event, range), &{type, &1})
+      type -> Enum.map(TimeRange.periods(event, range, floating), &{type, &1})
     end
   end
 
-  defp periods(%{name: "VFREEBUSY"} = report, range) do
+  defp periods(%{name: "VFREEBUSY"} = report, range, _floating) do
     for property <- report.properties,
         property.name == "FREEBUSY",
         period <- String.split(property.value, ","),
@@ -283,12 +302,12 @@ defmodule Dav.Cal.FreeBusy do
       "BUSY"
 
   """
-  @spec periods_of(ICalendar.component(), {String.t() | nil, String.t() | nil}) ::
+  @spec periods_of(ICalendar.component(), {String.t() | nil, String.t() | nil}, String.t() | nil) ::
           [{String.t(), {Tempo.t(), Tempo.t()}}]
-  def periods_of(calendar, range) do
+  def periods_of(calendar, range, floating \\ nil) do
     calendar.components
     |> Enum.filter(&(&1.name in @considered))
-    |> Enum.flat_map(&periods(&1, range))
+    |> Enum.flat_map(&periods(&1, range, floating))
   end
 
   @doc """

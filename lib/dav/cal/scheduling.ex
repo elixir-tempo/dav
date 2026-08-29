@@ -58,6 +58,12 @@ defmodule Dav.Cal.Scheduling do
   # separates them: the attendees need the new one, but nobody has to
   # answer for it a second time.
   @resequencing @significant ++ ~w(SUMMARY DESCRIPTION)
+
+  # Properties every save rewrites, and parameters the server owns.
+  # Neither is news to an attendee, so neither counts as a reason to
+  # send them a message.
+  @bookkeeping ~w(DTSTAMP LAST-MODIFIED CREATED SEQUENCE)
+  @maintained ~w(SCHEDULE-STATUS SCHEDULE-AGENT RSVP)
   @doc """
   Whether this hook applies — only inside a calendar collection.
 
@@ -487,16 +493,28 @@ defmodule Dav.Cal.Scheduling do
       # Someone who declined does not need the update. Apple's server
       # stops sending to them, and their client has already removed the
       # event — re-delivering puts it back in a calendar they cleared.
+      # An organiser marked `SCHEDULE-AGENT=CLIENT` or `NONE` is one
+      # whose invitations this server does not send. It still keeps
+      # their copy — the event is theirs — but the message is the
+      # client's to deliver, or nobody's.
       recipients =
-        components
-        |> attendees_of()
-        |> Enum.reject(&(&1 in addresses or declined?(components, &1)))
+        if organizer_delivers?(components) do
+          components
+          |> attendees_of()
+          |> Enum.reject(&(&1 in addresses or declined?(components, &1)))
+        else
+          []
+        end
 
-      send_to(recipients, "REQUEST", components, zones(calendar), options)
+      # Nothing is sent when nothing the attendees can see has changed.
+      # An organiser adjusting their own alarm would otherwise put a
+      # fresh invitation in every attendee's Inbox, asking them to
+      # look at an event that is exactly as they left it.
+      send_to(notified(recipients, change), "REQUEST", components, zones(calendar), options)
 
       record(resource, calendar, recipients, change, options)
     else
-      reply(resource, calendar, components, organizer, addresses, options)
+      reply(resource, calendar, components, organizer, addresses, change, options)
     end
   end
 
@@ -534,8 +552,8 @@ defmodule Dav.Cal.Scheduling do
       [%{name: "TRANSP", parameters: %{}, value: "TRANSPARENT"}]
   end
 
-  defp reply(resource, calendar, components, organizer, addresses, options) do
-    if organizer_delivers?(components) do
+  defp reply(resource, calendar, components, organizer, addresses, change, options) do
+    if organizer_delivers?(components) and notified([organizer], change) != [] do
       replies = for component <- components, do: only(component, addresses)
 
       send_to([organizer], "REPLY", replies, zones(calendar), options)
@@ -740,13 +758,47 @@ defmodule Dav.Cal.Scheduling do
     # The delivered copy carries canonical addresses too. Sending one
     # spelling and storing another is how an attendee's reply stops
     # matching the invitation it answers.
-    normalised = for component <- components, do: component |> stamp([], options) |> unstamped()
+    normalised =
+      for component <- components,
+          do: component |> stamp([], options) |> unstamped() |> without_alarms()
 
     for recipient <- recipients, home = home_of(recipient, options), not is_nil(home) do
       deliver_to(home, recipient, method, normalised, zones, options)
     end
 
     :ok
+  end
+
+  defp notified(recipients, %{previous: nil}), do: recipients
+
+  defp notified(recipients, %{body: body, previous: previous}) do
+    if shared(body) == shared(previous), do: [], else: recipients
+  end
+
+  # The event as the attendees see it. Alarms are removed because they
+  # are personal; the timestamps because every save moves them and no
+  # attendee is waiting to hear it; and the parameters the server
+  # maintains because they record what became of past messages rather
+  # than anything this one carries.
+  defp shared(body) do
+    with {:ok, calendar} <- ICalendar.parse(body),
+         [_ | _] = components <- schedulable(calendar) do
+      for component <- Enum.map(components, &without_alarms/1),
+          property <- component.properties,
+          property.name not in @bookkeeping,
+          into: MapSet.new(),
+          do: {property.name, property.value, Map.drop(property.parameters, @maintained)}
+    else
+      _unreadable -> nil
+    end
+  end
+
+  # RFC 5546 section 3.6: an alarm is the property of whoever set it.
+  # The organiser's reminder to leave early says nothing to an
+  # attendee in another city, and delivering it puts an alert in their
+  # calendar that they never asked for and cannot trace.
+  defp without_alarms(component) do
+    %{component | components: Enum.reject(component.components, &(&1.name == "VALARM"))}
   end
 
   # A scheduling message reaches two places, and both matter. The Inbox
@@ -928,12 +980,31 @@ defmodule Dav.Cal.Scheduling do
   defp preserving(calendar, recipient, components, uid, options) do
     with %Resource{} = object <- object_with(calendar, uid, options),
          {:ok, body} <- read(object, options),
-         {:ok, existing} <- ICalendar.parse(body),
-         false <- resequenced?(components, schedulable(existing)) do
-      Enum.map(components, &carry_over(&1, recipient, schedulable(existing)))
+         {:ok, existing} <- ICalendar.parse(body) do
+      held = schedulable(existing)
+
+      if resequenced?(components, held),
+        do: Enum.map(components, &carry_organizer(&1, held)),
+        else: Enum.map(components, &carry_over(&1, recipient, held))
     else
-      _new_or_resequenced -> components
+      _no_previous_copy -> components
     end
+  end
+
+  # Being asked again resets the recipient's own answer, but not the
+  # record that the answer they gave last time reached the organiser.
+  # That `SCHEDULE-STATUS` on the `ORGANIZER` is this copy's only
+  # evidence that the attendee is in touch at all, and dropping it
+  # made every re-invitation look like a first one.
+  defp carry_organizer(component, held) do
+    kept =
+      for old <- held,
+          property <- old.properties,
+          property.name == "ORGANIZER",
+          into: %{},
+          do: {{property.name, property.value}, property.parameters}
+
+    %{component | properties: Enum.map(component.properties, &restore(&1, kept))}
   end
 
   # Whether the attendees must answer again. `SEQUENCE` rising is not

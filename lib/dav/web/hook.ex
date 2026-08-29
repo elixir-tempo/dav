@@ -125,7 +125,42 @@ defmodule Dav.Web.Hook do
               options :: map()
             ) :: [{Dav.Xml.qname(), Dav.Xml.value()}]
 
-  @optional_callbacks headers: 3, deleted: 2, properties: 3
+  @doc """
+  Handle a request carrying an `action` query parameter.
+
+  Optional. Apple's CalDAV extensions address several operations this
+  way — `?action=share` binds a calendar into the caller's own home —
+  rather than by inventing a method for each. The parameter names the
+  operation, so the hook that recognises it answers and the rest
+  decline.
+
+  ### Arguments
+
+  * `action` is the value of the `action` query parameter.
+
+  * `conn` is the request.
+
+  * `resource` is the resource addressed by the request path.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `{:ok, conn}` when the hook handled the request and has sent a
+    response.
+
+  * `:unhandled` when it does not recognise the action, leaving the
+    request to be dispatched as usual.
+
+  """
+  @callback action(
+              action :: String.t(),
+              conn :: Plug.Conn.t(),
+              resource :: Resource.t(),
+              options :: map()
+            ) :: {:ok, Plug.Conn.t()} | :unhandled
+
+  @optional_callbacks headers: 3, deleted: 2, properties: 3, action: 4
 
   @doc """
   React to a resource having been written.

@@ -413,6 +413,69 @@ defmodule Dav.Cal.Sharing do
     :ok
   end
 
+  @doc """
+  Bind a calendar into the caller's own home.
+
+  Apple's direct sharing: rather than wait for an invitation, someone
+  who already has access — as a proxy, or through a group — asks for
+  the calendar to appear in their calendar home, and is told where it
+  now lives.
+
+  ### Arguments
+
+  * `action` is the `action` query parameter. Only `"share"` is
+    handled here.
+
+  * `conn` is the request.
+
+  * `resource` is the calendar being shared.
+
+  * `options` carries `:store`, `:context` and `:principal`.
+
+  ### Returns
+
+  * `{:ok, conn}` carrying a `CS:shared-as` document naming the new
+    collection, or a `403` when the caller has no calendar home to
+    bind it into.
+
+  * `:unhandled` for any other action.
+
+  """
+  @impl Dav.Web.Hook
+  @spec action(String.t(), Plug.Conn.t(), Resource.t(), map()) ::
+          {:ok, Plug.Conn.t()} | :unhandled
+  def action("share", conn, resource, options) do
+    with true <- Cal.calendar?(resource),
+         %Resource{path: home} <- caller_home(options) do
+      path = home ++ [List.last(resource.path)]
+      link(path, Resource.href(resource), options)
+
+      {:ok,
+       conn
+       |> put_resp_content_type("application/xml", "utf-8")
+       |> send_resp(200, shared_as(path))}
+    else
+      _nowhere_to_bind_it -> {:ok, send_resp(conn, 403, "")}
+    end
+  end
+
+  def action(_other, _conn, _resource, _options), do: :unhandled
+
+  # The caller's own calendar home, reached the only way the store
+  # offers: a principal has addresses, and an address has a home.
+  defp caller_home(%{store: store, context: context} = options) do
+    with principal when is_binary(principal) <- Map.get(options, :principal),
+         true <- function_exported?(store, :addresses, 2),
+         {:ok, addresses} <- store.addresses(principal, context),
+         address when is_binary(address) <- List.first(addresses),
+         true <- function_exported?(store, :principal, 2),
+         {:ok, home} <- store.principal(address, context) do
+      home
+    else
+      _unknown_caller -> nil
+    end
+  end
+
   defp shared_as(path) do
     href = Resource.href(%Resource{path: path, collection?: true})
 

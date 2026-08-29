@@ -136,6 +136,13 @@ defmodule Dav.Web.Plug do
     |> send_resp(200, "")
   end
 
+  defp dispatch(method, conn, options) when method in ["GET", "POST"] do
+    case acted(conn, options) do
+      {:ok, conn} -> conn
+      :unhandled -> undirected(method, conn, options)
+    end
+  end
+
   defp dispatch("PROPFIND", conn, options), do: propfind(conn, options)
 
   defp dispatch("REPORT", conn, options), do: report(conn, options)
@@ -158,6 +165,18 @@ defmodule Dav.Web.Plug do
   # An extension's method, if one is registered for it. Checked last,
   # so an extension cannot quietly take over a method the base defines.
   defp dispatch(method, conn, options) do
+    case Map.fetch(options.methods, method) do
+      {:ok, handler} -> handler.call(conn, Store.segments(conn.request_path), options)
+      :error -> refuse(conn, options)
+    end
+  end
+
+  # What a `GET` or `POST` means when nothing claimed its `action`:
+  # a `GET` is a read, and a `POST` belongs to whichever extension
+  # registered for it.
+  defp undirected("GET", conn, options), do: get("GET", conn, options)
+
+  defp undirected(method, conn, options) do
     case Map.fetch(options.methods, method) do
       {:ok, handler} -> handler.call(conn, Store.segments(conn.request_path), options)
       :error -> refuse(conn, options)
@@ -289,6 +308,32 @@ defmodule Dav.Web.Plug do
     else
       _absent -> nil
     end
+  end
+
+  # Apple's extensions hang several operations off an `action` query
+  # parameter rather than a method of their own. A request without one
+  # is dispatched normally, and one whose action nothing recognises is
+  # too — the parameter is not a promise that the server implements it.
+  defp acted(conn, options) do
+    with action when is_binary(action) <- action_of(conn),
+         {:ok, resource} <- resolve(conn, options) do
+      options.hooks
+      |> Enum.filter(&function_exported?(&1, :action, 4))
+      |> Enum.find_value(:unhandled, &claimed(&1, action, conn, resource, options))
+    else
+      _no_action_or_resource -> :unhandled
+    end
+  end
+
+  defp claimed(hook, action, conn, resource, options) do
+    case hook.action(action, conn, resource, options) do
+      {:ok, conn} -> {:ok, conn}
+      :unhandled -> nil
+    end
+  end
+
+  defp action_of(%Plug.Conn{query_string: query}) do
+    query |> URI.decode_query() |> Map.get("action")
   end
 
   defp contributed_headers(conn, resource, options) do

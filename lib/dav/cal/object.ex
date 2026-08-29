@@ -402,8 +402,38 @@ defmodule Dav.Cal.Object do
       collection |> siblings(path, options) |> Enum.any?(&(uid in uids_of(&1, options))) ->
         {:error, precondition("no-uid-conflict")}
 
+      scheduling?(calendar) and elsewhere?(uid, collection, path, options) ->
+        {:error, precondition("unique-scheduling-object-resource")}
+
       true ->
         :ok
+    end
+  end
+
+  # RFC 6638 section 3.1 narrows `no-uid-conflict` for one class of
+  # resource. A *scheduling* object — one carrying an `ORGANIZER` —
+  # must be unique across the whole calendar home, not merely within
+  # the collection it is written to: two calendars each holding a copy
+  # of the same meeting would each answer for it, and a reply could
+  # then be applied to either.
+  defp scheduling?(calendar) do
+    Enum.any?(properties_of(calendar), &(&1.name == "ORGANIZER"))
+  end
+
+  # The home's *other* calendar collections. The inbox and outbox are
+  # excluded by asking for calendars only: their whole purpose is to
+  # hold a copy of a message that already lives in one, so counting
+  # them would refuse every invitation the server itself delivered.
+  defp elsewhere?(uid, collection, path, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :read),
+         {:ok, home} <- store.resolve(Enum.drop(collection.path, -1), context),
+         {:ok, children} <- store.children(home, context) do
+      children
+      |> Enum.filter(&(&1.collection? and &1.path != collection.path and Cal.calendar?(&1)))
+      |> Enum.flat_map(&siblings(&1, path, options))
+      |> Enum.any?(&(uid in uids_of(&1, options)))
+    else
+      _unreadable -> false
     end
   end
 

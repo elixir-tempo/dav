@@ -731,11 +731,28 @@ defmodule Dav.CalDAVTester.Runner do
       |> Enum.map(&%Resource{path: &1, collection?: true})
 
     SchedulingStore.start(
-      resources ++ calendars ++ scheduling ++ notifications ++ tree ++ principals ++ receiver,
+      resources ++
+        calendars ++
+        scheduling ++ notifications ++ tree ++ principals ++ proxies(principals) ++ receiver,
       addresses,
       principal_properties(people, substitutions),
       canonical_addresses(people, substitutions)
     )
+  end
+
+  # Apple's calendar-user-proxy draft: every principal has two child
+  # principals standing for "may read my calendars" and "may write
+  # them". A client grants access by PROPPATCHing `group-member-set`
+  # on one of them, so they have to exist before anything can.
+  defp proxies(principals) do
+    for principal <- principals,
+        leaf <- ["calendar-proxy-read", "calendar-proxy-write"],
+        do: %Resource{
+          path: principal.path ++ [leaf],
+          collection?: true,
+          types: [Acl.principal()],
+          owner: principal.owner
+        }
   end
 
   # Every spelling of a user maps to the one form the server stores.
