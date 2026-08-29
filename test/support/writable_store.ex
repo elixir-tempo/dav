@@ -9,6 +9,7 @@ defmodule Dav.Test.WritableStore do
 
   @behaviour Dav.Web.Store
 
+  alias Dav.Cal
   alias Dav.Web.Resource
 
   def start(resources) do
@@ -167,5 +168,32 @@ defmodule Dav.Test.WritableStore do
       | resources: copied ++ Enum.reject(kept, &(&1.path in landing)),
         bodies: Map.merge(kept_bodies, bodies)
     }
+  end
+
+  @impl Dav.Web.Store
+  def mkcalendar(path, agent) do
+    parent = Enum.drop(path, -1)
+
+    cond do
+      exists?(agent, path) -> {:error, :exists}
+      not exists?(agent, parent) -> {:error, :conflict}
+      # RFC 4791: a calendar collection MUST NOT contain another.
+      calendar?(agent, parent) -> {:error, :forbidden}
+      true -> create_calendar(agent, path)
+    end
+  end
+
+  defp create_calendar(agent, path) do
+    resource = %Resource{path: path, collection?: true, types: [Cal.calendar()]}
+    Agent.update(agent, &%{&1 | resources: [resource | &1.resources]})
+    {:ok, resource}
+  end
+
+  defp calendar?(_agent, []), do: false
+
+  defp calendar?(agent, path) do
+    Agent.get(agent, fn state ->
+      Enum.any?(state.resources, &(&1.path == path and Cal.calendar() in &1.types))
+    end)
   end
 end

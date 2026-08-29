@@ -40,7 +40,8 @@ defmodule Dav.Web.Plug do
     %{
       store: Keyword.fetch!(options, :store),
       context: Keyword.get(options, :context),
-      reports: Map.new(Keyword.get(options, :reports, []))
+      reports: Map.new(Keyword.get(options, :reports, [])),
+      methods: Map.new(Keyword.get(options, :methods, []))
     }
   end
 
@@ -49,7 +50,7 @@ defmodule Dav.Web.Plug do
   # method that would fail — which matters more than it sounds, because
   # a client that believes `PUT` works behaves differently from one
   # that knows it does not.
-  defp allowed(%{store: store}) do
+  defp allowed(%{store: store} = options) do
     optional =
       for {capability, method} <- [
             put: "PUT",
@@ -62,7 +63,9 @@ defmodule Dav.Web.Plug do
 
     read = if Store.supports?(store, :read), do: ["GET", "HEAD"], else: []
 
-    Enum.join(["OPTIONS", "PROPFIND", "REPORT"] ++ read ++ optional, ", ")
+    registered = Map.keys(Map.get(options, :methods, %{}))
+
+    Enum.join(["OPTIONS", "PROPFIND", "REPORT"] ++ read ++ optional ++ registered, ", ")
   end
 
   @impl Plug
@@ -97,7 +100,14 @@ defmodule Dav.Web.Plug do
 
   defp dispatch("MOVE", conn, options), do: transfer(:move, conn, options)
 
-  defp dispatch(_method, conn, options), do: refuse(conn, options)
+  # An extension's method, if one is registered for it. Checked last,
+  # so an extension cannot quietly take over a method the base defines.
+  defp dispatch(method, conn, options) do
+    case Map.fetch(options.methods, method) do
+      {:ok, handler} -> handler.call(conn, Store.segments(conn.request_path), options)
+      :error -> refuse(conn, options)
+    end
+  end
 
   defp refuse(conn, options) do
     conn

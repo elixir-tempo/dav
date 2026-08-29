@@ -217,7 +217,7 @@ defmodule Dav.Web.Store do
   """
   @spec supports?(
           module(),
-          :read | :put | :delete | :mkcol | :properties | :patch | :copy | :move
+          :read | :put | :delete | :mkcol | :properties | :patch | :copy | :move | :mkcalendar
         ) :: boolean()
   def supports?(store, capability) do
     Code.ensure_loaded?(store) and function_exported?(store, capability, arity(capability))
@@ -231,6 +231,7 @@ defmodule Dav.Web.Store do
   defp arity(:patch), do: 3
   defp arity(:copy), do: 3
   defp arity(:move), do: 3
+  defp arity(:mkcalendar), do: 2
 
   @doc """
   A resource's dead properties.
@@ -325,6 +326,31 @@ defmodule Dav.Web.Store do
   """
   @callback move(source :: Resource.t(), destination :: [String.t()], context()) :: :ok
 
+  @doc """
+  Create a calendar collection.
+
+  Separate from `c:mkcol/2` because a calendar is not merely a
+  collection: it must report `CALDAV:calendar` in its resource type,
+  and RFC 4791 forbids one inside another.
+
+  ### Arguments
+
+  * `path` is the request path in segments.
+
+  * `context` is the store's own configuration.
+
+  ### Returns
+
+  * `{:ok, resource}` with `CALDAV:calendar` among its types; or
+
+  * `{:error, :exists}`, `{:error, :conflict}` when the parent is
+    missing, or `{:error, :forbidden}` when the parent is itself a
+    calendar.
+
+  """
+  @callback mkcalendar(path :: [String.t()], context()) ::
+              {:ok, Resource.t()} | {:error, :exists | :conflict | :forbidden}
+
   @optional_callbacks read: 2,
                       put: 4,
                       delete: 2,
@@ -332,5 +358,6 @@ defmodule Dav.Web.Store do
                       properties: 2,
                       patch: 3,
                       copy: 3,
-                      move: 3
+                      move: 3,
+                      mkcalendar: 2
 end
