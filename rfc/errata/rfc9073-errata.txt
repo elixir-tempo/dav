@@ -1,0 +1,270 @@
+Errata for RFC 9073
+============================================================
+4 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 6829  [Verified] [Technical]
+    Section: 7.1    Reported: 2022-02-02  by Ken Murchison
+
+  Original text:
+      partprop     = *(
+                     ;
+                     ; The following are REQUIRED
+                     ; but MUST NOT occur more than once.
+                     ;
+                     participanttype / uid /
+                     ;
+                     ; The following are OPTIONAL
+                     ; but MUST NOT occur more than once.
+                     ;
+                     calendaraddress / created / description / dtstamp /
+                     geo / last-mod / priority / seq /
+                     status / summary / url /
+                     ;
+                     ; The following are OPTIONAL
+                     ; and MAY occur more than once.
+                     ;
+                     attach / categories / comment
+                     contact / location / rstatus / related /
+                     resources / strucloc / strucres /
+                     styleddescription / sdataprop / iana-prop
+                     ;
+                     )
+
+  Corrected text:
+      partprop     = *(
+                     ;
+                     ; The following are REQUIRED
+                     ; but MUST NOT occur more than once.
+                     ;
+                     participanttype / uid /
+                     ;
+                     ; The following are OPTIONAL
+                     ; but MUST NOT occur more than once.
+                     ;
+                     calendaraddress / created / description / dtstamp /
+                     geo / last-mod / priority / seq /
+                     status / summary / url /
+                     ;
+                     ; The following are OPTIONAL
+                     ; and MAY occur more than once.
+                     ;
+                     attach / categories / comment
+                     contact / location / rstatus / related /
+                     resources /
+                     styleddescription / sdataprop / iana-prop
+                     ;
+                     )
+
+  Notes:
+'structloc' and 'structres' are not defined in this document.  These are leftover artifacts from a draft version of this specification and were replaced by 'locationc' and 'resourcec'
+
+--- Errata ID 7380  [Rejected] [Technical]
+    Section: 4    Reported: 2023-03-09  by Olaf Bartelt
+
+  Original text:
+The following changes to the syntax defined in iCalendar [RFC5545]
+   are made here.  New elements are defined in subsequent sections.
+
+   ; Addition of PARTICIPANT, VLOCATION, and VRESOURCE
+   ; as valid components
+   eventc     = "BEGIN" ":" "VEVENT" CRLF
+                eventprop *alarmc *participantc *locationc *resourcec
+                "END" ":" "VEVENT" CRLF
+
+   ; Addition of properties STYLED-DESCRIPTION and STRUCTURED-DATA
+   eventprop  =/ *styleddescription
+                 *sdataprop
+
+   ; Addition of PARTICIPANT, VLOCATION, and VRESOURCE
+   ; as valid components
+   todoc      = "BEGIN" ":" "VTODO" CRLF
+                todoprop *alarmc *participantc *locationc *resourcec
+                "END" ":" "VTODO" CRLF
+
+   ; Addition of properties STYLED-DESCRIPTION and STRUCTURED-DATA
+   todoprop =/ *styleddescription
+               *sdataprop
+
+   ; Addition of PARTICIPANT, VLOCATION, and VRESOURCE
+   ; as valid components
+   journalc   = "BEGIN" ":" "VJOURNAL" CRLF
+                jourprop *participantc *locationc *resourcec
+                "END" ":" "VJOURNAL" CRLF
+
+   ; Addition of properties STYLED-DESCRIPTION and STRUCTURED-DATA
+   jourprop =/ *styleddescription
+               *sdataprop
+
+   ; Addition of PARTICIPANT, VLOCATION, and VRESOURCE
+   ; as valid components
+   freebusyc  = "BEGIN" ":" "VFREEBUSY" CRLF
+                fbprop *participantc *locationc *resourcec
+                "END" ":" "VFREEBUSY" CRLF
+
+   ; Addition of property STYLED-DESCRIPTION
+   fbprop     =/ *styleddescription
+
+  Corrected text:
+The following changes to the syntax defined in iCalendar [RFC5545]
+   are made here.  New elements are defined in subsequent sections.
+
+   ; Addition of PARTICIPANT, VLOCATION, and VRESOURCE
+   ; as valid components
+   eventc     = "BEGIN" ":" "VEVENT" CRLF
+                eventprop *alarmc *participantc *locationc *resourcec
+                "END" ":" "VEVENT" CRLF
+
+   ; Addition of properties STYLED-DESCRIPTION and STRUCTURED-DATA
+   eventprop  =/ *styleddescription
+                 *sdataprop
+
+   ; Addition of PARTICIPANT, VLOCATION, and VRESOURCE
+   ; as valid components
+   todoc      = "BEGIN" ":" "VTODO" CRLF
+                todoprop *alarmc *participantc *locationc *resourcec
+                "END" ":" "VTODO" CRLF
+
+   ; Addition of properties STYLED-DESCRIPTION and STRUCTURED-DATA
+   todoprop =/ *styleddescription
+               *sdataprop
+
+   ; Addition of PARTICIPANT, VLOCATION, and VRESOURCE
+   ; as valid components
+   journalc   = "BEGIN" ":" "VJOURNAL" CRLF
+                jourprop *participantc *locationc *resourcec
+                "END" ":" "VJOURNAL" CRLF
+
+   ; Addition of properties STYLED-DESCRIPTION and STRUCTURED-DATA
+   jourprop =/ *styleddescription
+               *sdataprop
+
+   ; Addition of PARTICIPANT, VLOCATION, and VRESOURCE
+   ; as valid components
+   freebusyc  = "BEGIN" ":" "VFREEBUSY" CRLF
+                fbprop *participantc *locationc *resourcec
+                "END" ":" "VFREEBUSY" CRLF
+
+   ; Addition of property STYLED-DESCRIPTION
+   fbprop     =/ *styleddescription
+
+   ; Addition of property STYLED-DESCRIPTION
+   alarmprop  =/ *styleddescription
+
+  Notes:
+The usage of STYLED-DESCRIPTION in VALARMs is mentioned in section 6.5, but not represented as an extension to the syntax in section 4.
+ --VERIFIER NOTES-- 
+   See https://mailarchive.ietf.org/arch/msg/calsify/HmJBbZpxrvLqn2TR3HkBr9um08s/ for wg discussion.
+
+--- Errata ID 7381  [Verified] [Technical]
+    Section: 7.2    Reported: 2023-03-09  by Olaf Bartelt
+
+  Original text:
+   Format Definition:  This component is defined by the following
+      notation:
+
+      locationc    = "BEGIN" ":" "VLOCATION" CRLF
+                     locprop
+                     "END" ":" "VLOCATION" CRLF
+
+      locprop      = *(
+                     ;
+                     ; The following are REQUIRED
+                     ; but MUST NOT occur more than once.
+                     ;
+                     uid /
+                     ;
+                     ; The following are OPTIONAL
+                     ; but MUST NOT occur more than once.
+                     ;
+                     description / geo / loctype / name
+                     ;
+                     ; The following are OPTIONAL
+                     ; and MAY occur more than once.
+                     ;
+                     sdataprop / iana-prop
+                  )
+
+  Corrected text:
+   Format Definition:  This component is defined by the following
+      notation:
+
+      locationc    = "BEGIN" ":" "VLOCATION" CRLF
+                     locprop
+                     "END" ":" "VLOCATION" CRLF
+
+      locprop      = *(
+                     ;
+                     ; The following are REQUIRED
+                     ; but MUST NOT occur more than once.
+                     ;
+                     uid /
+                     ;
+                     ; The following are OPTIONAL
+                     ; but MUST NOT occur more than once.
+                     ;
+                     description / geo / loctype / name / url /
+                     ;
+                     ; The following are OPTIONAL
+                     ; and MAY occur more than once.
+                     ;
+                     sdataprop / iana-prop
+                  )
+
+  Notes:
+The url property is missing or the specification clahes with RFC 9074, where in section 8.2 in the example it reads:
+
+   BEGIN:VLOCATION
+   UID:123456-abcdef-98765432
+   NAME:Office
+   URL:geo:40.443,-79.945;u=10
+   END:VLOCATION
+
+Either "geo" was intended as a geo uri as defined in RFC 5870 (instead of the geographic position from RFC 2445/5545) or "url" should be added as a valid property (or RFC 9074 is wrong).
+
+--
+
+Verifier's notes: A "/" was missing after "name" and was added after "url" in this same errata.
+
+--- Errata ID 8040  [Reported] [Technical]
+    Section: 7.3    Reported: 2024-07-21  by Dominique Hazaël-Massieux
+
+  Original text:
+      resprop      = *(
+                     ;
+                     ; The following are REQUIRED
+                     ; but MUST NOT occur more than once.
+                     ;
+                     uid /
+                     ;
+                     ; The following are OPTIONAL
+                     ; but MUST NOT occur more than once.
+                     ;
+                     description / geo / name / restype /
+                     ;
+                     ; The following are OPTIONAL
+                     ; and MAY occur more than once.
+                     ;
+                     sdataprop / iana-prop
+                   )
+
+  Corrected text:
+      resprop      = *(
+                     ;
+                     ; The following are REQUIRED
+                     ; but MUST NOT occur more than once.
+                     ;
+                     uid /
+                     ;
+                     ; The following are OPTIONAL
+                     ; but MUST NOT occur more than once.
+                     ;
+                     description / geo / name / restypeprop /
+                     ;
+                     ; The following are OPTIONAL
+                     ; and MAY occur more than once.
+                     ;
+                     sdataprop / iana-prop
+                   )
+
+  Notes:
+restype is not defined anywhere, whereas restypeprop is

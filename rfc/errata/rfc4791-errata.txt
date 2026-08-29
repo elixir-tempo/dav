@@ -1,0 +1,892 @@
+Errata for RFC 4791
+============================================================
+24 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 1002  [Verified] [Technical]
+    Section: 5.3.1    Reported: 2007-07-14  by Julian Reschke
+
+  Original text:
+      (DAV:needs-privilege): The DAV:bind privilege MUST be granted to
+               ^          ^
+      the current user on the parent collection of the Request-URI.
+
+  Corrected text:
+      (DAV:need-privileges): The DAV:bind privilege MUST be granted to
+               ^         ^
+      the current user on the parent collection of the Request-URI.
+
+  Notes:
+As per RFC 3744.
+
+--- Errata ID 1476  [Verified] [Technical]
+    Section: 7.8.10.    Reported: 2008-07-20  by Filip Navara
+
+  Original text:
+   <D:error>
+     <C:supported-filter>
+       <C:prop-filter name="X-ABC-GUID"/>
+     </C:supported-filter>
+   </D:error>
+
+  Corrected text:
+   <D:error xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <C:supported-filter>
+       <C:prop-filter name="X-ABC-GUID"/>
+     </C:supported-filter>
+   </D:error>
+
+  Notes:
+Proper namespace declarations should be returned in the XML response.
+
+--- Errata ID 4152  [Rejected] [Editorial]
+    Section: 7.8.1    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+   BEGIN:VEVENT
+   DTSTART;TZID=US/Eastern:20060102T120000
+   DURATION:PT1H
+   RRULE:FREQ=DAILY;COUNT=5
+   SUMMARY:Event #2
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   BEGIN:VEVENT
+   DTSTART;TZID=US/Eastern:20060104T140000
+   DURATION:PT1H
+   RECURRENCE-ID;TZID=US/Eastern:20060104T120000
+   SUMMARY:Event #2 bis
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   BEGIN:VEVENT
+   DTSTART;TZID=US/Eastern:20060106T140000
+   DURATION:PT1H
+   RECURRENCE-ID;TZID=US/Eastern:20060106T120000
+   SUMMARY:Event #2 bis bis
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   END:VCALENDAR
+
+  Corrected text:
+   BEGIN:VEVENT
+   DTSTART;TZID=US/Eastern:20060102T120000
+   DURATION:PT1H
+   RRULE:FREQ=DAILY;COUNT=5
+   SUMMARY:Event #2
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   BEGIN:VEVENT
+   DTSTART;TZID=US/Eastern:20060104T140000
+   DURATION:PT1H
+   RECURRENCE-ID;TZID=US/Eastern:20060104T120000
+   SUMMARY:Event #2 bis
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   END:VCALENDAR
+
+  Notes:
+Remove the last VEVENT component in abcd2.ics, because it is outside of the time-range.
+ --VERIFIER NOTES-- 
+The query requests the return of an entire resource (including all overridden instances) for any resource that has at least one component overlapping the time range.
+
+--- Errata ID 4153  [Verified] [Editorial]
+    Section: 7.8.1    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+       <D:href>http://cal.example.com/bernard/work/abcd3.ics</D:href>
+       <D:propstat>
+         <D:prop>
+           <D:getetag>"fffff-abcd3"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VTIMEZONE
+   LAST-MODIFIED:20040110T032845Z
+   TZID:US/Eastern
+
+  Corrected text:
+       <D:href>http://cal.example.com/bernard/work/abcd3.ics</D:href>
+       <D:propstat>
+         <D:prop>
+           <D:getetag>"fffff-abcd3"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   BEGIN:VTIMEZONE
+   LAST-MODIFIED:20040110T032845Z
+   TZID:US/Eastern
+
+  Notes:
+Remove the PRODID property in abcd3.ics, which was not selected by C:calendar-date/C:comp[@name="VCALENDAR"]/*
+
+--- Errata ID 4154  [Verified] [Editorial]
+    Section: 7.8.5    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+   <D:multistatus xmlns:D="DAV:"
+                  xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:response>
+       <D:href>http://cal.example.com/bernard/work/abcd4.ics</D:href>
+       <D:propstat>
+         <D:prop>
+           <D:getetag>"fffff-abcd5"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+
+  Corrected text:
+   <D:multistatus xmlns:D="DAV:"
+                  xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:response>
+       <D:href>http://cal.example.com/bernard/work/abcd5.ics</D:href>
+       <D:propstat>
+         <D:prop>
+           <D:getetag>"fffff-abcd5"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+
+  Notes:
+Typo in D:href
+
+--- Errata ID 4155  [Verified] [Editorial]
+    Section: 7.8.3    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VEVENT
+   DTSTAMP:20060206T001121Z
+   DTSTART:20060103T170000
+   DURATION:PT1H
+   RECURRENCE-ID:20060103T170000
+   SUMMARY:Event #2
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   BEGIN:VEVENT
+   DTSTAMP:20060206T001121Z
+   DTSTART:20060104T190000
+   DURATION:PT1H
+   RECURRENCE-ID:20060104T170000
+   SUMMARY:Event #2 bis
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Corrected text:
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VEVENT
+   DTSTAMP:20060206T001121Z
+   DTSTART:20060103T170000Z
+   DURATION:PT1H
+   RECURRENCE-ID:20060103T170000Z
+   SUMMARY:Event #2
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   BEGIN:VEVENT
+   DTSTAMP:20060206T001121Z
+   DTSTART:20060104T190000Z
+   DURATION:PT1H
+   RECURRENCE-ID:20060104T170000Z
+   SUMMARY:Event #2 bis
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Notes:
+9.6.5 says:
+      Date and local
+      time with reference to time zone information MUST be converted
+      into date with UTC time.
+
+--- Errata ID 4156  [Verified] [Editorial]
+    Section: 7.8.3    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VEVENT
+   ATTENDEE;PARTSTAT=ACCEPTED;ROLE=CHAIR:mailto:cyrus@example.com
+   ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:lisa@example.com
+   DTSTAMP:20060206T001220Z
+   DTSTART:20060104T150000
+   DURATION:PT1H
+   LAST-MODIFIED:20060206T001330Z
+   ORGANIZER:mailto:cyrus@example.com
+   SEQUENCE:1
+   STATUS:TENTATIVE
+   SUMMARY:Event #3
+   UID:DC6C50A017428C5216A2F1CD@example.com
+   X-ABC-GUID:E1CX5Dr-0007ym-Hz@example.com
+   END:VEVENT
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Corrected text:
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VEVENT
+   ATTENDEE;PARTSTAT=ACCEPTED;ROLE=CHAIR:mailto:cyrus@example.com
+   ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:lisa@example.com
+   DTSTAMP:20060206T001220Z
+   DTSTART:20060104T150000Z
+   DURATION:PT1H
+   LAST-MODIFIED:20060206T001330Z
+   ORGANIZER:mailto:cyrus@example.com
+   SEQUENCE:1
+   STATUS:TENTATIVE
+   SUMMARY:Event #3
+   UID:DC6C50A017428C5216A2F1CD@example.com
+   X-ABC-GUID:E1CX5Dr-0007ym-Hz@example.com
+   END:VEVENT
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Notes:
+9.6.5 says:
+Date and local
+time with reference to time zone information MUST be converted
+into date with UTC time.
+
+--- Errata ID 4157  [Verified] [Editorial]
+    Section: 7.8.4    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VFREEBUSY
+   ORGANIZER;CN="Bernard Desruisseaux":mailto:bernard@example.com
+   UID:76ef34-54a3d2@example.com
+   DTSTAMP:20050530T123421Z
+   DTSTART:20060101T100000Z
+   DTEND:20060108T100000Z
+   FREEBUSY;FBTYPE=BUSY-TENTATIVE:20060102T100000Z/20060102T120000Z
+   END:VFREEBUSY
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Corrected text:
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VFREEBUSY
+   ORGANIZER;CN="Bernard Desruisseaux":mailto:bernard@example.com
+   UID:76ef34-54a3d2@example.com
+   DTSTAMP:20050530T123421Z
+   DTSTART:20060101T000000Z
+   DTEND:20060108T000000Z
+   FREEBUSY;FBTYPE=BUSY-TENTATIVE:20060102T100000Z/20060102T120000Z
+   END:VFREEBUSY
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Notes:
+Typo in DTSTART, DTEND property.
+
+--- Errata ID 4158  [Verified] [Editorial]
+    Section: 7.8.5    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+     <D:response>
+       <D:href>http://cal.example.com/bernard/work/abcd4.ics</D:href>
+       <D:propstat>
+         <D:prop>
+           <D:getetag>"fffff-abcd4"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+
+  Corrected text:
+     <D:response>
+       <D:href>http://cal.example.com/bernard/work/abcd5.ics</D:href>
+       <D:propstat>
+         <D:prop>
+           <D:getetag>"fffff-abcd5"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+
+  Notes:
+Typo in D:href and D:getetag. "Task #2" is abcd5.ics.
+
+--- Errata ID 4159  [Verified] [Editorial]
+    Section: 7.8.5    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+   BEGIN:VTODO
+   DTSTAMP:20060205T235300Z
+   DUE;TZID=US/Eastern:20060106T120000
+   LAST-MODIFIED:20060205T235308Z
+   SEQUENCE:1
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #2
+   UID:E10BA47467C5C69BB74E8720@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=START:-PT10M
+   END:VALARM
+   END:VTODO
+
+  Corrected text:
+   BEGIN:VTODO
+   DTSTAMP:20060205T235300Z
+   DUE;TZID=US/Eastern:20060106T120000
+   LAST-MODIFIED:20060205T235308Z
+   SEQUENCE:1
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #2
+   UID:E10BA47467C5C69BB74E8720@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=END:-PT10M
+   END:VALARM
+   END:VTODO
+
+  Notes:
+RELATED is not START but END.
+
+Both rfc2445 section4.8.6.3 and rfc5545 section3.8.6.3 says:
+
+If the trigger is set relative to START, then the "DTSTART"
+property MUST be present in the associated "VEVENT" or "VTODO"
+calendar component. If an alarm is specified for an event with
+the trigger set relative to the END, then the "DTEND" property or
+the "DTSTART" and "DURATION " properties MUST be present in the
+associated "VEVENT" calendar component. If the alarm is specified
+for a to-do with a trigger set relative to the END, then either
+the "DUE" property or the "DTSTART" and "DURATION " properties
+MUST be present in the associated "VTODO" calendar component.
+
+--- Errata ID 4160  [Verified] [Editorial]
+    Section: 7.8.9    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VTODO
+   DTSTAMP:20060205T235335Z
+   DUE;VALUE=DATE:20060104
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #1
+   UID:DDDEEB7915FA61233B861457@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=START:-PT10M
+   END:VALARM
+   END:VTODO
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Corrected text:
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VTODO
+   DTSTAMP:20060205T235335Z
+   DUE;VALUE=DATE:20060104
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #1
+   UID:DDDEEB7915FA61233B861457@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=END:-PT10M
+   END:VALARM
+   END:VTODO
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Notes:
+RELATED is not START but END.
+
+Both rfc2445 section4.8.6.3 and rfc5545 section3.8.6.3 says:
+
+If the trigger is set relative to START, then the "DTSTART"
+property MUST be present in the associated "VEVENT" or "VTODO"
+calendar component. If an alarm is specified for an event with
+the trigger set relative to the END, then the "DTEND" property or
+the "DTSTART" and "DURATION " properties MUST be present in the
+associated "VEVENT" calendar component. If the alarm is specified
+for a to-do with a trigger set relative to the END, then either
+the "DUE" property or the "DTSTART" and "DURATION " properties
+MUST be present in the associated "VTODO" calendar component.
+
+--- Errata ID 4161  [Verified] [Technical]
+    Section: 7.8.9    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+           <D:getetag>"fffff-abcd5"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VTODO
+   DTSTAMP:20060205T235300Z
+   DUE;VALUE=DATE:20060106
+   LAST-MODIFIED:20060205T235308Z
+   SEQUENCE:1
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #2
+   UID:E10BA47467C5C69BB74E8720@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=START:-PT10M
+   END:VALARM
+   END:VTODO
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Corrected text:
+           <D:getetag>"fffff-abcd5"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VTIMEZONE
+   LAST-MODIFIED:20040110T032845Z
+   TZID:US/Eastern
+   BEGIN:DAYLIGHT
+   DTSTART:20000404T020000
+   RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=4
+   TZNAME:EDT
+   TZOFFSETFROM:-0500
+   TZOFFSETTO:-0400
+   END:DAYLIGHT
+   BEGIN:STANDARD
+   DTSTART:20001026T020000
+   RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10
+   TZNAME:EST
+   TZOFFSETFROM:-0400
+   TZOFFSETTO:-0500
+   END:STANDARD
+   END:VTIMEZONE
+   BEGIN:VTODO
+   DTSTAMP:20060205T235300Z
+   DUE;TZID=US/Eastern:20060106T120000
+   LAST-MODIFIED:20060205T235308Z
+   SEQUENCE:1
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #2
+   UID:E10BA47467C5C69BB74E8720@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=END:-PT10M
+   END:VALARM
+   END:VTODO
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Notes:
+1. DUE VTODO component property in abcd5.ics is using TZID=US/Eastern and response needs VTIMEZONE component.
+
+2. RELATED is not START but END, because VTODO has only DUE property.
+
+--- Errata ID 4162  [Verified] [Editorial]
+    Section: 7.10.1    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+   <?xml version="1.0" encoding="utf-8" ?>
+   <C:free-busy-query xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <C:time-range start="20060104T140000Z"
+                     end="20060105T220000Z"/>
+   </C:free-busy-query>
+
+  Corrected text:
+   <?xml version="1.0" encoding="utf-8" ?>
+   <C:free-busy-query xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <C:time-range start="20060104T140000Z"
+                     end="20060104T220000Z"/>
+   </C:free-busy-query>
+
+  Notes:
+Typo in C:time-range/@end
+
+--- Errata ID 4163  [Verified] [Editorial]
+    Section: 7.10.1    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+   BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Server//EN
+   BEGIN:VFREEBUSY
+   DTSTAMP:20050125T090000Z
+   DTSTART:20060104T140000Z
+   DTEND:20060105T220000Z
+   FREEBUSY;FBTYPE=BUSY-TENTATIVE:20060104T150000Z/PT1H
+   FREEBUSY:20060104T190000Z/PT1H
+   END:VFREEBUSY
+   END:VCALENDAR
+
+  Corrected text:
+   BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Server//EN
+   BEGIN:VFREEBUSY
+   DTSTAMP:20050125T090000Z
+   DTSTART:20060104T140000Z
+   DTEND:20060104T220000Z
+   FREEBUSY;FBTYPE=BUSY-TENTATIVE:20060104T150000Z/PT1H
+   FREEBUSY:20060104T190000Z/PT1H
+   END:VFREEBUSY
+   END:VCALENDAR
+
+  Notes:
+Typo in DTEND.
+
+--- Errata ID 4164  [Verified] [Editorial]
+    Section: Appendix B    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+   BEGIN:VEVENT
+   DTSTAMP:20060206T001121Z
+   DTSTART;TZID=US/Eastern:20060104T140000
+   DURATION:PT1H
+   RECURRENCE-ID;TZID=US/Eastern:20060104T120000
+   SUMMARY:Event #2 bis
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   END:VCALENDAR
+
+  Corrected text:
+   BEGIN:VEVENT
+   DTSTAMP:20060206T001121Z
+   DTSTART;TZID=US/Eastern:20060104T140000
+   DURATION:PT1H
+   RECURRENCE-ID;TZID=US/Eastern:20060104T120000
+   SUMMARY:Event #2 bis
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   BEGIN:VEVENT
+   DTSTAMP:20060206T001121Z
+   DTSTART;TZID=US/Eastern:20060106T140000
+   DURATION:PT1H
+   RECURRENCE-ID;TZID=US/Eastern:20060106T120000
+   SUMMARY:Event #2 bis bis
+   UID:00959BC664CA650E933C892C@example.com
+   END:VEVENT
+   END:VCALENDAR
+
+  Notes:
+"Event #2 bis bis" seems to be required.
+
+--- Errata ID 4165  [Verified] [Editorial]
+    Section: Appendix B    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+   STATUS:TENTATIVE
+   SUMMARY:Event #3
+   UID:DC6C50A017428C5216A2F1CD@example.com
+   END:VEVENT
+   END:VCALENDAR
+
+  Corrected text:
+   STATUS:TENTATIVE
+   SUMMARY:Event #3
+   UID:DC6C50A017428C5216A2F1CD@example.com
+   X-ABC-GUID:E1CX5Dr-0007ym-Hz@example.com
+   END:VEVENT
+   END:VCALENDAR
+
+  Notes:
+abcd3.ics seems to have X-ABC-GUID property.
+
+--- Errata ID 4166  [Verified] [Editorial]
+    Section: Appendix B    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+   TRIGGER;RELATED=START:-PT10M
+
+  Corrected text:
+   TRIGGER;RELATED=END:-PT10M
+
+  Notes:
+abcd4.ics RELATED parameter is not START but END, because TODO has only DUE property.
+
+--- Errata ID 4167  [Verified] [Editorial]
+    Section: Appendix B    Reported: 2014-11-05  by Hiroaki KAWAI
+
+  Original text:
+           <D:getetag>"fffff-abcd5"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VTODO
+   DTSTAMP:20060205T235300Z
+   DUE;VALUE=DATE:20060106
+   LAST-MODIFIED:20060205T235308Z
+   SEQUENCE:1
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #2
+   UID:E10BA47467C5C69BB74E8720@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=START:-PT10M
+   END:VALARM
+   END:VTODO
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Corrected text:
+           <D:getetag>"fffff-abcd5"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VTIMEZONE
+   LAST-MODIFIED:20040110T032845Z
+   TZID:US/Eastern
+   BEGIN:DAYLIGHT
+   DTSTART:20000404T020000
+   RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=4
+   TZNAME:EDT
+   TZOFFSETFROM:-0500
+   TZOFFSETTO:-0400
+   END:DAYLIGHT
+   BEGIN:STANDARD
+   DTSTART:20001026T020000
+   RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10
+   TZNAME:EST
+   TZOFFSETFROM:-0400
+   TZOFFSETTO:-0500
+   END:STANDARD
+   END:VTIMEZONE
+   BEGIN:VTODO
+   DTSTAMP:20060205T235300Z
+   DUE;TZID=US/Eastern:20060106T120000
+   LAST-MODIFIED:20060205T235308Z
+   SEQUENCE:1
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #2
+   UID:E10BA47467C5C69BB74E8720@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=END:-PT10M
+   END:VALARM
+   END:VTODO
+   END:VCALENDAR
+   </C:calendar-data>
+
+  Notes:
+1. "Task #2" seems to be intended to show DUE with US/Eastern timezone, because "Task #1" is DATE.
+
+2. RELATED would be not START, but END.
+
+--- Errata ID 4840  [Reported] [Technical]
+    Section: 5.3.4    Reported: 2016-10-25  by Ricki Hirner
+
+  Original text:
+A response to a GET request targeted at a calendar object resource
+MUST contain an ETag response header field indicating the current
+value of the strong entity tag of the calendar object resource.
+
+  Corrected text:
+A response to a GET request targeted at a calendar object resource
+MUST contain an ETag response header field indicating the current
+value of the strong entity tag of the calendar object resource.
+
+Note that using another content coding (Content-Encoding) than
+"identity" (for instance, when a compressed version of the resource
+is sent) will cause the ETag reported by GET to change and make it
+unusable for If-Match etc.
+
+  Notes:
+Content-Encoding (in opposite to Transfer-Encoding) changes strong ETags, see RFC 7232 2.3.3 for an example. So if you GET a resource with another content coding than "identity" (for instance, "gzip"), the (strong) ETag could be "abc-gzip" instead of "abc". If you then send a conditional request (which requires a strong ETag) with If-Match: "abc-gzip", it may not work as expected. The solution seems to be to use Transfer-Encoding whenever possible.
+
+--- Errata ID 5481  [Reported] [Technical]
+    Section: 7.8.5    Reported: 2018-08-27  by Stefanie Schirmer
+
+  Original text:
+>> Response <<
+
+   HTTP/1.1 207 Multi-Status
+   Date: Sat, 11 Nov 2006 09:32:12 GMT
+   Content-Type: application/xml; charset="utf-8"
+   Content-Length: xxxx
+
+   <?xml version="1.0" encoding="utf-8" ?>
+   <D:multistatus xmlns:D="DAV:"
+                  xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:response>
+       <D:href>http://cal.example.com/bernard/work/abcd4.ics</D:href>
+       <D:propstat>
+         <D:prop>
+           <D:getetag>"fffff-abcd4"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VTODO
+   DTSTAMP:20060205T235300Z
+   DUE;TZID=US/Eastern:20060106T120000
+   LAST-MODIFIED:20060205T235308Z
+   SEQUENCE:1
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #2
+   UID:E10BA47467C5C69BB74E8720@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=START:-PT10M
+   END:VALARM
+   END:VTODO
+   END:VCALENDAR
+   </C:calendar-data>
+         </D:prop>
+         <D:status>HTTP/1.1 200 OK</D:status>
+       </D:propstat>
+     </D:response>
+   </D:multistatus>
+
+  Corrected text:
+>> Response <<
+
+   HTTP/1.1 207 Multi-Status
+   Date: Sat, 11 Nov 2006 09:32:12 GMT
+   Content-Type: application/xml; charset="utf-8"
+   Content-Length: xxxx
+
+   <?xml version="1.0" encoding="utf-8" ?>
+   <D:multistatus xmlns:D="DAV:"
+                  xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:response>
+       <D:href>http://cal.example.com/bernard/work/abcd5.ics</D:href>
+       <D:propstat>
+         <D:prop>
+           <D:getetag>"fffff-abcd5"</D:getetag>
+           <C:calendar-data>BEGIN:VCALENDAR
+   VERSION:2.0
+   PRODID:-//Example Corp.//CalDAV Client//EN
+   BEGIN:VTIMEZONE
+   LAST-MODIFIED:20040110T032845Z
+   TZID:US/Eastern
+   BEGIN:DAYLIGHT
+   DTSTART:20000404T020000
+   RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=4
+   TZNAME:EDT
+   TZOFFSETFROM:-0500
+   TZOFFSETTO:-0400
+   END:DAYLIGHT
+   BEGIN:STANDARD
+   DTSTART:20001026T020000
+   RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10
+   TZNAME:EST
+   TZOFFSETFROM:-0400
+   TZOFFSETTO:-0500
+   END:STANDARD
+   END:VTIMEZONE
+   BEGIN:VTODO
+   DTSTAMP:20060205T235300Z
+   DUE;TZID=US/Eastern:20060106T120000
+   LAST-MODIFIED:20060205T235308Z
+   SEQUENCE:1
+   STATUS:NEEDS-ACTION
+   SUMMARY:Task #2
+   UID:E10BA47467C5C69BB74E8720@example.com
+   BEGIN:VALARM
+   ACTION:AUDIO
+   TRIGGER;RELATED=END:-PT10M
+   END:VALARM
+   END:VTODO
+   END:VCALENDAR
+   </C:calendar-data>
+         </D:prop>
+         <D:status>HTTP/1.1 200 OK</D:status>
+       </D:propstat>
+     </D:response>
+   </D:multistatus>
+
+  Notes:
+The timezone is missing from the response in Section 7.8.5. 
+
+This is probably related to the previous errata (Errata ID: 4154, Errata ID: 4158, Errata ID: 4159), which all corrected the result to return abcd5.ics instead of abcd4.ics (which contains no timezone).
+
+From rfc4791, Section 4.1.:
+
+   Calendar object resources contained in calendar collections MUST NOT
+   contain more than one type of calendar component (e.g., VEVENT,
+   VTODO, VJOURNAL, VFREEBUSY, etc.) with the exception of VTIMEZONE
+   components, which **MUST be specified for each unique TZID parameter
+   value specified in the iCalendar object.**
+
+--- Errata ID 5846  [Reported] [Technical]
+    Section: 5.2.3    Reported: 2019-08-25  by Дилян Палаузов
+
+  Original text:
+Conformance:  This property MAY be defined on any calendar
+ collection.  If defined, it MUST be protected and SHOULD NOT be
+ returned by a PROPFIND DAV:allprop request (as defined in Section
+ 12.14.1 of [RFC2518]).
+
+Description: ... Any attempt by the client to store calendar object
+ resources with component types not listed in this property, if it
+ exists, MUST result in an error, with the
+ CALDAV:supported-calendar-component precondition (Section 5.3.2.1)
+ being violated.  Since this property is protected, it cannot be
+ changed by clients using a PROPPATCH request.  However, clients can
+ initialize the value of this property when creating a new calendar
+ collection with MKCALENDAR.
+
+  Corrected text:
+Conformance:  This property MAY be defined on any calendar
+ collection.  If defined, it MAY be protected and SHOULD NOT be
+ returned by a PROPFIND DAV:allprop request (as defined in Section
+ 12.14.1 of [RFC2518]).
+
+Description: ... Any attempt by the client to store calendar object
+ resource with component types not listed in this property, if it
+ exists, MUST result in an error, with the
+ CALDAV:supported-calendar-component precondition (Section 5.3.2.1)
+ being violated.  Clients can initialize the value of this property
+ when creating a new calendar collection with MKCALENDAR. …
+
+  Notes:
+The protected status of supported-calendar-component-set is removed, so that CUAs can add component types to existing callendars, like VAVAILABILITY, which component types were not defined, when the calendar was created.
+
+--- Errata ID 8761  [Reported] [Technical]
+    Section: 7.8.2    Reported: 2026-02-15  by Benjamin Raison
+
+  Original text:
+   <C:calendar-query xmlns:D="DAV:"
+                     xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:prop>
+       <C:calendar-data>
+
+  Corrected text:
+   <C:calendar-query xmlns:D="DAV:"
+                     xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:prop>
+       <D:getetag/>
+       <C:calendar-data>
+
+  Notes:
+D:getetag is part of the response but missing in the request
+
+--- Errata ID 8762  [Reported] [Technical]
+    Section: 7.8.3    Reported: 2026-02-15  by Benjamin Raison
+
+  Original text:
+   <C:calendar-query xmlns:D="DAV:"
+                     xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:prop>
+       <C:calendar-data>
+
+  Corrected text:
+   <C:calendar-query xmlns:D="DAV:"
+                     xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:prop>
+       <D:getetag/>
+       <C:calendar-data>
+
+  Notes:
+D:getetag is part of the response but missing in the request
+
+--- Errata ID 8763  [Reported] [Technical]
+    Section: 7.8.4    Reported: 2026-02-15  by Benjamin Raison
+
+  Original text:
+   <C:calendar-query xmlns:D="DAV:"
+                 xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:prop>
+       <C:calendar-data>
+
+  Corrected text:
+   <C:calendar-query xmlns:D="DAV:"
+                 xmlns:C="urn:ietf:params:xml:ns:caldav">
+     <D:prop>
+       <D:getetag/>
+       <C:calendar-data>
+
+  Notes:
+D:getetag is part of the response but missing in the request

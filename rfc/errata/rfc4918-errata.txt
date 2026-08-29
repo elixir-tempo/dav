@@ -1,0 +1,184 @@
+Errata for RFC 4918
+============================================================
+9 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 1068  [Verified] [Technical]
+    Section: 10.4.7    Reported: 2007-11-13  by Julian Reschke
+
+  Original text:
+     If: (Not <urn:uuid:181d4fae-7d8c-11d0-a765-00a0c91e6bf2>
+     <urn:uuid:58f202ac-22cf-11d1-b12d-002035b29092>)
+
+  Corrected text:
+     If: (Not <urn:uuid:181d4fae-7d8c-11d0-a765-00a0c91e6bf2>
+          <urn:uuid:58f202ac-22cf-11d1-b12d-002035b29092>)
+
+  Notes:
+Indentation is relevant here. In the published form, the second line would be a separate (invalid) HTTP header, not a continuation line.
+
+--- Errata ID 1207  [Held for Document Update] [Technical]
+    Section: 9.10.1    Reported: 2008-01-03  by Julian Reschke
+
+  Original text:
+   A LOCK request to an existing resource will create a lock on the
+   resource identified by the Request-URI, provided the resource is not
+   already locked with a conflicting lock.  The resource identified in
+   the Request-URI becomes the root of the lock.  LOCK method requests
+   to create a new lock MUST have an XML request body.  The server MUST
+   preserve the information provided by the client in the 'owner'
+   element in the LOCK request.  The LOCK request MAY have a Timeout
+   header.
+
+  Corrected text:
+   A LOCK request to an existing resource will create a lock on the
+   resource identified by the Request-URI, provided the resource is not
+   already locked with a conflicting lock.  The Request-URI becomes the
+   root of the lock.  LOCK method requests
+   to create a new lock MUST have an XML request body.  The server MUST
+   preserve the information provided by the client in the 'owner'
+   element in the LOCK request.  The LOCK request MAY have a Timeout
+   header.
+
+  Notes:
+This is incorrect in that it implies that the "lock root" is a resource, not a URL (<http://ietf.osafoundation.org:8080/bugzilla/show_bug.cgi?id=251>). However, should a directly locked resource have multiple bindings, only the one used in the Request-URI of the LOCK request will be the protected from changes of clients not supplying the lock token.
+
+Note that this change makes the description consistent with the definition of the DAV:lockroot XML element in Section 14.12 of [RFC4918].
+
+--- Errata ID 1371  [Held for Document Update] [Editorial]
+    Section: 9.2    Reported: 2008-03-14  by Julian Reschke
+
+  Original text:
+    Servers MUST process PROPPATCH instructions in document order (an
+    exception to the normal rule that ordering is irrelevant).
+
+  Corrected text:
+    Servers MUST process the child elements of the propertyupdate XML
+    element in the order they appear in the request body (an exception to
+    the normal rule that ordering is irrelevant).
+
+  Notes:
+There are no "PROPPATCH" instructions in the request document (PROPPATCH is a method name, not an XML element name used in WebDAV). 
+
+Note this issue was raised during Gen-art review, but not fixed before publication (http://www.ietf.org/mail-archive/web/gen-art/current/msg01823.html)
+
+--- Errata ID 1430  [Verified] [Editorial]
+    Section: 9.3    Reported: 2008-05-26  by Werner Baumann
+
+  Original text:
+9.3.  MKCOL Method
+
+   MKCOL creates a new collection resource at the location specified by
+   the Request-URI. [...]
+
+  Corrected text:
+9.3 MKCOL Method
+
+   The MKCOL method is used to create a new collection. All DAV compliant
+   resources MUST support the MKCOL method.
+
+   MKCOL creates a new collection resource at the location specified by
+   the Request-URI. [...]
+
+  Notes:
+The statement, that support for MKCOL is a MUST-requirement has unintentionally been dropped.
+
+--- Errata ID 1519  [Verified] [Technical]
+    Section: 8.3    Reported: 2008-09-19  by Manfred Baedke
+
+  Original text:
+Within Simple-ref productions, senders MUST NOT:
+
+   o  use dot-segments ("." or ".."), or
+
+   o  have prefixes that do not match the Request-URI (using the
+      comparison rules defined in Section 3.2.3 of [RFC2616]).
+
+  Corrected text:
+Within Simple-ref productions, senders MUST NOT use dot-segments ("." or "..").
+Simple-ref productions used in Multi-Status responses MUST NOT have prefixes that
+do not match the Request-URI (using the comparison rules defined in Section 3.2.3
+of [RFC2616]).
+
+  Notes:
+The original text explicitly applies not only to Simple-ref productions used in Multi-Status responses, but also to those used in Destination Headers. Since URIs used in Destination headers may have other prefixes (for example in a cross-server COPY request), this is wrong.
+
+--- Errata ID 1635  [Held for Document Update] [Editorial]
+    Section: 7.4    Reported: 2008-12-13  by Zdenek Kouba
+
+  Original text:
+MOVE an internal member into the collection,
+
+  Corrected text:
+MOVE inserting a new internal member into the collection,
+
+  Notes:
+Edited the corrected text as per discussion between Lisa and Julian.
+
+--- Errata ID 4431  [Reported] [Technical]
+    Section: GLOBAL    Reported: 2015-08-02  by Worik Stanton
+
+  Original text:
+    (none)
+
+  Corrected text:
+    (none)
+
+  Notes:
+The phrase: "live properties defined in this specification." is used throughout RFC4918 but there is no place they are defined.
+
+Careful reading can deduce what they may be, but that is not satisfactory.  It would be better to actually define them.
+
+--- Errata ID 4435  [Reported] [Technical]
+    Section: 9.8.5    Reported: 2015-08-05  by Worik Stanton
+
+  Original text:
+    (none)
+
+  Corrected text:
+The 404 (Not Found) status code indicates that the origin server did
+   not find a current representation for the target resource or is not
+   willing to disclose that one exists.  A 404 status code does not
+   indicate whether this lack of representation is temporary or
+   permanent; the 410 (Gone) status code is preferred over 404 if the
+   origin server knows, presumably through some configurable means, that
+   the condition is likely to be permanent.
+
+  Notes:
+The case of the resource being copied not existing is not covered.  I assume that a 404 error is appropriate, but that is my assumption.
+
+--- Errata ID 4440  [Reported] [Technical]
+    Section: 9.8    Reported: 2015-08-09  by Worik Stanton
+
+  Original text:
+    (none)
+
+  Corrected text:
+    (none)
+
+  Notes:
+There are several ambiguities in this section.  Here is one.
+
+Copying a resource to a defined collection: 
+
+From    To    Result
+/a/c/d  /b/    /b/d       
+
+This is the logical interpretation and does not conflict with the specifications.  But...
+
+From    To    Result
+/a/c/d  /b/   /d           (/b/ is overwritten)
+
+This perverse but does not conflict either.  Trashing he complete collection in this way cannot be right, but it is not in conflict with anything I can find in section 9.8.  The closest I can find is:
+
+"When a collection is overwritten, the membership of the destination   collection after the successful COPY request MUST be the same membership as the source collection immediately before the COPY."
+
+This does not explicitly prohibit overwriting a collection with a non-collection.
+
+
+The specification uses "in the destination.." and "at the destination..." interchangeably.
+
+"The COPY method creates a duplicate of the source resource identified by the Request-URI, in the destination resource identified by the URI in the Destination header."  This suggests the first
+
+The specification also says: "When the source resource is not a collection, the result of the COPY method is the creation of a new resource at the destination whose state and behavior match that of the source resource as closely as possible."  This could mean the second.
+
+Possibly copying a non-collection resource to a collection resource should not be allowed (but I can find no such prohibition)

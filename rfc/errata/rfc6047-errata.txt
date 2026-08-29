@@ -1,0 +1,15 @@
+Errata for RFC 6047
+============================================================
+1 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 5447  [Verified] [Technical]
+    Section: GLOBAL    Reported: 2018-07-31  by Julian Cowley
+
+  Original text:
+ATTENDEE;RSVP=YES:mailto:foo2@example.com
+
+  Corrected text:
+ATTENDEE;RSVP=TRUE:mailto:foo2@example.com
+
+  Notes:
+In the examples that include the ATTENDEE property, there is a minor issue.  According to RFC 5545, Section 3.2.17, the RSVP parameter value should be "TRUE" or "FALSE", not "YES" or "NO".

@@ -1,0 +1,17 @@
+Errata for RFC 3744
+============================================================
+1 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 235  [Verified] [Editorial]
+    Section: -    Reported: 2004-05-26  by Julian Reschke
+
+  Original text:
+    (none)
+
+  Corrected text:
+    (none)
+
+  Notes:
+Issues and resolutions regarding this document can be reviewed at:
+
+http://greenbytes.de/tech/webdav/draft-reschke-rfc3744bis-issues.html

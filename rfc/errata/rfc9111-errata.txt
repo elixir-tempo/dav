@@ -1,0 +1,145 @@
+Errata for RFC 9111
+============================================================
+2 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 7695  [Rejected] [Technical]
+    Section: 4.3.2    Reported: 2023-11-07  by Dron Rathore
+
+  Original text:
+   The proper evaluation of conditional requests by a cache depends on
+   the received precondition header fields and their precedence.  In
+   summary, the If-Match and If-Unmodified-Since conditional header
+   fields are not applicable to a cache, and If-None-Match takes
+   precedence over If-Modified-Since.  See Section 13.2.2 of [HTTP] for
+   a complete specification of precondition precedence.
+
+  Corrected text:
+   The proper evaluation of conditional requests by a cache depends on
+   the received precondition header fields and their precedence.  In
+   summary, the If-Match and If-Unmodified-Since conditional header
+   fields are not applicable to a cache and hence such requests MUST
+   be forwarded to the origin, and If-None-Match takes precedence
+   over If-Modified-Since.  See Section 13.2.2 of [HTTP] for a complete
+   specification of precondition precedence.
+
+  Notes:
+Correction:
+"the If-Match and If-Unmodified-Since conditional header fields are not applicable
+ to a cache [and hence such requests MUST be forwarded to the origin]"
+
+This is based upon the reading of RFC 9111#section-4.3.2-3[1]:
+ 
+   A cache MUST NOT evaluate conditional header fields that only apply
+   to an origin server, occur in a request with semantics that cannot be
+   satisfied with a cached response, or occur in a request with a target
+   resource for which it has no stored responses; such preconditions are
+   likely intended for some other (inbound) server.
+
+
+Current RFC 9110#section-13.1.1-13[2], RFC 9110#section-13.2.2[3] and RFC 
+9111#section-4.3.2-4[4] does not explicitly provide clear direction to cache servers as to 
+how to deal with If-Match and If-Unmodified-Since conditional headers[5].
+
+The correction intends to provide more clarity for If-Match and If-Unmodified-Since
+header as to how a cache server should handle conditional header which are meant
+for origin server based on the reading of above produced section of 
+the RFC 9111#section-4.3.2-3.
+
+If cache nodes have to ignore If-Match and If-Unmodified-Since header as per 
+RFC 9110#section-13.1.1-13 then in scenarios where they have a cached non-expired
+content representation which can be satisfied sans If-Match and If-Unmodified-Since
+headers the same will be returned back by cache and intermediary servers. 
+
+Caching layers with multiple content representation cached in the network may 
+return invalid response back causing higher requests errors when dealing with origin 
+applicable conditional headers that are sent to intermediary cache nodes from 
+edge cache nodes for cache hydration. 
+
+Consider the below scenario:
+
+1. A caching system consisting of 2 cache layers with 3 servers each,
+Server nodes "A" representing Edge cache nodes(A1, A2, A3),
+Server nodes "B" representing intermediary cache nodes(B1, B2, B3), and an 
+origin server
+
+2. All cache servers (A and B) make use of If-Match and If-Unmodified-Since to 
+hydrate their own cached content representation as per RFC 9110#section-13.1.1-12 [6]
+
+3. All cache servers make use of 5MiB chunk ranges for cache hydration of large 
+files 
+
+4. Origin server contains a file foo with size 20MiB, with content 
+representation Etag E1 
+
+5. A client C1 who sends a range request for file foo with range 10-20MiB to edge node A1
+
+6. For initial set of requests sent by edge node A1 the representation E1 gets 
+cached on 2 of the intermediary nodes B1 and B2 (because of 2 requests for 
+5MiB chunk each) 
+
+6. Content representation for file foo changes to Etag E2 on origin 
+
+7. A client C2 who sends a range request for file foo with range 10-20MiB to edge node A2
+
+8. Requests to edge node A2 which does not have a cached representation causes it 
+to send 2 range requests for 5MiB each, in this case lets assume it is sent to 
+intermediary cache nodes B1(range:10-15MiB) and B3(range:15-20MiB), 
+B3 node faces cache-miss and hydrates its own cache from Range 15Mib-20MiB
+with content representation E2. B1 node already has a cached representation E1
+for requested range so it returns it back. A2 node which has now cached 10-15MiB E1
+representation received from B1 has to returns error and performs a cache reset for
+itself because of mixed representation for the whole user requested range.
+
+In such a case where intermediary cache severs/nodes may end up with multiple 
+content representation an edge node who is trying to hydrate its own cache 
+will find it hard to do so, i.e. the first 5MiB 
+chunk may end up being served by intermediary cache nodes with representation 
+E1 and the other half of the chunk by nodes who have a content representation 
+E2. The error rates will be higher whenever content representation changes at
+the origin server for such range requests.
+
+
+[1]: https://www.rfc-editor.org/rfc/rfc9111#section-4.3.2-3
+[2]: https://www.rfc-editor.org/rfc/rfc9110#section-13.1.1-13
+[3]: https://www.rfc-editor.org/rfc/rfc9110#section-13.2.2
+[4]: https://www.rfc-editor.org/rfc/rfc9111#section-4.3.2-4
+[5]: https://github.com/httpwg/http-core/issues/1111
+[6]: https://www.rfc-editor.org/rfc/rfc9110#section-13.1.1-12
+ --VERIFIER NOTES-- 
+The suggestion is not a desired solution for the problematic text.
+
+This part is not an error in the specification. Even when If-Match and If-Unmodified-Since are not applicable to a cache, their presence does not imply that the request must be forwarded to the origin. It will depend on other factors in the request and how/where the cache has been configured.
+
+See https://mailarchive.ietf.org/arch/msg/httpbisa/k8UTKPDMQQZ-H5sHyJb7dldew7I/ for details.
+
+--- Errata ID 9004  [Reported] [Technical]
+    Section: 3.5    Reported: 2026-06-11  by zhangph
+
+  Original text:
+A shared cache MUST NOT use a cached response to a request with an
+Authorization header field (Section 11.6.2 of [HTTP]) to satisfy any
+subsequent request unless the response contains a Cache-Control field
+with a response directive (Section 5.2.2) that allows it to be stored
+by a shared cache, and the cache conforms to the requirements of that
+directive for that response.  In this specification, the following
+response directives have such an effect: must-revalidate
+(Section 5.2.2.2), public (Section 5.2.2.9), and s-maxage
+(Section 5.2.2.10).
+
+  Corrected text:
+A shared cache MUST NOT use a cached response to a request with an
+Authorization header field (Section 11.6.2 of [HTTP]) to satisfy any
+subsequent request unless the response contains a Cache-Control field
+with a response directive (Section 5.2.2) that allows it to be stored
+by a shared cache, and the cache conforms to the requirements of that
+directive for that response.  In this specification, the following
+response directives have such an effect: must-revalidate
+(Section 5.2.2.2), public (Section 5.2.2.9), and s-maxage
+(Section 5.2.2.10).  Note that proxy-revalidate (Section 5.2.2.8) is
+not included here: although Section 5.2.2.8 states it is analogous to
+must-revalidate, it governs revalidation behavior after a response
+becomes stale and does not itself authorize a shared cache to store a
+response to an authenticated request.
+
+  Notes:
+Section 5.2.2.8 states that proxy-revalidate "is analogous to must-revalidate (Section 5.2.2.2), except that proxy-revalidate does not apply to private caches" — i.e., proxy-revalidate is the shared-cache-specific counterpart of must-revalidate. However, the list in Section 3.5 of response directives that allow a shared cache to store a response to an authenticated request includes must-revalidate but omits proxy-revalidate. This creates an apparent inconsistency between Sections 3.5 and 5.2.2.8. This is submitted as Editorial. The proposed corrected text adds a clarifying note explaining why proxy-revalidate is excluded (it governs revalidation after staleness, not storage authorization), so the relationship between the two sections is made explicit and reader confusion is removed. No change to caching behavior is requested.

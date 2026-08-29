@@ -1,0 +1,15 @@
+Errata for RFC 2518
+============================================================
+1 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 426  [Verified] [Technical]
+    Section: -    Reported: 2002-05-11  by Julian Reschke
+
+  Original text:
+    (none)
+
+  Corrected text:
+    (none)
+
+  Notes:
+Errata for this document can be found at: http://www.webdav.org/wg/rfcdev/issues.htm

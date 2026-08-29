@@ -1,0 +1,75 @@
+Errata for RFC 7953
+============================================================
+1 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 5420  [Verified] [Editorial]
+    Section: 3.1    Reported: 2018-07-14  by Julian Cowley
+
+  Original text:
+   availabilityprop  = *(
+                    ;
+                    ; the following are REQUIRED
+                    ; but MUST NOT occur more than once
+                    ;
+                    dtstamp / uid
+                    ;
+                    ; the following are OPTIONAL
+                    ; but MUST NOT occur more than once
+                    ;
+                    busytype / class / created / description /
+                    dtstart / last-mod / location / organizer /
+                    priority /seq / summary / url /
+                    ;
+                    ; Either 'dtend' or 'duration' MAY appear
+                    ; in an 'availableprop', but 'dtend' and
+                             ^^^^^^^^^^^^^
+                    ; 'duration' MUST NOT occur in the same
+                    ; 'availabilityprop'.
+                    ; 'duration' MUST NOT be present if
+                    ; 'dtstart' is not present
+                    ;
+                    dtend / duration /
+                    ;
+                    ; the following are OPTIONAL
+                    ; and MAY occur more than once
+                    ;
+                    categories / comment / contact /
+                    x-prop / iana-prop
+                    ;
+                    )
+
+  Corrected text:
+   availabilityprop  = *(
+                    ;
+                    ; the following are REQUIRED
+                    ; but MUST NOT occur more than once
+                    ;
+                    dtstamp / uid
+                    ;
+                    ; the following are OPTIONAL
+                    ; but MUST NOT occur more than once
+                    ;
+                    busytype / class / created / description /
+                    dtstart / last-mod / location / organizer /
+                    priority /seq / summary / url /
+                    ;
+                    ; Either 'dtend' or 'duration' MAY appear
+                    ; in an 'availabilityprop', but 'dtend' and
+                             ^^^^^^^^^^^^^^^^
+                    ; 'duration' MUST NOT occur in the same
+                    ; 'availabilityprop'.
+                    ; 'duration' MUST NOT be present if
+                    ; 'dtstart' is not present
+                    ;
+                    dtend / duration /
+                    ;
+                    ; the following are OPTIONAL
+                    ; and MAY occur more than once
+                    ;
+                    categories / comment / contact /
+                    x-prop / iana-prop
+                    ;
+                    )
+
+  Notes:
+The text 'availableprop' is a typo and should be 'availabilityprop' instead.  The text is only concerned with 'dtend' and 'duration' in the VAVAILABILITY component, and has nothing to do with the AVAILABLE component and its associated 'availableprop'.

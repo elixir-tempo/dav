@@ -1,0 +1,124 @@
+Errata for RFC 7240
+============================================================
+6 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 4316  [Verified] [Editorial]
+    Section: 1.1    Reported: 2015-03-27  by Matthew Kerwin
+
+  Original text:
+within Sections 3.2.1 and 3.2.4 of [RFC7230]; as well as the
+"delta-seconds" rule defined in Section 8.1.3 of [RFC7231].
+
+  Corrected text:
+within Sections 3.2.1 and 3.2.4 of [RFC7230]; as well as the
+"delay-seconds" rule defined in Section 7.1.3 of [RFC7231].
+
+  Notes:
+The reference to "delta-seconds" seems to come from an earlier version of the HTTP-bis draft.  This was changed to "delay-seconds" in later versions, and the section number changed.
+
+--- Errata ID 4317  [Rejected] [Editorial]
+    Section: GLOBAL    Reported: 2015-03-30  by Brendan Long
+
+  Original text:
+Prefer: respond-async, wait=100
+Prefer: handling=lenient
+
+Prefer: handling=lenient, wait=100, respond-async
+
+Prefer: respond-async, wait=10
+Prefer: priority=5
+
+Prefer: respond-async, wait=10
+
+  Corrected text:
+Prefer: respond-async; wait=100
+Prefer: handling=lenient
+
+Prefer: handling=lenient; wait=100; respond-async
+
+Prefer: respond-async; wait=10
+Prefer: priority=5
+
+Prefer: respond-async; wait=10
+
+  Notes:
+The ABNF in Section 2 says that preferences are separated with ";", but some of the examples use ",".
+--VERIFIER NOTES-- 
+The document is correct as is stands.  The commas are separating
+multiple preferences in a single header, as described in RFC 7230,
+Section 7.  The ABNF in Section 2 specifies how to separate parameters
+within a single preference.
+
+--- Errata ID 4439  [Verified] [Technical]
+    Section: 2    Reported: 2015-08-09  by Martin Thomson
+
+  Original text:
+     preference = token [ BWS "=" BWS word ]
+                  *( OWS ";" [ OWS parameter ] )
+     parameter  = token [ BWS "=" BWS word ]
+
+  Corrected text:
+     preference = preference-parameter *( OWS ";" [ OWS
+                  preference-parameter ] )
+     preference-parameter = parameter / token
+
+  Notes:
+Section 1.1 incorrectly states that "word" is defined in RFC 7230.  It is not.  Therefore, the syntax is completely under-specified.
+
+The "parameter" rule, as defined in RFC 7231, is used in lots of other header field definitions successfully.  The only drawback is that "parameter" doesn't permit the use of "OWS" either side of the "=" character.
+
+This change would also require changes to Section 1.1.
+
+--- Errata ID 4625  [Reported] [Technical]
+    Section: 3    Reported: 2016-02-24  by Vasiliy Faronov
+
+  Original text:
+     applied-pref = token [ BWS "=" BWS word ]
+
+  Corrected text:
+     applied-pref = preference-parameter
+                    ; see Errata ID: 4439
+
+  Notes:
+This updates the syntax of the Preference-Applied header field in accordance with a previous erratum to this document, which fixed the Prefer header field.
+
+--- Errata ID 4955  [Reported] [Technical]
+    Section: 2.1    Reported: 2017-03-01  by Vasiliy Faronov
+
+  Original text:
+     Prefer: Lenient
+
+  Corrected text:
+     Prefer: Handling="lenient"
+
+  Notes:
+"Prefer: Lenient" is a valid header that specifies an (unregistered) preference named "lenient" with an empty value.
+
+On the other hand, this document defines a preference named "handling", which can take the value "lenient" to indicate lenient processing, which is the stated intent of this example.
+
+There is no provision for specifying a preference by its *value*, as opposed to by its *name*.
+
+--- Errata ID 5282  [Reported] [Technical]
+    Section: 1.1    Reported: 2018-03-07  by Sawood Alam
+
+  Original text:
+   This specification uses the Augmented Backus-Naur Form (ABNF)
+   notation of [RFC5234] and includes, by reference, the "token",
+   "word", "OWS", and "BWS" rules and the #rule extension as defined
+   within Sections 3.2.1 and 3.2.4 of [RFC7230]; as well as the
+   "delta-seconds" rule defined in Section 8.1.3 of [RFC7231]
+
+  Corrected text:
+   This specification uses the Augmented Backus-Naur Form (ABNF)
+   notation of [RFC5234] and includes rules, by reference, the "token"
+   as defined in Sections 3.2.6 of [RFC7230], "OWS" and "BWS" as defined
+   in Sections 3.2.3 of [RFC7230], and the #rule extension as defined in
+   Sections 7 of [RFC7230]; as well as the "delta-seconds" rule defined
+   in Section 8.1.3 of [RFC7231].
+
+  Notes:
+Mapping of the keywords with the section numbers is incorrect. The correct mapping is as following:
+"token" => Section 3.2.6 of RFC7320;
+"word" => Not defined in RFC7320, but reported at Errata ID: 4439;
+"OWS" and "BWS" => Section 3.2.3 of RFC7320;
+"the #rule extension" => Section 7 of RFC7320;

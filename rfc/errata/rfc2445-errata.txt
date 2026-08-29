@@ -1,0 +1,281 @@
+Errata for RFC 2445
+============================================================
+11 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 433  [Verified] [Editorial]
+    Section: Examples in various sections (2.4, 2.4.18, etc.)    Reported: 2004-01-07  by Dave Flater
+
+  Original text:
+     DESCRIPTION;ALTREP="http://www.wiz.org":The Fall'98 Wild Wizards
+       Conference - - Las Vegas, NV, USA
+[...]
+
+     DESCRIPTION;ALTREP="CID:<part3.msg.970415T083000@host.com>":Project
+       XYZ Review Meeting will include the following agenda items: (a)
+       Market Overview, (b) Finances, (c) Project Management
+[...]
+     ORGANIZER;SENT-BY:"MAILTO:sray@host.com":MAILTO:jsmith@host.com
+[...]
+     LOCATION:Conference Room - F123, Bldg. 002
+
+     LOCATION;ALTREP="http://xyzcorp.com/conf-rooms/f123.vcf":
+      Conference Room - F123, Bldg. 002
+[...]
+
+      Atlanta, Georgia END:VEVENT END:VCALENDAR
+[...]
+     CATEGORY:Project Report, XYZ, Weekly Meeting
+
+[...]
+      Participants: John Smith, Jane Doe, Jim Dandy\n-It was
+
+  Corrected text:
+     DESCRIPTION;ALTREP="http://www.wiz.org":The Fall'98 Wild Wizards
+       Conference - - Las Vegas\, NV\, USA
+[...]
+
+     DESCRIPTION;ALTREP="CID:<part3.msg.970415T083000@host.com>":Project
+       XYZ Review Meeting will include the following agenda items: (a)
+       Market Overview\, (b) Finances\, (c) Project Management
+[...]
+     ORGANIZER;SENT-BY="mailto:sray@host.com":mailto:jsmith@host.com
+[...]
+     LOCATION:Conference Room - F123\, Bldg. 002
+
+     LOCATION;ALTREP="http://xyzcorp.com/conf-rooms/f123.vcf":
+      Conference Room - F123\, Bldg. 002
+[...]
+
+      Atlanta\, Georgia END:VEVENT END:VCALENDAR
+[...]
+     CATEGORIES:Project Report,XYZ,Weekly Meeting
+
+[...]
+      Participants: John Smith\, Jane Doe\, Jim Dandy\n-It was
+
+  Notes:
+This report comes from the following diff.
+
+The following diff on RFC 2445 as archived also incorporates the
+change to Section 4.2.18 reported by Tilghman Lesher on 2003-01-12.
+
+960c960
+<        Conference - - Las Vegas, NV, USA
+- ---
+>        Conference - - Las Vegas\, NV\, USA
+1027c1027
+<        Market Overview, (b) Finances, (c) Project Management
+- ---
+>        Market Overview\, (b) Finances\, (c) Project Management
+1664c1664
+<      ORGANIZER;SENT-BY:"mailto:sray@host.com":mailto:jsmith@host.com
+- ---
+>      ORGANIZER;SENT-BY="mailto:sray@host.com":mailto:jsmith@host.com
+4699c4699
+<      LOCATION:Conference Room - F123, Bldg. 002
+- ---
+>      LOCATION:Conference Room - F123\, Bldg. 002
+4702c4702
+<       Conference Room - F123, Bldg. 002
+- ---
+>       Conference Room - F123\, Bldg. 002
+7626c7626
+<       Atlanta, Georgia END:VEVENT END:VCALENDAR
+- ---
+>       Atlanta\, Georgia END:VEVENT END:VCALENDAR
+7760c7760
+<      CATEGORY:Project Report, XYZ, Weekly Meeting
+- ---
+>      CATEGORIES:Project Report,XYZ,Weekly Meeting
+7763c7763
+<      Definition
+- ---
+>        Definition
+7765c7765
+<       Participants: John Smith, Jane Doe, Jim Dandy\n-It was
+- ---
+>       Participants: John Smith\, Jane Doe\, Jim Dandy\n-It was
+
+--- Errata ID 434  [Verified] [Editorial]
+    Section: 4.2.7    Reported: 2005-10-10  by Ryan King
+
+  Original text:
+    Example:
+
+      ATTACH;FMTYPE=IMAGE/JPEG;ENCODING=BASE64;VALUE=BINARY:MIICajC
+       CAdOgAwIBAgICBEUwDQYJKoZIhvcNAQEEBQAwdzELMAkGA1UEBhMCVVMxLDA
+       qBgNVBAoTI05ldHNjYXBlIENvbW11bmljYXRpb25zIENvcnBvcmF0aW9uMRw
+       <...remainder of "BASE64" encoded binary data...>
+
+  Corrected text:
+    Example:
+
+      ATTACH;FMTTYPE=IMAGE/JPEG;ENCODING=BASE64;VALUE=BINARY:MIICajC
+               ^
+       CAdOgAwIBAgICBEUwDQYJKoZIhvcNAQEEBQAwdzELMAkGA1UEBhMCVVMxLDA
+       qBgNVBAoTI05ldHNjYXBlIENvbW11bmljYXRpb25zIENvcnBvcmF0aW9uMRw
+       <...remainder of "BASE64" encoded binary data...>
+
+  Notes:
+Typo in FMTTYPE.
+
+--- Errata ID 435  [Verified] [Technical]
+    Section: 4.2.18    Reported: 2003-01-11  by Tilghman Lesher
+
+  Original text:
+   ORGANIZER;SENT-BY:"MAILTO:sray@host.com":MAILTO:jsmith@host.com
+
+  Corrected text:
+   ORGANIZER;SENT-BY="MAILTO:sray@host.com":MAILTO:jsmith@host.com
+
+--- Errata ID 640  [Verified] [Editorial]
+    Section: 4.2    Reported: 2004-01-07  by Dave Flater
+
+  Original text:
+DESCRIPTION;ALTREP="http://www.wiz.org":The Fall'98 Wild Wizards
+  Conference - - Las Vegas, NV, USA
+
+  Corrected text:
+DESCRIPTION;ALTREP="http://www.wiz.org":The Fall'98 Wild Wizards
+  Conference - - Las Vegas\, NV\, USA
+
+--- Errata ID 641  [Verified] [Editorial]
+    Section: 4.2.1    Reported: 2004-01-07  by Dave Flater
+
+  Original text:
+DESCRIPTION;ALTREP="CID:<part3.msg.970415T083000@host.com>":Project
+XYZ Review Meeting will include the following agenda items: (a)
+Market Overview, (b) Finances, (c) Project Management
+
+  Corrected text:
+DESCRIPTION;ALTREP="CID:<part3.msg.970415T083000@host.com>":Project
+XYZ Review Meeting will include the following agenda items: (a)
+Market Overview\, (b) Finances\, (c) Project Management
+
+--- Errata ID 642  [Verified] [Editorial]
+    Section: 4.8.1.7    Reported: 2004-01-07  by Dave Flater
+
+  Original text:
+LOCATION:Conference Room - F123, Bldg. 002
+
+LOCATION;ALTREP="http://xyzcorp.com/conf-rooms/f123.vcf":
+Conference Room - F123, Bldg. 002
+
+  Corrected text:
+LOCATION:Conference Room - F123\, Bldg. 002
+
+LOCATION;ALTREP="http://xyzcorp.com/conf-rooms/f123.vcf":
+Conference Room - F123\, Bldg. 002
+
+--- Errata ID 643  [Verified] [Editorial]
+    Section: 5    Reported: 2004-01-07  by Dave Flater
+
+  Original text:
+DESCRIPTION:Networld+Interop Conference
+and Exhibit\nAtlanta World Congress Center\n
+Atlanta, Georgia END:VEVENT END:VCALENDAR
+
+  Corrected text:
+DESCRIPTION:Networld+Interop Conference
+and Exhibit\nAtlanta World Congress Center\n
+Atlanta\, Georgia END:VEVENT END:VCALENDAR
+
+--- Errata ID 644  [Verified] [Editorial]
+    Section: 5    Reported: 2004-01-07  by Dave Flater
+
+  Original text:
+CATEGORY:Project Report, XYZ, Weekly Meeting
+DESCRIPTION:Project xyz Review Meeting Minutes\n
+Agenda\n1. Review of project version 1.0 requirements.\n2.
+Definition
+of project processes.\n3. Review of project schedule.\n
+Participants: John Smith, Jane Doe, Jim Dandy\n-It was
+
+  Corrected text:
+CATEGORIES:Project Report,XYZ,Weekly Meeting
+DESCRIPTION:Project xyz Review Meeting Minutes\n
+Agenda\n1. Review of project version 1.0 requirements.\n2.
+Definition of project processes.\n3. Review of project schedule.\n
+Participants: John Smith\, Jane Doe\, Jim Dandy\n-It was
+
+  Notes:
+The following change addresses the escaping of commas and two
+unrelated issues:  the spurious CATEGORY property and a line wrapping
+error.
+
+--- Errata ID 1497  [Verified] [Editorial]
+    Section: 4.2.10    Reported: 2008-09-02  by Søren Løvborg
+
+  Original text:
+   Example: 
+ 
+     SUMMARY;LANGUAGE=us-EN:Company Holiday Party
+
+  Corrected text:
+   Example: 
+ 
+     SUMMARY;LANGUAGE=en-US:Company Holiday Party
+
+  Notes:
+There is no "us-EN" language tag. See RFC 5646 for more details.
+
+--- Errata ID 3722  [Held for Document Update] [Editorial]
+    Section: 4.8.7.3    Reported: 2013-09-11  by Alfie John
+
+  Original text:
+Conformance: This property can be specified in the "EVENT", "VTODO",
+"VJOURNAL" or "VTIMEZONE" calendar components.
+
+  Corrected text:
+Conformance: This property can be specified in the "VEVENT", "VTODO",
+"VJOURNAL" or "VTIMEZONE" calendar components.
+
+  Notes:
+Verifier notes:
+I'm marking this "hold for document update", according to the IESG's policy on errata
+handling... but note that this document has already been updated: it is obsoleted by
+RFC 5545, and this version (RFC 2445) should no longer be used.  (And this typo was
+corrected in RFC 5545, I'm happy to say.)
+
+--- Errata ID 3792  [Held for Document Update] [Technical]
+    Section: 5    Reported: 2013-11-10  by Seak, Teng-Fong
+
+  Original text:
+     BEGIN:VCALENDAR PRODID:-//xyz Corp//NONSGML PDA Calendar Verson
+     1.0//EN VERSION:2.0 BEGIN:VEVENT DTSTAMP:19960704T120000Z
+     UID:uid1@host.com ORGANIZER:MAILTO:jsmith@host.com
+     DTSTART:19960918T143000Z DTEND:19960920T220000Z STATUS:CONFIRMED
+     CATEGORIES:CONFERENCE SUMMARY:Networld+Interop Conference
+     DESCRIPTION:Networld+Interop Conference
+       and Exhibit\nAtlanta World Congress Center\n
+      Atlanta, Georgia END:VEVENT END:VCALENDAR
+
+  Corrected text:
+     BEGIN:VCALENDAR
+     PRODID:-//xyz Corp//NONSGML PDA Calendar Verson1.0//EN
+     VERSION:2.0
+     BEGIN:VEVENT
+     DTSTAMP:19960704T120000Z
+     UID:uid1@host.com
+     ORGANIZER:MAILTO:jsmith@host.com
+     DTSTART:19960918T143000Z
+     DTEND:19960920T220000Z
+     STATUS:CONFIRMED
+     CATEGORIES:CONFERENCE
+     SUMMARY:Networld+Interop Conference
+     DESCRIPTION:Networld+Interop Conference
+       and Exhibit\nAtlanta World Congress Center\n
+      Atlanta, Georgia
+     END:VEVENT
+     END:VCALENDAR
+
+  Notes:
+CRLF are missing in every content line.  The example violates at least the very first definition of iCalendar object stated at section 4.4
+
+icalobject = 1*("BEGIN" ":" "VCALENDAR" CRLF
+             icalbody
+             "END" ":" "VCALENDAR" CRLF)
+
+----- Verifier Notes -----
+Yes, and this was fixed in the updated document, RFC 5545.  RFC 2445 has been
+obsolete since 2009.

@@ -1,0 +1,1447 @@
+Errata for RFC 5545
+============================================================
+39 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 1911  [Verified] [Technical]
+    Section: 2.1    Reported: 2009-10-13  by Bernard Desruisseaux
+
+  Original text:
+| DQUOTE                 | 22                |
+
+  Corrected text:
+| DQUOTE                 | 34                |
+
+  Notes:
+The codepoint for the DQUOTE character was erroneously specified in hexadecimal instead of decimal.  Issue was found by Raimund Nisius.
+
+--- Errata ID 1913  [Verified] [Technical]
+    Section: 3.3.10    Reported: 2009-10-13  by Anshul Agrawal
+
+  Original text:
+represents the last Monday of the month.  The numeric value in a
+BYDAY rule part with the FREQ rule part set to YEARLY corresponds
+to an offset within the month when the BYMONTH rule part is
+present, and corresponds to an offset within the year when the
+BYWEEKNO or BYMONTH rule parts are present.  If an integer
+
+  Corrected text:
+represents the last Monday of the month.  The numeric value in a
+BYDAY rule part with the FREQ rule part set to YEARLY corresponds
+to an offset within the month when the BYMONTH rule part is
+present, and corresponds to an offset within the year when the
+BYWEEKNO or BYMONTH rule parts are not present.  If an integer
+                                   ^^^
+
+  Notes:
+The original statement appears contradictory in itself.
+
+--- Errata ID 1916  [Verified] [Technical]
+    Section: 3.6.4    Reported: 2009-10-15  by Alexey Melnikov
+
+  Original text:
+  BEGIN:VFREEBUSY
+  UID:19970901T115957Z-76A912@example.com
+  DTSTAMP:19970901T120000Z
+  ORGANIZER:jsmith@example.com
+           ^
+
+  Corrected text:
+  BEGIN:VFREEBUSY
+  UID:19970901T115957Z-76A912@example.com
+  DTSTAMP:19970901T120000Z
+  ORGANIZER:mailto:jsmith@example.com
+            ^^^^^^^
+
+  Notes:
+The last example in section 3.6.4 is missing "mailto:" after the "ORGANIZER:"
+
+--- Errata ID 2038  [Verified] [Editorial]
+    Section: Appendix A    Reported: 2010-02-10  by Arnout Engelen
+
+  Original text:
+   5.  The "DURATION" property can no longer appear in "VFREEBUSY"
+       components.
+
+A.2. Restrictions Removed
+
+  Corrected text:
+   5.  The "DURATION" property can no longer appear in "VFREEBUSY"
+       components.
+
+   6.  Use of the "charset" Content-Type parameter in MIME transports 
+       is now mandatory.
+
+A.2. Restrictions Removed
+
+  Notes:
+One change is missing from the list of changes.
+
+--- Errata ID 2039  [Verified] [Technical]
+    Section: 4    Reported: 2010-02-10  by Arnout Engelen
+
+  Original text:
+       BEGIN:VALARM
+       ACTION:AUDIO
+       TRIGGER:19980403T120000Z
+       ATTACH;FMTTYPE=audio/basic:http://example.com/pub/audio-
+        files/ssbanner.aud
+       REPEAT:4
+       DURATION:PT1H
+       END:VALARM
+
+  Corrected text:
+       BEGIN:VALARM
+       ACTION:AUDIO
+       TRIGGER;VALUE=DATE-TIME:19980403T120000Z
+       ATTACH;FMTTYPE=audio/basic:http://example.com/pub/audio-
+        files/ssbanner.aud
+       REPEAT:4
+       DURATION:PT1H
+       END:VALARM
+
+  Notes:
+The trigger is presented as a DATE-TIME, but the default type of this field is DURATION (3.8.6.3). Either the type must be specified (as per the corrected text), or specified in DURATION format.
+
+--- Errata ID 2495  [Held for Document Update] [Editorial]
+    Section: 3.2.7    Reported: 2010-08-21  by Scott Furry
+
+  Original text:
+Description: This property parameter identifies the inline encoding
+    used in a property value.  The default encoding is "8BIT",
+    corresponding to a property value consisting of text.  The
+    "BASE64" encoding type corresponds to a property value encoded
+    using the "BASE64" encoding defined in [RFC2045].
+
+  Corrected text:
+Description: This property parameter identifies the inline encoding
+    used in a property value.  The default encoding is "8BIT",
+    corresponding to a property value consisting of text.  The
+    "BASE64" encoding type corresponds to a property value encoded
+    using the "BASE64" encoding defined in [RFC4648].
+                                            ^^^^^^^
+
+  Notes:
+Section "Format Definition" above the "Description" paragraph cites [RFC2045] as defining value "8BIT" and [RFC4648] covering value "BASE64".
+
+--- Errata ID 2497  [Verified] [Editorial]
+    Section: 2.1 (pg 7)    Reported: 2010-08-21  by Scott Furry
+
+  Original text:
+              +------------------------+-------------------+
+              | Character name         | Decimal codepoint |
+              +------------------------+-------------------+
+              | HTAB                   | 9                 |
+              | LF                     | 10                |
+              | CR                     | 13                |
+-->           | DQUOTE                 | 22                |
+-->           | SPACE                  | 32                |
+... table continues
+
+  Corrected text:
+              +------------------------+-------------------+
+              | Character name         | Decimal codepoint |
+              +------------------------+-------------------+
+              | HTAB                   | 9                 |
+              | LF                     | 10                |
+              | CR                     | 13                |
+-->           | SPACE                  | 32                |
+-->           | DQUOTE                 | 34                |
+                                         ^^
+                                         corrected value
+...table continues
+
+  Notes:
+Correction to Table on page 7 of RFC updating the order of ASCII-US listing (decimal codepoint descending) and incorporating errata ID 1911(2009-10-13 - DQUOTE char listing shows hexadecimal value).
+
+--- Errata ID 2516  [Verified] [Editorial]
+    Section: 3.8.4.1    Reported: 2010-09-13  by David Wright
+
+  Original text:
+Example:  The following is an example of this property's use when
+      another calendar user is acting on behalf of the "Attendee":
+
+       ATTENDEE;SENT-BY=mailto:jan_doe@example.com;CN=John Smith:
+        mailto:jsmith@example.com
+
+  Corrected text:
+Example:  The following is an example of this property's use when
+      another calendar user is acting on behalf of the "Attendee":
+
+       ATTENDEE;SENT-BY="mailto:jan_doe@example.com";CN=John Smith:
+                        ^                          ^
+        mailto:jsmith@example.com
+
+  Notes:
+In the specification for SENT-BY (3.2.18), the r-value MUST be explicitly bound by DQUOTEs (ABNF follows)
+
+sentbyparam = "SENT-BY" "=" DQUOTE cal-address DQUOTE
+
+--- Errata ID 2527  [Verified] [Editorial]
+    Section: 3.8.5.2    Reported: 2010-09-20  by David Wright
+
+  Original text:
+  Example:  The following are examples of this property:
+
+       RDATE:19970714T123000Z
+       RDATE;TZID=America/New_York:19970714T083000
+
+       RDATE;VALUE=PERIOD:19960403T020000Z/19960403T040000Z,
+        19960404T010000Z/PT3H
+
+       RDATE;VALUE=DATE:19970101,19970120,19970217,19970421
+        19970526,19970704,19970901,19971014,19971128,19971129,19971225
+
+  Corrected text:
+  Example:  The following are examples of this property:
+
+       RDATE:19970714T123000Z
+       RDATE;TZID=America/New_York:19970714T083000
+
+       RDATE;VALUE=PERIOD:19960403T020000Z/19960403T040000Z,
+        19960404T010000Z/PT3H
+
+       RDATE;VALUE=DATE:19970101,19970120,19970217,19970421,
+                                                           ^
+        19970526,19970704,19970901,19971014,19971128,19971129,19971225
+
+  Notes:
+Comma missing at the fold boundary.
+
+--- Errata ID 2676  [Rejected] [Technical]
+    Section: 3.6.1    Reported: 2010-12-20  by Dennis Gearon
+
+  Original text:
+                  ; The following are OPTIONAL,
+                  ; but MUST NOT occur more than once.
+                  ;
+                  class / created / description / geo /
+                  last-mod / location / organizer / priority /
+                  seq / status / summary / transp /
+                  url / recurid /
+                  ;
+                  ; The following is OPTIONAL,
+                  ; but SHOULD NOT occur more than once.
+                  ;
+                  rrule /
+                  ;
+                  ; Either 'dtend' or 'duration' MAY appear in
+                  ; a 'eventprop', but 'dtend' and 'duration'
+                  ; MUST NOT occur in the same 'eventprop'.
+                  ;
+                  dtend / duration /
+                  ;
+                  ; The following are OPTIONAL,
+                  ; and MAY occur more than once.
+                  ;
+                  attach / attendee / categories / comment /
+                  contact / exdate / rstatus / related /
+                  resources / rdate / x-prop / iana-prop
+                  ^^^^^^^^^
+                  ;
+
+  Corrected text:
+                  ; The following are OPTIONAL,
+                  ; but MUST NOT occur more than once.
+                  ;
+                  class / created / description / geo /
+                  last-mod / location / organizer / priority /
+                  seq / status / summary / transp /
+                  url / recurid / resources 
+                                  ^^^^^^^^^
+                  ;
+                  ; The following is OPTIONAL,
+                  ; but SHOULD NOT occur more than once.
+                  ;
+                  rrule /
+                  ;
+                  ; Either 'dtend' or 'duration' MAY appear in
+                  ; a 'eventprop', but 'dtend' and 'duration'
+                  ; MUST NOT occur in the same 'eventprop'.
+                  ;
+                  dtend / duration /
+                  ;
+                  ; The following are OPTIONAL,
+                  ; and MAY occur more than once.
+                  ;
+                  attach / attendee / categories / comment /
+                  contact / exdate / rstatus / related /
+                  rdate / x-prop / iana-prop
+                  ;
+
+  Notes:
+As per the definition of 'RESOURCES' in section 3.8.1.10,:
+
+Conformance:  This property can be specified once in "VEVENT" or
+      "VTODO" calendar component.
+
+The text in the "VEVENT" definition has RESOURCES in the 'Option and MAY occur more than once.' section. The corrected text above corrects both sections;
+
+1/ It is removed from the 'OPTIONAL/MAY occure more than once section.
+2/ It is placed at the end of the 'OPTIONAL/MUST NOT occur more than once section.
+ --VERIFIER NOTES-- 
+The correct fix is listed in Erratum 2677 which was approved.
+
+--- Errata ID 2677  [Verified] [Technical]
+    Section: 3.8.1.10    Reported: 2010-12-21  by Bernard Desruisseaux
+
+  Original text:
+Conformance:
+This property can be specified once in "VEVENT" or "VTODO" calendar component.
+                               ^^^^
+
+  Corrected text:
+Conformance:
+This property can be specified in "VEVENT" or "VTODO" calendar component.
+
+  Notes:
+The word "once" was mistakenly introduced in RFC 5545.
+RFC 2445 didn't have this issue.
+
+Issues was previously reported by Dennis Gearon <gearond@sbcglobal.net>
+(See Errata 2676) but proposed the wrong correction.
+
+--- Errata ID 3038  [Held for Document Update] [Technical]
+    Section: 3.8.7.2    Reported: 2011-11-30  by Brent Bloxam
+
+  Original text:
+Value Type:  DATE-TIME
+
+   Property Parameters:  IANA and non-standard property parameters can
+      be specified on this property.
+
+   Conformance:  This property MUST be included in the "VEVENT",
+      "VTODO", "VJOURNAL", or "VFREEBUSY" calendar components.
+
+   Description:  The value MUST be specified in the UTC time format.
+
+      This property is also useful to protocols such as [2447bis] that
+      have inherent latency issues with the delivery of content.  This
+      property will assist in the proper sequencing of messages
+      containing iCalendar objects.
+
+  Corrected text:
+Value Type:  DATE-TIME. The time value MUST be in the DATE WITH UTC
+      TIME form defined for the DATE-TIME value type.
+
+   Property Parameters:  IANA and non-standard property parameters can
+      be specified on this property.
+
+   Conformance:  This property MUST be included in the "VEVENT",
+      "VTODO", "VJOURNAL", or "VFREEBUSY" calendar components.
+
+   Description:  This property is also useful to protocols such as
+      [2447bis] that have inherent latency issues with the delivery of
+      content.  This property will assist in the proper sequencing of
+      messages containing iCalendar objects.
+
+  Notes:
+Application of the DATE-TIME value type is inconsistent in the RFC, and can lead to ambiguity since DATE-TIME can take on three different forms. The wording for the corrected Value Type for DTSTAMP is similar to the DTSTART property's Value Type. This is to make it clear that the only acceptable form is DATE WITH UTC TIME. You can also see evidence of defining specificity inline with the Value Type in the GEO property.
+
+The spec author comments: "To improve consistency, we should modify Section 3.8.7.2. Date-Time Stamp and Section 3.8.7.3. Last Modified to use the same phrasing as Section 3.8.7.1. Date-Time Created and Section 3.8.2.1. Date-Time Completed."
+
+--- Errata ID 3405  [Rejected] [Technical]
+    Section: 3.3.10.    Reported: 2012-11-09  by Peter Hermann
+
+  Original text:
+       weekday     = "SU" / "MO" / "TU" / "WE" / "TH" / "FR" / "SA"
+       ;Corresponding to SUNDAY, MONDAY, TUESDAY, WEDNESDAY, THURSDAY,
+       ;FRIDAY, and SATURDAY days of the week.
+
+  Corrected text:
+       weekday     = "MO" / "TU" / "WE" / "TH" / "FR" / "SA" / "SU"
+       ;Corresponding to MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY,
+       ;SATURDAY, and SUNDAY days of the week.
+
+  Notes:
+It is worldwide accepted that a working business week begins with
+a monday in all business related activities (stock exchange etc. etc).
+
+See also:
+       package Ada.Calendar.Formatting is
+       -- Day of the week:
+       type Day_Name is (Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday);
+ --VERIFIER NOTES-- 
+This isn't an error in the document.  Regardless of your opinion of whether the week should begin on Sunday, Monday, or Thursday, ABNF does not create any particular ordering.  Implementations are always free to order them as they please.
+
+--- Errata ID 3457  [Rejected] [Editorial]
+    Section: 3.2    Reported: 2013-01-16  by Johannes Raggam
+
+  Original text:
+Property parameter values that contain the COLON, SEMICOLON, or COMMA
+character separators MUST be specified as quoted-string text values.
+
+  Corrected text:
+Property parameter values that contain the COLON, SEMICOLON, COMMA or
+SPACE character separators MUST be specified as quoted-string text
+values.
+
+  Notes:
+Section "3.2.2. Common Name" gives an example with an double-quoted parameter value with a SPACE in it:
+
+       ORGANIZER;CN="John Smith":mailto:jsmith@example.com
+ --VERIFIER NOTES-- 
+That example also shows a double-quoted parameter value with a "J" in it, but that doesn't mean that values that contain "J" MUST be quoted.  Examples are just examples, and any value MAY be quoted.
+
+The ABNF is the definitive source.  The ABNF at the bottom of page 10 and top of page 11 (Section 3.1) says that non-quoted values may contain any number of characters from the SAFE-CHAR set, and that set includes WSP (SP and HTAB; see RFC 5234).  Quoting is not required on account of space characters.
+
+--- Errata ID 3740  [Verified] [Technical]
+    Section: 4    Reported: 2013-09-29  by Daniel Barkalow
+
+  Original text:
+       BEGIN:VTIMEZONE
+       TZID:America/New_York
+       BEGIN:STANDARD
+       DTSTART:19981025T020000
+       TZOFFSETFROM:-0400
+       TZOFFSETTO:-0500
+       TZNAME:EST
+       END:STANDARD
+       BEGIN:DAYLIGHT
+       DTSTART:19990404T020000
+       TZOFFSETFROM:-0500
+       TZOFFSETTO:-0400
+       TZNAME:EDT
+       END:DAYLIGHT
+       END:VTIMEZONE
+
+  Corrected text:
+       BEGIN:VTIMEZONE
+       TZID:America/New_York
+       BEGIN:STANDARD
+       DTSTART:19671029T020000
+       RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU;UNTIL=20061029T060000Z
+       TZOFFSETFROM:-0400
+       TZOFFSETTO:-0500
+       TZNAME:EST
+       END:STANDARD
+       BEGIN:DAYLIGHT
+       DTSTART:19870405T020000
+       RRULE:FREQ=YEARLY;BYMONTH=4;BYDAY=1SU;UNTIL=20060402T070000Z
+       TZOFFSETFROM:-0500
+       TZOFFSETTO:-0400
+       TZNAME:EDT
+       END:DAYLIGHT
+       END:VTIMEZONE
+
+  Notes:
+The time zone specification in the original example does not cover the event in the example (which occurs on 19980312, before both of the listed onsets).
+
+---- Verifier notes -----
+The corrected text uses part of the VTIMEZONE definition in the example on page 68.
+
+--- Errata ID 3747  [Verified] [Editorial]
+    Section: 3.3.10    Reported: 2013-10-09  by Alfie John
+
+  Original text:
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |          |SECONDLY|MINUTELY|HOURLY |DAILY  |WEEKLY|MONTHLY|YEARLY|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYMONTH   |Limit   |Limit   |Limit  |Limit  |Limit |Limit  |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYWEEKNO  |N/A     |N/A     |N/A    |N/A    |N/A   |N/A    |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYYEARDAY |Limit   |Limit   |Limit  |N/A    |N/A   |N/A    |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYMONTHDAY|Limit   |Limit   |Limit  |Limit  |N/A   |Expand |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYDAY     |Limit   |Limit   |Limit  |Limit  |Expand|Note 1 |Note 2|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYHOUR    |Limit   |Limit   |Limit  |Expand |Expand|Expand |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYMINUTE  |Limit   |Limit   |Expand |Expand |Expand|Expand |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYSECOND  |Limit   |Expand  |Expand |Expand |Expand|Expand |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYSETPOS  |Limit   |Limit   |Limit  |Limit  |Limit |Limit  |Limit |
+   +----------+--------+--------+-------+-------+------+-------+------+
+
+      Note 1:  Limit if BYMONTHDAY is present; otherwise, special expand
+               for MONTHLY.
+
+      Note 2:  Limit if BYYEARDAY or BYMONTHDAY is present; otherwise,
+               special expand for WEEKLY if BYWEEKNO present; otherwise,
+               special expand for MONTHLY if BYMONTH present; otherwise,
+               special expand for YEARLY.
+
+  Corrected text:
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |          |SECONDLY|MINUTELY|HOURLY |DAILY  |WEEKLY|MONTHLY|YEARLY|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYMONTH   |Limit   |Limit   |Limit  |Limit  |Limit |Limit  |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYWEEKNO  |N/A     |N/A     |N/A    |N/A    |N/A   |N/A    |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYYEARDAY |Limit   |Limit   |Limit  |N/A    |N/A   |N/A    |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYMONTHDAY|Limit   |Limit   |Limit  |Limit  |N/A   |Expand |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYDAY     |Limit   |Limit   |Limit  |Limit  |Expand|Note 1 |Note 2|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYHOUR    |Limit   |Limit   |Limit  |Expand |Expand|Expand |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYMINUTE  |Limit   |Limit   |Expand |Expand |Expand|Expand |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYSECOND  |Limit   |Expand  |Expand |Expand |Expand|Expand |Expand|
+   +----------+--------+--------+-------+-------+------+-------+------+
+   |BYSETPOS  |Limit   |Limit   |Limit  |Limit  |Limit |Limit  |Limit |
+   +----------+--------+--------+-------+-------+------+-------+------+
+
+      Note 1:  Limit if BYMONTHDAY is present; otherwise, special expand
+               for MONTHLY.
+
+      Note 2:  Limit if BYYEARDAY or BYMONTHDAY is present; otherwise,
+               special expand for YEARLY.
+
+  Notes:
+The change is to "Note 2":
+Removed WEEKLY and MONTHLY clause as Note 2 only applies to FREQ = YEARLY.
+
+--- Errata ID 3779  [Verified] [Technical]
+    Section: 3.3.10    Reported: 2013-10-31  by Daniele Mancini
+
+  Original text:
+represents the last Monday of the month.  The numeric value in a
+BYDAY rule part with the FREQ rule part set to YEARLY corresponds
+to an offset within the month when the BYMONTH rule part is
+present, and corresponds to an offset within the year when the
+BYWEEKNO or BYMONTH rule parts are present.  If an integer
+modifier is not present, it means all days of this type within the
+specified frequency.  For example, within a MONTHLY rule, MO
+represents all Mondays within the month.  The BYDAY rule part MUST
+NOT be specified with a numeric value when the FREQ rule part is
+not set to MONTHLY or YEARLY.  Furthermore, the BYDAY rule part
+MUST NOT be specified with a numeric value with the FREQ rule part
+set to YEARLY when the BYWEEKNO rule part is specified.
+
+  Corrected text:
+represents the last Monday of the month.  The numeric value in a
+BYDAY rule part with the FREQ rule part set to YEARLY corresponds
+to an offset within the month when the BYMONTH rule part is
+present, and corresponds to an offset within the year when the
+BYMONTH rule part is not present.  If an integer
+modifier is not present, it means all days of this type within the
+specified frequency.  For example, within a MONTHLY rule, MO
+represents all Mondays within the month.  The BYDAY rule part MUST
+NOT be specified with a numeric value when the FREQ rule part is
+not set to MONTHLY or YEARLY.  Furthermore, the BYDAY rule part
+MUST NOT be specified with a numeric value with the FREQ rule part
+set to YEARLY when the BYWEEKNO rule part is specified.
+
+  Notes:
+Other than the missing 'not', pointed out in the errata 1913, the original text contradicts itself regarding BYWEEKNO.
+At the beggining of the paragraph, it says that when using a YEARLY frequency with BYWEEKNO rule part, the integer part identifies an offset within the year (i.e. either in [-53, 0) or (0, 53], as it can be a week day in a valid week of the year, even if it is not clearly specified), but at the end of the paragraph, it states that offsets should not be specified in conjunction with a BYWEEKNO rule part.
+
+--- Errata ID 3883  [Verified] [Technical]
+    Section: 3.8.5.3    Reported: 2014-02-05  by Bruce Florman
+
+  Original text:
+      Every 3 hours from 9:00 AM to 5:00 PM on a specific day:
+
+       DTSTART;TZID=America/New_York:19970902T090000
+       RRULE:FREQ=HOURLY;INTERVAL=3;UNTIL=19970902T170000Z
+
+       ==> (September 2, 1997 EDT) 09:00,12:00,15:00
+
+  Corrected text:
+      Every 3 hours from 9:00 AM to 5:00 PM on a specific day:
+
+       DTSTART;TZID=America/New_York:19970902T090000
+       RRULE:FREQ=HOURLY;INTERVAL=3;UNTIL=19970902T210000Z
+
+       ==> (September 2, 1997 EDT) 09:00,12:00,15:00
+
+  Notes:
+The UNTIL rule part is specified with UTC time, which was four hours ahead of America/New_York on 19970902. So 170000Z would only be 1:00 PM on that day.
+
+The corrected UNTIL rule matches the description (from 9 to 5).  Note that "UNTIL=19970902T190000Z" would have the same effect (the last event is at 3 PM in New York, which is 19:00 Z), but 21:00 Z is what matches the description.
+
+--- Errata ID 4149  [Verified] [Technical]
+    Section: 4    Reported: 2014-10-29  by Hiroaki KAWAI
+
+  Original text:
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//RDU Software//NONSGML HandCal//EN
+BEGIN:VFREEBUSY
+ORGANIZER:mailto:jsmith@example.com
+DTSTART:19980313T141711Z
+DTEND:19980410T141711Z
+
+  Corrected text:
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//RDU Software//NONSGML HandCal//EN
+BEGIN:VFREEBUSY
+UID:19970901T115957Z-76A912@example.com
+DTSTAMP:19970901T120000Z
+ORGANIZER:mailto:jsmith@example.com
+DTSTART:19980313T141711Z
+DTEND:19980410T141711Z
+
+  Notes:
+3.6.4 says
+       fbprop     = *(
+                  ;
+                  ; The following are REQUIRED,
+                  ; but MUST NOT occur more than once.
+                  ;
+                  dtstamp / uid /
+
+--- Errata ID 4150  [Rejected] [Editorial]
+    Section: 10.2    Reported: 2014-11-03  by Peter Bachman
+
+  Original text:
+[TZDB]                 Eggert, P. and A.D. Olson, "Sources for Time
+                          Zone and Daylight Saving Time Data",
+                          July 2009,
+                          <http://www.twinsun.com/tz/tz-link.htm>.
+
+  Corrected text:
+[TZDB]       Eggert, P. and A. Olson, "Sources for Time Zone and
+                Daylight Saving Time Data", 1987,
+                <ftp://ftp.iana.org/tz/code/tz-link.htm>.
+
+              Internet Assigned Numbers Authority (IANA)
+              "Time Zone Database"
+                <http://www.iana.org/time-zones>.
+
+  Notes:
+The twinsun.com version is no longer maintained by the volunteer(s) tz@elsie.nci.nih.gov. The document and the tz database, have been adopted by members of IETF and iana.org. The database itself is public domain. 
+
+The corrected text matches that of rfc6557 11.1.  Normative References [TZDB]
+
+
+
+http://tools.ietf.org/html/rfc6557
+http://www.iana.org/time-zones/repository/tz-link.html
+http://www.iana.org/time-zones
+ --VERIFIER NOTES-- 
+The document was correct at the time it was published, so this report does not meet the formal criteria for errata.
+
+That said, Peter is correct that the location of the time zone database has since changed, and readers should look to the new location, as he has specified in this report.
+
+--- Errata ID 4271  [Verified] [Technical]
+    Section: 3.3.10    Reported: 2015-02-12  by Neil Jenkins
+
+  Original text:
+Recurrence rules may generate recurrence instances with an invalid
+date (e.g., February 30) or nonexistent local time (e.g., 1:30 AM
+on a day where the local time is moved forward by an hour at 1:00
+AM).  Such recurrence instances MUST be ignored and MUST NOT be
+counted as part of the recurrence set.
+
+  Corrected text:
+Recurrence rules may generate recurrence instances with an invalid
+date (e.g., February 30). Such recurrence instances MUST be ignored
+and MUST NOT be counted as part of the recurrence set.
+
+Recurrence rules may generate recurrence instances with a nonexistent
+local time ((e.g., 1:30 AM on a day where the local time is moved
+forward by an hour at 1:00 AM).  Such recurrence instances are
+handled as specified in Section 3.3.5.
+
+  Notes:
+The section about ignoring times that don't occur in the timezone of the expansion is contradicted by the later passage (p44):
+
+"""If the computed local start time of a recurrence instance does not
+exist, or occurs more than once, for the specified time zone, the
+time of the recurrence instance is interpreted in the same manner
+as an explicit DATE-TIME value describing that date and time, as
+specified in Section 3.3.5."""
+
+And this is the behaviour implemented by major clients such as Calendar.app and Google Calendar.
+
+--- Errata ID 4414  [Verified] [Editorial]
+    Section: 3.3.10    Reported: 2015-07-10  by Joseph Silvestre
+
+  Original text:
+      The UNTIL rule part defines a DATE or DATE-TIME value that bounds
+      the recurrence rule in an inclusive manner.  If the value
+      specified by UNTIL is synchronized with the specified recurrence,
+      this DATE or DATE-TIME becomes the last instance of the
+      recurrence.  The value of the UNTIL rule part MUST have the same
+      value type as the "DTSTART" property.  Furthermore, if the
+      "DTSTART" property is specified as a date with local time, then
+      the UNTIL rule part MUST also be specified as a date with local
+      time.  If the "DTSTART" property is specified as a date with UTC
+      time or a date with local time and time zone reference, then the
+      UNTIL rule part MUST be specified as a date with UTC time.  In the
+      case of the "STANDARD" and "DAYLIGHT" sub-components the UNTIL
+      rule part MUST always be specified as a date with UTC time.  If
+      specified as a DATE-TIME value, then it MUST be specified in a UTC
+      time format.  If not present, and the COUNT rule part is also not
+      present, the "RRULE" is considered to repeat forever.
+
+  Corrected text:
+      The UNTIL rule part defines a DATE or DATE-TIME value that bounds
+      the recurrence rule in an inclusive manner.  If the value
+      specified by UNTIL is synchronized with the specified recurrence,
+      this DATE or DATE-TIME becomes the last instance of the
+      recurrence.  The value of the UNTIL rule part MUST have the same
+      value type as the "DTSTART" property.  Furthermore, if the
+      "DTSTART" property is specified as a date with local time, then
+      the UNTIL rule part MUST also be specified as a date with local
+      time.  If the "DTSTART" property is specified as a date with UTC
+      time or a date with local time and time zone reference, then the
+      UNTIL rule part MUST be specified as a date with UTC time.  In the
+      case of the "STANDARD" and "DAYLIGHT" sub-components the UNTIL
+      rule part MUST always be specified as a date with UTC time.
+      If not present, and the COUNT rule part is also not
+      present, the "RRULE" is considered to repeat forever.
+
+  Notes:
+The following sentence from RFC 2445 should have been removed from the text.
+
+      If
+      specified as a DATE-TIME value, then it MUST be specified in a UTC
+      time format.
+
+--- Errata ID 4606  [Rejected] [Technical]
+    Section: 3.8.8.3    Reported: 2016-01-27  by Harald Lampke
+
+  Original text:
+       rstatus    = "REQUEST-STATUS" rstatparam ":"
+                    statcode ";" statdesc [";" extdata]
+
+  Corrected text:
+       rstatus    = "REQUEST-STATUS" statcode ":"
+                    rstatparam ";" statdesc [";" extdata]
+
+  Notes:
+'rstatparam' and 'statcode' are interchanged.
+ --VERIFIER NOTES-- 
+The original text is correct: "rstatparam" defines the set of allowed *parameters* on the "REQUEST-STATUS" property. Parameters always occur immediately after the property name and before the ":" that separates the property value. The property *value* is a semicolon-separated structured text field with the first component being "statcode", and appears after the ":".
+
+--- Errata ID 4626  [Held for Document Update] [Editorial]
+    Section: A.1    Reported: 2016-02-25  by Tim Ruffing
+
+  Original text:
+[Missing item]
+
+  Corrected text:
+6.  The value of the "DUE" property MUST be strictly later in time than
+    the value of the "DTSTART" property (as opposed to only "equal or
+    later in time").
+
+  Notes:
+See http://www.ietf.org/mail-archive/web/calsify/current/msg02217.html
+
+--- Errata ID 5082  [Rejected] [Technical]
+    Section: 3.8.7.3    Reported: 2017-08-10  by George Sexton
+
+  Original text:
+N/A
+
+  Corrected text:
+The value must not be in the future.
+
+  Notes:
+If future values are allowed for LAST-MODIFIED, it makes it very difficult for software to perform change management for a VEVENT.
+
+Say for example, an event is imported from a source and the VEVENT has a future date. For example, December 20 2017 12:00:00Z
+
+That event is then edited and assigned the actual correct date and time. Say August 9 2017 13:45:44Z.
+
+Software that examines the VEVENT's LAST-MODIFIED to determine if the VEVENT record has been modified will not see the VEVENT is updated. 
+
+In order for different systems to perform change management, the value for LAST-MODIFIED should NEVER be a future date.
+ --VERIFIER NOTES-- 
+The description of the property already implies that it is not in the future.  And any handling of clock skew is an iTIP/CalDAV protocol issue, NOT a data format issue.
+
+See https://mailarchive.ietf.org/arch/msg/calsify/x82GopunVcEh8y5UGSIsEIC3s6M/
+
+--- Errata ID 5214  [Rejected] [Technical]
+    Section: 3.6.5    Reported: 2017-12-24  by Richard Smith
+
+  Original text:
+       timezonec  = "BEGIN" ":" "VTIMEZONE" CRLF
+                    *(
+                    ;
+                    ; 'tzid' is REQUIRED, but MUST NOT occur more
+                    ; than once.
+                    ;
+                    tzid /
+                    ;
+                    ; 'last-mod' and 'tzurl' are OPTIONAL,
+                    ; but MUST NOT occur more than once.
+                    ;
+                    last-mod / tzurl /
+                    ;
+                    ; One of 'standardc' or 'daylightc' MUST occur
+                    ; and each MAY occur more than once.
+                    ;
+                    standardc / daylightc /
+                    ;
+                    ; The following are OPTIONAL,
+                    ; and MAY occur more than once.
+                    ;
+                    x-prop / iana-prop
+                    ;
+                    )
+                    "END" ":" "VTIMEZONE" CRLF
+
+  Corrected text:
+       timezonec    = "BEGIN" ":" "VTIMEZONE" CRLF
+                      timezoneprop timezonesubc
+                      "END" ":" "VTIMEZONE" CRLF
+
+       timezoneprop = *(
+                      ;
+                      ; 'tzid' is REQUIRED, but MUST NOT occur more
+                      ; than once.
+                      ;
+                      tzid /
+                      ;
+                      ; 'last-mod' and 'tzurl' are OPTIONAL,
+                      ; but MUST NOT occur more than once.
+                      ;
+                      last-mod / tzurl /
+                      ;
+                      ; The following are OPTIONAL,
+                      ; and MAY occur more than once.
+                      ;
+                      x-prop / iana-prop
+                      ;
+
+       timezonesubc = *(
+                      ;
+                      ; One of 'standardc' or 'daylightc' MUST occur
+                      ; and each MAY occur more than once.
+                      ;
+                      standardc / daylightc
+                      ;
+                      )
+
+  Notes:
+The definition of icalbody shows that calendar properties precede components. Some components may contains sub-components. For those that may:
+
+The definition of eventc (section 3.6.1 - Event Component) also shows that properties precede sub-components.
+
+The definition of todoc (section 3.6.2 - To-Do Component) also shows that properties precede sub-components.
+
+However, the definition of timezonec (section 3.6.5 - Time Zone Component) shows that properties and sub-components may be intermingled. The corrected text assumes this was not intended.
+ --VERIFIER NOTES-- 
+The current ABNF doesn't appear to cause any interop problems, given that both ical4j and libical don't care about the order of properties and components within a VTIMEZONE component.
+
+See https://mailarchive.ietf.org/arch/msg/calsify/x82GopunVcEh8y5UGSIsEIC3s6M/
+
+--- Errata ID 5215  [Rejected] [Technical]
+    Section: 3.8.5.1    Reported: 2017-12-24  by Richard Smith
+
+  Original text:
+   Purpose:  This property defines the list of DATE-TIME exceptions for
+   recurring events, to-dos, journal entries, or time zone
+   definitions.
+
+...
+
+   Conformance:  This property can be specified in recurring "VEVENT",
+   "VTODO", and "VJOURNAL" calendar components as well as in the
+   "STANDARD" and "DAYLIGHT" sub-components of the "VTIMEZONE"
+   calendar component.
+
+  Corrected text:
+   Purpose:  This property defines the list of DATE-TIME exceptions for
+   recurring events, to-dos or journal entries.
+
+...
+
+   Conformance:  This property can be specified in recurring "VEVENT",
+   "VTODO", and "VJOURNAL" calendar components.
+
+  Notes:
+Section 3.8.5.1 describes Exception Date-Times (EXDATE).
+
+tzprop (section 3.6.5) does not allow EXDATE.
+
+(Of course, the problem could be that 3.6.5 should include EXDATE.)
+ --VERIFIER NOTES-- 
+Excluding EXDATE from tzprop is the actual error and is worthy of a new errata.
+
+See https://mailarchive.ietf.org/arch/msg/calsify/x82GopunVcEh8y5UGSIsEIC3s6M/
+
+--- Errata ID 5505  [Held for Document Update] [Technical]
+    Section: 3.2.19    Reported: 2018-09-26  by Ken Murchison
+
+  Original text:
+       tzidparam  = "TZID" "=" [tzidprefix] paramtext
+
+  Corrected text:
+       tzidparam  = "TZID" "=" [tzidprefix] param-value
+
+  Notes:
+TZID appears to be the only parameter defined 5545 whose value can not be a quoted string.  This is problematic in that time zone IDs such as "GMT-03:00" are beginning to appear (note the embedded colon).  RFC 6868 has no mechanism to quote a colon character, as it relies on such characters appearing within a quoted string.  I see no technical reason why a TZID parameter can not be quoted, and existing implementations already accept quoted TZIDs.
+
+--- Errata ID 5602  [Verified] [Editorial]
+    Section: 3.1.3    Reported: 2019-01-15  by Carsten Bormann
+
+  Original text:
+     ATTACH;FMTTYPE=text/plain;ENCODING=BASE64;VALUE=BINARY:VGhlIH
+      F1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4
+
+  Corrected text:
+     ATTACH;FMTTYPE=text/plain;ENCODING=BASE64;VALUE=BINARY:VGhlIH
+      F1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4=
+
+  Notes:
+The base64 text used in the example misses the base64 padding.  RFC 5545 appears to be using base64 according to RFC 4648 Section 4 with padding throughout, except for this example.  (The corrected text decodes to "The quick brown fox jumps over the lazy dog.")  Beyond temporary confusion in implementers, it is possible that this example will turn up in a test suite and ultimately cause unnecessarily lenient behavior of decoders ("soup"); it should be either clarified that this lenient behavior is not the intention or the behavior should be codified.
+
+--- Errata ID 5794  [Verified] [Editorial]
+    Section: ToC    Reported: 2019-07-28  by Eugene Adell
+
+  Original text:
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   5
+   2.  Basic Grammar and Conventions . . . . . . . . . . . . . . . .   6
+     2.1.  Formatting Conventions  . . . . . . . . . . . . . . . . .   6
+     2.2.  Related Memos . . . . . . . . . . . . . . . . . . . . . .   7
+   3.  iCalendar Object Specification  . . . . . . . . . . . . . . .   8
+     3.1.  Content Lines . . . . . . . . . . . . . . . . . . . . . .   8
+       3.1.1.  List and Field Separators . . . . . . . . . . . . . .  11
+       3.1.2.  Multiple Values . . . . . . . . . . . . . . . . . . .  11
+       3.1.3.  Binary Content  . . . . . . . . . . . . . . . . . . .  11
+       3.1.4.  Character Set . . . . . . . . . . . . . . . . . . . .  12
+     3.2.  Property Parameters . . . . . . . . . . . . . . . . . . .  12
+       3.2.1.  Alternate Text Representation . . . . . . . . . . . .  13
+       3.2.2.  Common Name . . . . . . . . . . . . . . . . . . . . .  15
+       3.2.3.  Calendar User Type  . . . . . . . . . . . . . . . . .  15
+       3.2.4.  Delegators  . . . . . . . . . . . . . . . . . . . . .  16
+       3.2.5.  Delegatees  . . . . . . . . . . . . . . . . . . . . .  16
+       3.2.6.  Directory Entry Reference . . . . . . . . . . . . . .  17
+       3.2.7.  Inline Encoding . . . . . . . . . . . . . . . . . . .  17
+       3.2.8.  Format Type . . . . . . . . . . . . . . . . . . . . .  18
+       3.2.9.  Free/Busy Time Type . . . . . . . . . . . . . . . . .  19
+       3.2.10. Language  . . . . . . . . . . . . . . . . . . . . . .  20
+       3.2.11. Group or List Membership  . . . . . . . . . . . . . .  20
+       3.2.12. Participation Status  . . . . . . . . . . . . . . . .  21
+       3.2.13. Recurrence Identifier Range . . . . . . . . . . . . .  22
+       3.2.14. Alarm Trigger Relationship  . . . . . . . . . . . . .  23
+       3.2.15. Relationship Type . . . . . . . . . . . . . . . . . .  24
+       3.2.16. Participation Role  . . . . . . . . . . . . . . . . .  25
+       3.2.17. RSVP Expectation  . . . . . . . . . . . . . . . . . .  25
+       3.2.18. Sent By . . . . . . . . . . . . . . . . . . . . . . .  26
+       3.2.19. Time Zone Identifier  . . . . . . . . . . . . . . . .  26
+       3.2.20. Value Data Types  . . . . . . . . . . . . . . . . . .  28
+     3.3.  Property Value Data Types . . . . . . . . . . . . . . . .  29
+       3.3.1.  Binary  . . . . . . . . . . . . . . . . . . . . . . .  29
+       3.3.2.  Boolean . . . . . . . . . . . . . . . . . . . . . . .  30
+       3.3.3.  Calendar User Address . . . . . . . . . . . . . . . .  30
+       3.3.4.  Date  . . . . . . . . . . . . . . . . . . . . . . . .  31
+       3.3.5.  Date-Time . . . . . . . . . . . . . . . . . . . . . .  31
+       3.3.6.  Duration  . . . . . . . . . . . . . . . . . . . . . .  34
+       3.3.7.  Float . . . . . . . . . . . . . . . . . . . . . . . .  35
+       3.3.8.  Integer . . . . . . . . . . . . . . . . . . . . . . .  35
+       3.3.9.  Period of Time  . . . . . . . . . . . . . . . . . . .  36
+       3.3.10. Recurrence Rule . . . . . . . . . . . . . . . . . . .  37
+       3.3.11. Text  . . . . . . . . . . . . . . . . . . . . . . . .  45
+       3.3.12. Time  . . . . . . . . . . . . . . . . . . . . . . . .  46
+       3.3.13. URI . . . . . . . . . . . . . . . . . . . . . . . . .  48
+       3.3.14. UTC Offset  . . . . . . . . . . . . . . . . . . . . .  49
+     3.4.  iCalendar Object  . . . . . . . . . . . . . . . . . . . .  49
+     3.5.  Property  . . . . . . . . . . . . . . . . . . . . . . . .  50
+     3.6.  Calendar Components . . . . . . . . . . . . . . . . . . .  50
+       3.6.1.  Event Component . . . . . . . . . . . . . . . . . . .  52
+       3.6.2.  To-Do Component . . . . . . . . . . . . . . . . . . .  56
+       3.6.3.  Journal Component . . . . . . . . . . . . . . . . . .  58
+       3.6.4.  Free/Busy Component . . . . . . . . . . . . . . . . .  60
+       3.6.5.  Time Zone Component . . . . . . . . . . . . . . . . .  63
+       3.6.6.  Alarm Component . . . . . . . . . . . . . . . . . . .  72
+     3.7.  Calendar Properties . . . . . . . . . . . . . . . . . . .  77
+       3.7.1.  Calendar Scale  . . . . . . . . . . . . . . . . . . .  77
+       3.7.2.  Method  . . . . . . . . . . . . . . . . . . . . . . .  78
+       3.7.3.  Product Identifier  . . . . . . . . . . . . . . . . .  79
+       3.7.4.  Version . . . . . . . . . . . . . . . . . . . . . . .  80
+     3.8.  Component Properties  . . . . . . . . . . . . . . . . . .  81
+       3.8.1.  Descriptive Component Properties  . . . . . . . . . .  81
+         3.8.1.1.  Attachment  . . . . . . . . . . . . . . . . . . .  81
+         3.8.1.2.  Categories  . . . . . . . . . . . . . . . . . . .  82
+         3.8.1.3.  Classification  . . . . . . . . . . . . . . . . .  83
+         3.8.1.4.  Comment . . . . . . . . . . . . . . . . . . . . .  84
+         3.8.1.5.  Description . . . . . . . . . . . . . . . . . . .  85
+         3.8.1.6.  Geographic Position . . . . . . . . . . . . . . .  87
+         3.8.1.7.  Location  . . . . . . . . . . . . . . . . . . . .  88
+         3.8.1.8.  Percent Complete  . . . . . . . . . . . . . . . .  89
+         3.8.1.9.  Priority  . . . . . . . . . . . . . . . . . . . .  90
+         3.8.1.10. Resources . . . . . . . . . . . . . . . . . . . .  92
+         3.8.1.11. Status  . . . . . . . . . . . . . . . . . . . . .  93
+         3.8.1.12. Summary . . . . . . . . . . . . . . . . . . . . .  94
+       3.8.2.  Date and Time Component Properties  . . . . . . . . .  95
+         3.8.2.1.  Date-Time Completed . . . . . . . . . . . . . . .  95
+         3.8.2.2.  Date-Time End . . . . . . . . . . . . . . . . . .  96
+         3.8.2.3.  Date-Time Due . . . . . . . . . . . . . . . . . .  97
+         3.8.2.4.  Date-Time Start . . . . . . . . . . . . . . . . .  99
+         3.8.2.5.  Duration  . . . . . . . . . . . . . . . . . . . . 100
+         3.8.2.6.  Free/Busy Time  . . . . . . . . . . . . . . . . . 101
+         3.8.2.7.  Time Transparency . . . . . . . . . . . . . . . . 102
+       3.8.3.  Time Zone Component Properties  . . . . . . . . . . . 103
+         3.8.3.1.  Time Zone Identifier  . . . . . . . . . . . . . . 103
+         3.8.3.2.  Time Zone Name  . . . . . . . . . . . . . . . . . 105
+         3.8.3.3.  Time Zone Offset From . . . . . . . . . . . . . . 106
+         3.8.3.4.  Time Zone Offset To . . . . . . . . . . . . . . . 106
+         3.8.3.5.  Time Zone URL . . . . . . . . . . . . . . . . . . 107
+       3.8.4.  Relationship Component Properties . . . . . . . . . . 108
+         3.8.4.1.  Attendee  . . . . . . . . . . . . . . . . . . . . 108
+         3.8.4.2.  Contact . . . . . . . . . . . . . . . . . . . . . 111
+
+         3.8.4.3.  Organizer . . . . . . . . . . . . . . . . . . . . 113
+         3.8.4.4.  Recurrence ID . . . . . . . . . . . . . . . . . . 114
+         3.8.4.5.  Related To  . . . . . . . . . . . . . . . . . . . 117
+         3.8.4.6.  Uniform Resource Locator  . . . . . . . . . . . . 118
+         3.8.4.7.  Unique Identifier . . . . . . . . . . . . . . . . 119
+       3.8.5.  Recurrence Component Properties . . . . . . . . . . . 120
+         3.8.5.1.  Exception Date-Times  . . . . . . . . . . . . . . 120
+         3.8.5.2.  Recurrence Date-Times . . . . . . . . . . . . . . 122
+         3.8.5.3.  Recurrence Rule . . . . . . . . . . . . . . . . . 124
+       3.8.6.  Alarm Component Properties  . . . . . . . . . . . . . 134
+         3.8.6.1.  Action  . . . . . . . . . . . . . . . . . . . . . 134
+         3.8.6.2.  Repeat Count  . . . . . . . . . . . . . . . . . . 135
+         3.8.6.3.  Trigger . . . . . . . . . . . . . . . . . . . . . 135
+       3.8.7.  Change Management Component Properties  . . . . . . . 138
+         3.8.7.1.  Date-Time Created . . . . . . . . . . . . . . . . 138
+         3.8.7.2.  Date-Time Stamp . . . . . . . . . . . . . . . . . 139
+         3.8.7.3.  Last Modified . . . . . . . . . . . . . . . . . . 140
+         3.8.7.4.  Sequence Number . . . . . . . . . . . . . . . . . 141
+       3.8.8.  Miscellaneous Component Properties  . . . . . . . . . 142
+         3.8.8.1.  IANA Properties . . . . . . . . . . . . . . . . . 142
+         3.8.8.2.  Non-Standard Properties . . . . . . . . . . . . . 142
+         3.8.8.3.  Request Status  . . . . . . . . . . . . . . . . . 144
+   4.  iCalendar Object Examples . . . . . . . . . . . . . . . . . . 146
+   5.  Recommended Practices . . . . . . . . . . . . . . . . . . . . 150
+   6.  Internationalization Considerations . . . . . . . . . . . . . 151
+   7.  Security Considerations . . . . . . . . . . . . . . . . . . . 151
+   8.  IANA Considerations . . . . . . . . . . . . . . . . . . . . . 151
+     8.1.  iCalendar Media Type Registration . . . . . . . . . . . . 151
+     8.2.  New iCalendar Elements Registration . . . . . . . . . . . 155
+       8.2.1.  iCalendar Elements Registration Procedure . . . . . . 155
+       8.2.2.  Registration Template for Components  . . . . . . . . 155
+       8.2.3.  Registration Template for Properties  . . . . . . . . 156
+       8.2.4.  Registration Template for Parameters  . . . . . . . . 156
+       8.2.5.  Registration Template for Value Data Types  . . . . . 157
+       8.2.6.  Registration Template for Values  . . . . . . . . . . 157
+     8.3.  Initial iCalendar Elements Registries . . . . . . . . . . 158
+       8.3.1.  Components Registry . . . . . . . . . . . . . . . . . 158
+       8.3.2.  Properties Registry . . . . . . . . . . . . . . . . . 158
+       8.3.3.  Parameters Registry . . . . . . . . . . . . . . . . . 161
+       8.3.4.  Value Data Types Registry . . . . . . . . . . . . . . 162
+       8.3.5.  Calendar User Types Registry  . . . . . . . . . . . . 162
+       8.3.6.  Free/Busy Time Types Registry . . . . . . . . . . . . 163
+       8.3.7.  Participation Statuses Registry . . . . . . . . . . . 163
+       8.3.8.  Relationship Types Registry . . . . . . . . . . . . . 164
+       8.3.9.  Participation Roles Registry  . . . . . . . . . . . . 164
+       8.3.10. Actions Registry  . . . . . . . . . . . . . . . . . . 165
+       8.3.11. Classifications Registry  . . . . . . . . . . . . . . 165
+       8.3.12. Methods Registry  . . . . . . . . . . . . . . . . . . 165
+   9.  Acknowledgments . . . . . . . . . . . . . . . . . . . . . . . 165
+   10. References  . . . . . . . . . . . . . . . . . . . . . . . . . 166
+     10.1. Normative References  . . . . . . . . . . . . . . . . . . 166
+     10.2. Informative References  . . . . . . . . . . . . . . . . . 167
+   Appendix A.  Differences from RFC 2445  . . . . . . . . . . . . . 169
+     A.1.  New Restrictions  . . . . . . . . . . . . . . . . . . . . 169
+     A.2.  Restrictions Removed  . . . . . . . . . . . . . . . . . . 169
+     A.3.  Deprecated Features . . . . . . . . . . . . . . . . . . . 169
+
+  Corrected text:
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   5
+   2.  Basic Grammar and Conventions . . . . . . . . . . . . . . . .   6
+     2.1.  Formatting Conventions  . . . . . . . . . . . . . . . . .   6
+     2.2.  Related Memos . . . . . . . . . . . . . . . . . . . . . .   8
+   3.  iCalendar Object Specification  . . . . . . . . . . . . . . .   8
+     3.1.  Content Lines . . . . . . . . . . . . . . . . . . . . . .   9
+       3.1.1.  List and Field Separators . . . . . . . . . . . . . .  11
+       3.1.2.  Multiple Values . . . . . . . . . . . . . . . . . . .  12
+       3.1.3.  Binary Content  . . . . . . . . . . . . . . . . . . .  12
+       3.1.4.  Character Set . . . . . . . . . . . . . . . . . . . .  13
+     3.2.  Property Parameters . . . . . . . . . . . . . . . . . . .  13
+       3.2.1.  Alternate Text Representation . . . . . . . . . . . .  14
+       3.2.2.  Common Name . . . . . . . . . . . . . . . . . . . . .  15
+       3.2.3.  Calendar User Type  . . . . . . . . . . . . . . . . .  16
+       3.2.4.  Delegators  . . . . . . . . . . . . . . . . . . . . .  17
+       3.2.5.  Delegatees  . . . . . . . . . . . . . . . . . . . . .  17
+       3.2.6.  Directory Entry Reference . . . . . . . . . . . . . .  18
+       3.2.7.  Inline Encoding . . . . . . . . . . . . . . . . . . .  18
+       3.2.8.  Format Type . . . . . . . . . . . . . . . . . . . . .  19
+       3.2.9.  Free/Busy Time Type . . . . . . . . . . . . . . . . .  20
+       3.2.10. Language  . . . . . . . . . . . . . . . . . . . . . .  21
+       3.2.11. Group or List Membership  . . . . . . . . . . . . . .  21
+       3.2.12. Participation Status  . . . . . . . . . . . . . . . .  22
+       3.2.13. Recurrence Identifier Range . . . . . . . . . . . . .  23
+       3.2.14. Alarm Trigger Relationship  . . . . . . . . . . . . .  24
+       3.2.15. Relationship Type . . . . . . . . . . . . . . . . . .  25
+       3.2.16. Participation Role  . . . . . . . . . . . . . . . . .  25
+       3.2.17. RSVP Expectation  . . . . . . . . . . . . . . . . . .  26
+       3.2.18. Sent By . . . . . . . . . . . . . . . . . . . . . . .  27
+       3.2.19. Time Zone Identifier  . . . . . . . . . . . . . . . .  27
+       3.2.20. Value Data Types  . . . . . . . . . . . . . . . . . .  29
+     3.3.  Property Value Data Types . . . . . . . . . . . . . . . .  30
+       3.3.1.  Binary  . . . . . . . . . . . . . . . . . . . . . . .  30
+       3.3.2.  Boolean . . . . . . . . . . . . . . . . . . . . . . .  31
+       3.3.3.  Calendar User Address . . . . . . . . . . . . . . . .  31
+       3.3.4.  Date  . . . . . . . . . . . . . . . . . . . . . . . .  32
+       3.3.5.  Date-Time . . . . . . . . . . . . . . . . . . . . . .  32
+       3.3.6.  Duration  . . . . . . . . . . . . . . . . . . . . . .  35
+       3.3.7.  Float . . . . . . . . . . . . . . . . . . . . . . . .  36
+       3.3.8.  Integer . . . . . . . . . . . . . . . . . . . . . . .  37
+       3.3.9.  Period of Time  . . . . . . . . . . . . . . . . . . .  37
+       3.3.10. Recurrence Rule . . . . . . . . . . . . . . . . . . .  38
+       3.3.11. Text  . . . . . . . . . . . . . . . . . . . . . . . .  45
+       3.3.12. Time  . . . . . . . . . . . . . . . . . . . . . . . .  47
+       3.3.13. URI . . . . . . . . . . . . . . . . . . . . . . . . .  49
+       3.3.14. UTC Offset  . . . . . . . . . . . . . . . . . . . . .  49
+     3.4.  iCalendar Object  . . . . . . . . . . . . . . . . . . . .  50
+     3.5.  Property  . . . . . . . . . . . . . . . . . . . . . . . .  51
+     3.6.  Calendar Components . . . . . . . . . . . . . . . . . . .  51
+       3.6.1.  Event Component . . . . . . . . . . . . . . . . . . .  52
+       3.6.2.  To-Do Component . . . . . . . . . . . . . . . . . . .  55
+       3.6.3.  Journal Component . . . . . . . . . . . . . . . . . .  57
+       3.6.4.  Free/Busy Component . . . . . . . . . . . . . . . . .  59
+       3.6.5.  Time Zone Component . . . . . . . . . . . . . . . . .  62
+       3.6.6.  Alarm Component . . . . . . . . . . . . . . . . . . .  71
+     3.7.  Calendar Properties . . . . . . . . . . . . . . . . . . .  76
+       3.7.1.  Calendar Scale  . . . . . . . . . . . . . . . . . . .  76
+       3.7.2.  Method  . . . . . . . . . . . . . . . . . . . . . . .  77
+       3.7.3.  Product Identifier  . . . . . . . . . . . . . . . . .  78
+       3.7.4.  Version . . . . . . . . . . . . . . . . . . . . . . .  79
+     3.8.  Component Properties  . . . . . . . . . . . . . . . . . .  80
+       3.8.1.  Descriptive Component Properties  . . . . . . . . . .  80
+         3.8.1.1.  Attachment  . . . . . . . . . . . . . . . . . . .  80
+         3.8.1.2.  Categories  . . . . . . . . . . . . . . . . . . .  81
+         3.8.1.3.  Classification  . . . . . . . . . . . . . . . . .  82
+         3.8.1.4.  Comment . . . . . . . . . . . . . . . . . . . . .  83
+         3.8.1.5.  Description . . . . . . . . . . . . . . . . . . .  84
+         3.8.1.6.  Geographic Position . . . . . . . . . . . . . . .  85
+         3.8.1.7.  Location  . . . . . . . . . . . . . . . . . . . .  87
+         3.8.1.8.  Percent Complete  . . . . . . . . . . . . . . . .  88
+         3.8.1.9.  Priority  . . . . . . . . . . . . . . . . . . . .  89
+         3.8.1.10. Resources . . . . . . . . . . . . . . . . . . . .  91
+         3.8.1.11. Status  . . . . . . . . . . . . . . . . . . . . .  92
+         3.8.1.12. Summary . . . . . . . . . . . . . . . . . . . . .  93
+       3.8.2.  Date and Time Component Properties  . . . . . . . . .  94
+         3.8.2.1.  Date-Time Completed . . . . . . . . . . . . . . .  94
+         3.8.2.2.  Date-Time End . . . . . . . . . . . . . . . . . .  95
+         3.8.2.3.  Date-Time Due . . . . . . . . . . . . . . . . . .  96
+         3.8.2.4.  Date-Time Start . . . . . . . . . . . . . . . . .  97
+         3.8.2.5.  Duration  . . . . . . . . . . . . . . . . . . . .  99
+         3.8.2.6.  Free/Busy Time  . . . . . . . . . . . . . . . . . 100
+         3.8.2.7.  Time Transparency . . . . . . . . . . . . . . . . 101
+       3.8.3.  Time Zone Component Properties  . . . . . . . . . . . 102
+         3.8.3.1.  Time Zone Identifier  . . . . . . . . . . . . . . 102
+         3.8.3.2.  Time Zone Name  . . . . . . . . . . . . . . . . . 103
+         3.8.3.3.  Time Zone Offset From . . . . . . . . . . . . . . 104
+         3.8.3.4.  Time Zone Offset To . . . . . . . . . . . . . . . 105
+         3.8.3.5.  Time Zone URL . . . . . . . . . . . . . . . . . . 106
+       3.8.4.  Relationship Component Properties . . . . . . . . . . 106
+         3.8.4.1.  Attendee  . . . . . . . . . . . . . . . . . . . . 107
+         3.8.4.2.  Contact . . . . . . . . . . . . . . . . . . . . . 109
+         3.8.4.3.  Organizer . . . . . . . . . . . . . . . . . . . . 111
+         3.8.4.4.  Recurrence ID . . . . . . . . . . . . . . . . . . 112
+         3.8.4.5.  Related To  . . . . . . . . . . . . . . . . . . . 115
+         3.8.4.6.  Uniform Resource Locator  . . . . . . . . . . . . 116
+         3.8.4.7.  Unique Identifier . . . . . . . . . . . . . . . . 117
+       3.8.5.  Recurrence Component Properties . . . . . . . . . . . 118
+         3.8.5.1.  Exception Date-Times  . . . . . . . . . . . . . . 118
+         3.8.5.2.  Recurrence Date-Times . . . . . . . . . . . . . . 120
+         3.8.5.3.  Recurrence Rule . . . . . . . . . . . . . . . . . 122
+       3.8.6.  Alarm Component Properties  . . . . . . . . . . . . . 132
+         3.8.6.1.  Action  . . . . . . . . . . . . . . . . . . . . . 132
+         3.8.6.2.  Repeat Count  . . . . . . . . . . . . . . . . . . 133
+         3.8.6.3.  Trigger . . . . . . . . . . . . . . . . . . . . . 133
+       3.8.7.  Change Management Component Properties  . . . . . . . 136
+         3.8.7.1.  Date-Time Created . . . . . . . . . . . . . . . . 136
+         3.8.7.2.  Date-Time Stamp . . . . . . . . . . . . . . . . . 137
+         3.8.7.3.  Last Modified . . . . . . . . . . . . . . . . . . 138
+         3.8.7.4.  Sequence Number . . . . . . . . . . . . . . . . . 138
+       3.8.8.  Miscellaneous Component Properties  . . . . . . . . . 139
+         3.8.8.1.  IANA Properties . . . . . . . . . . . . . . . . . 140
+         3.8.8.2.  Non-Standard Properties . . . . . . . . . . . . . 140
+         3.8.8.3.  Request Status  . . . . . . . . . . . . . . . . . 141
+   4.  iCalendar Object Examples . . . . . . . . . . . . . . . . . . 144
+   5.  Recommended Practices . . . . . . . . . . . . . . . . . . . . 147
+   6.  Internationalization Considerations . . . . . . . . . . . . . 148
+   7.  Security Considerations . . . . . . . . . . . . . . . . . . . 148
+   8.  IANA Considerations . . . . . . . . . . . . . . . . . . . . . 149
+     8.1.  iCalendar Media Type Registration . . . . . . . . . . . . 149
+     8.2.  New iCalendar Elements Registration . . . . . . . . . . . 152
+       8.2.1.  iCalendar Elements Registration Procedure . . . . . . 152
+       8.2.2.  Registration Template for Components  . . . . . . . . 152
+       8.2.3.  Registration Template for Properties  . . . . . . . . 153
+       8.2.4.  Registration Template for Parameters  . . . . . . . . 153
+       8.2.5.  Registration Template for Value Data Types  . . . . . 154
+       8.2.6.  Registration Template for Values  . . . . . . . . . . 154
+     8.3.  Initial iCalendar Elements Registries . . . . . . . . . . 155
+       8.3.1.  Components Registry . . . . . . . . . . . . . . . . . 155
+       8.3.2.  Properties Registry . . . . . . . . . . . . . . . . . 156
+       8.3.3.  Parameters Registry . . . . . . . . . . . . . . . . . 158
+       8.3.4.  Value Data Types Registry . . . . . . . . . . . . . . 159
+       8.3.5.  Calendar User Types Registry  . . . . . . . . . . . . 160
+       8.3.6.  Free/Busy Time Types Registry . . . . . . . . . . . . 160
+       8.3.7.  Participation Statuses Registry . . . . . . . . . . . 161
+       8.3.8.  Relationship Types Registry . . . . . . . . . . . . . 161
+       8.3.9.  Participation Roles Registry  . . . . . . . . . . . . 162
+       8.3.10. Actions Registry  . . . . . . . . . . . . . . . . . . 162
+       8.3.11. Classifications Registry  . . . . . . . . . . . . . . 162
+       8.3.12. Methods Registry  . . . . . . . . . . . . . . . . . . 163
+   9.  Acknowledgments . . . . . . . . . . . . . . . . . . . . . . . 163
+   10. References  . . . . . . . . . . . . . . . . . . . . . . . . . 164
+     10.1. Normative References  . . . . . . . . . . . . . . . . . . 164
+     10.2. Informative References  . . . . . . . . . . . . . . . . . 165
+   Appendix A.  Differences from RFC 2445  . . . . . . . . . . . . . 167
+     A.1.  New Restrictions  . . . . . . . . . . . . . . . . . . . . 167
+     A.2.  Restrictions Removed  . . . . . . . . . . . . . . . . . . 167
+     A.3.  Deprecated Features . . . . . . . . . . . . . . . . . . . 167
+
+  Notes:
+Most of the Table Of Contents gives wrong page numbers.
+
+===== Verifier notes =====
+Indeed: the character table in Section 2.1, which appears at the top of page 8 in the RFC, appears to have been added during final editing, and has thrown off the page numbering for all sections beginning with 2.2.
+
+--- Errata ID 5872  [Rejected] [Technical]
+    Section: 3.8.5.3    Reported: 2019-10-10  by Lars Henriksen
+
+  Original text:
+Weekly on Tuesday and Thursday for five weeks:
+
+       DTSTART;TZID=America/New_York:19970902T090000
+       RRULE:FREQ=WEEKLY;UNTIL=19971007T000000Z;WKST=SU;BYDAY=TU,TH
+
+  Corrected text:
+Weekly on Tuesday and Thursday for five weeks:
+
+       DTSTART;TZID=America/New_York:19970902T090000
+       RRULE:FREQ=WEEKLY;UNTIL=19971002T000000Z;WKST=SU;BYDAY=TU,TH
+
+  Notes:
+The UNTIL rule is inclusive, and October 7, a Tuesday, should not be included.
+ --VERIFIER NOTES-- 
+Neil Jenkins wrote: This erratum is invalid. The original example, while slightly weird, is correct as is. The event's DTSTART time is 09:00 New York TIme, and the UNTIL time is 00:00 UTC, which is before this. Therefore you would not get a recurrence on the 7 Oct with this rule and so it would produce 10 occurrences, as specified. The "corrected text" is in fact invalid, as this would remove the 2nd Oct occurrence.
+
+--- Errata ID 5920  [Rejected] [Technical]
+    Section: 3.8.5.3    Reported: 2019-11-26  by Lars Henriksen
+
+  Original text:
+Every Friday the 13th, forever:
+
+       DTSTART;TZID=America/New_York:19970902T090000
+       EXDATE;TZID=America/New_York:19970902T090000
+       RRULE:FREQ=MONTHLY;BYDAY=FR;BYMONTHDAY=13
+
+       ==> (1998 9:00 AM EST) February 13;March 13;November 13
+           (1999 9:00 AM EDT) August 13
+           (2000 9:00 AM EDT) October 13
+           ...
+
+  Corrected text:
+Every Friday the 13th, forever:
+
+       DTSTART;TZID=America/New_York:19980213T090000
+       RRULE:FREQ=MONTHLY;BYDAY=FR;BYMONTHDAY=13
+
+       ==> (1998 9:00 AM EST) February 13;March 13;November 13
+           (1999 9:00 AM EDT) August 13
+           (2000 9:00 AM EDT) October 13
+           ...
+
+  Notes:
+The "DTSTART" property is not synchronized with the recurrence rule.
+
+Although it may be removed from the recurrence set by an "EXDATE" property, the description at the start of section 3.8.5.3 leaves no doubt that the "DTSTART" property should still be synchronized with the recurrence rule.
+ --VERIFIER NOTES-- 
+Rejected since it changes the intent of the example (showing exclusion the first instance).  The example should be something like the following (possibly to be reported in a new errata):
+
+        DTSTART;TZID=America/New_York:19970613T090000
+        EXDATE;TZID=America/New_York:19970613T090000
+
+See https://mailarchive.ietf.org/arch/msg/calsify/x82GopunVcEh8y5UGSIsEIC3s6M/
+
+--- Errata ID 6109  [Verified] [Technical]
+    Section: 3.6.1    Reported: 2020-04-19  by Lars Henriksen
+
+  Original text:
+The anniversary type of "VEVENT" can span more than one date (i.e., "DTEND"
+property value is set to a calendar date after the "DTSTART" property value).
+
+  Corrected text:
+The anniversary type of "VEVENT" can span more than one date (i.e., "DTEND"
+property value is set to a calendar date at least two days after the "DTSTART"
+property value).
+
+  Notes:
+"DTEND" comes, by definition (3.8.2.2), always after "DTSTART". The span (duration) is the difference between the two.
+
+--- Errata ID 6212  [Rejected] [Technical]
+    Section: 3.8.5.3    Reported: 2020-06-23  by Lars Henriksen
+
+  Original text:
+      Daily until December 24, 1997:
+
+       DTSTART;TZID=America/New_York:19970902T090000
+       RRULE:FREQ=DAILY;UNTIL=19971224T000000Z
+
+       ==> (1997 9:00 AM EDT) September 2-30;October 1-25
+           (1997 9:00 AM EST) October 26-31;November 1-30;December 1-23
+
+  Corrected text:
+      Daily until December 24, 1997:
+
+       DTSTART;TZID=America/New_York:19970902T090000
+       RRULE:FREQ=DAILY;UNTIL=19971224T140000Z
+                                       ^^
+       ==> (1997 9:00 AM EDT) September 2-30;October 1-25
+           (1997 9:00 AM EST) October 26-31;November 1-30;December 1-24
+                                                                     ^^
+
+  Notes:
+The UNTIL rule part has value type DATE-TIME (same as DTSTART), but the introductory text "Daily until December 24, 1997" mentions a DATE only. Assuming that "until", like UNTIL, is inclusive, I would expect
+
+    (1997 9:00 AM EST) December 24
+
+to be the last instance, i.e. the unstated time is 9:00 AM. Translating to UTC you get
+
+    19971224T140000Z
+
+The same error occurs in all examples of section 3.8.5.3 with "December 24, 1997", four in all: pages 123 (above), 125 (twice) and 126. The resulting occurrences are only affected for pages 123 and 125 (second).
+ --VERIFIER NOTES-- 
+The example is correct as-is.  UNTIL does not have to match the recurrence pattern.
+
+See https://mailarchive.ietf.org/arch/msg/calsify/x82GopunVcEh8y5UGSIsEIC3s6M/
+
+--- Errata ID 6316  [Reported] [Technical]
+    Section: 3.8.5.1    Reported: 2020-10-22  by Ken Murchison
+
+  Original text:
+    Value Type:  The default value type for this property is DATE-TIME.
+       The value type can be set to DATE.
+
+  Corrected text:
+    Value Type:  The default value type for this property is DATE-TIME.
+       The value type can be set to DATE.  This property MUST have the same
+       value type as the "DTSTART" property contained within the
+       recurring component.  Furthermore, this property MUST be specified
+       as a date with local time if and only if the "DTSTART" property
+       contained within the recurring component is specified as a date
+       with local time.
+
+  Notes:
+EXDATE excludes a specific instance of a recurring event and therefore should have the same value type as DTSTART.  This is analogous to RECURRENCE-ID which overrides a specific instance and has the same value type as DTSTART.
+
+I will note however that there is iCalendar data in the wild with DTSTART;VALUE=DATE-TIME and EXDATE;VALUE=DATE.  If this errata is rejected as incorrect, then a new errata should be opened with additional text describing how EXDATE;VALUE=DATE is supposed to be handled when DTSTART;VALUE=DATE-TIME.  For instance, does EXDATE;VALUE=DATE exclude ALL instances of a FREQ=HOURLY recurrence on the given day?
+
+--- Errata ID 7332  [Verified] [Editorial]
+    Section: 3.3.9    Reported: 2023-02-04  by Tobias Subklewe
+
+  Original text:
+The period start at 18:00:00 on January 1, 1997 and lasting 5
+hours and 30 minutes would be:
+
+19970101T180000Z/PT5H30M
+
+  Corrected text:
+The period start at 18:00:00 on January 1, 1997 and lasting 5
+hours and 30 minutes would be:
+
+19970101T180000/PT5H30M
+
+  Notes:
+I do not know if this is an editorial or technical issue.
+
+If I understand the datetime value (Section 3.3.5) correct the last character should only be "Z" if the value is in UTC.
+
+In the first example in section 3.3.9 UTC is explicitely mentioned but not in the second example.
+
+--- Errata ID 7691  [Verified] [Technical]
+    Section: 3.8.4.2    Reported: 2023-10-30  by Tom Sydney Kerckhove
+
+  Original text:
+The following is an example of this property with an alternate
+representation of an LDAP URI to a directory entry containing the
+contact information:
+
+CONTACT;ALTREP="ldap://example.com:6666/o=ABC%20Industries\,
+ c=US???(cn=Jim%20Dolittle)":Jim Dolittle\, ABC Industries\,
+ +1-919-555-1234
+
+  Corrected text:
+The following is an example of this property with an alternate
+representation of an LDAP URI to a directory entry containing the
+contact information:
+
+CONTACT;ALTREP="ldap://example.com:6666/o=ABC%20Industries,
+ c=US???(cn=Jim%20Dolittle)":Jim Dolittle\, ABC Industries\,
+ +1-919-555-1234
+
+  Notes:
+Note that the original text has an escaped comma in the ALTREP parameter value at the end of the unfolded line.
+
+The characters '\' and ',' are allowed in quoted parameter values.
+This means that the URL must be parsed as
+"ldap://example.com:6666/o=ABC%20Industries\,c=US???(cn=Jim%20Dolittle)"
+but this is not a valid URI because of the extra backslash.
+
+Because commas do not need to be escaped in quoted parameter values, I assume that this is an error and the comma should not have been quoted.
+
+--- Errata ID 7945  [Verified] [Technical]
+    Section: 3.8.8.3    Reported: 2024-05-19  by Maximilian Bauer
+
+  Original text:
+rstatus    = "REQUEST-STATUS" rstatparam ":"
+             statcode ";" statdesc [";" extdata]
+
+  Corrected text:
+rstatus    = "REQUEST-STATUS" rstatparam ":"
+             statcode ";" statdesc [";" extdata] CRLF
+
+  Notes:
+All other properties are specified to end with a CRLF. There seems to be no reason for this property to be an exception.
+
+--- Errata ID 8398  [Reported] [Technical]
+    Section: 3.6.5    Reported: 2025-04-29  by Nicco Kunzmann
+
+  Original text:
+       tzprop     = *(
+                    ;
+                    ; The following are REQUIRED,
+                    ; but MUST NOT occur more than once.
+                    ;
+                    dtstart / tzoffsetto / tzoffsetfrom /
+                    ;
+                    ; The following is OPTIONAL,
+                    ; but SHOULD NOT occur more than once.
+                    ;
+                    rrule /
+                    ;
+                    ; The following are OPTIONAL,
+                    ; and MAY occur more than once.
+                    ;
+                    comment / rdate / tzname / x-prop / iana-prop
+                    ;
+                    )
+
+  Corrected text:
+       tzprop     = *(
+                    ;
+                    ; The following are REQUIRED,
+                    ; but MUST NOT occur more than once.
+                    ;
+                    dtstart / tzoffsetto / tzoffsetfrom /
+                    ;
+                    ; The following is OPTIONAL,
+                    ; but SHOULD NOT occur more than once.
+                    ;
+                    rrule /
+                    ;
+                    ; The following are OPTIONAL,
+                    ; and MAY occur more than once.
+                    ;
+                    comment / exdate / rdate / tzname / x-prop / iana-prop
+                    ;
+                    )
+
+  Notes:
+This proposal adds exdate to STANDARD and DAYLIGHT
+
+tzprop does not include "exdate"
+However, the exdate documentation states:
+
+Conformance:  This property can be specified in recurring "VEVENT",
+      "VTODO", and "VJOURNAL" calendar components as well as in the
+      "STANDARD" and "DAYLIGHT" sub-components of the "VTIMEZONE"
+      calendar component.

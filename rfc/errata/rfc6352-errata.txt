@@ -1,0 +1,31 @@
+Errata for RFC 6352
+============================================================
+2 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 4610  [Reported] [Editorial]
+    Section: 8.7    Reported: 2016-02-02  by Sylvain Berfini
+
+  Original text:
+The request MUST include a Depth: 0 header; however, the actual
+      scope of the REPORT is determined as described above.
+
+  Corrected text:
+The request MUST include a Depth: 1 header; however, the actual
+      scope of the REPORT is determined as described above.
+
+  Notes:
+All examples of a addressbook-multiget query use Depth: 1 header, but the 8.7 section says it must be Depth: 0. I believe the mistake is in the documentation.
+
+--- Errata ID 4784  [Verified] [Technical]
+    Section: 10.4    Reported: 2016-08-20  by Ricki Hirner
+
+  Original text:
+attributes can be used on each variant of the
+CALDAV:address-data XML element.
+
+  Corrected text:
+attributes can be used on each variant of the
+CARDDAV:address-data XML element.
+
+  Notes:
+The address-data element is located in the CARDDAV namespace.

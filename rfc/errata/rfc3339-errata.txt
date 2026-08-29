@@ -1,0 +1,198 @@
+Errata for RFC 3339
+============================================================
+7 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 293  [Verified] [Editorial]
+    Section: 5.1    Reported: 2005-05-26  by Tony Finch
+
+  Original text:
+   The presence of optional punctuation would violate this characteristic.
+
+  Corrected text:
+   If the format allows optional punctuation or white space then this 
+   characteristic can be violated.
+
+  Notes:
+In Appendix A, it says:
+ Time:
+
+   time-hour         = 2DIGIT ; 00-24
+   time-minute       = 2DIGIT ; 00-59
+   time-second       = 2DIGIT ; 00-58, 00-59, 00-60 based on
+                              ; leap-second rules
+   time-fraction     = ("," / ".") 1*DIGIT
+   time-numoffset    = ("+" / "-") time-hour [[":"] time-minute]
+   time-zone         = "Z" / time-numoffset
+
+   timeopt-hour      = "-" / (time-hour [":"])
+   timeopt-minute    = "-" / (time-minute [":"])
+
+   timespec-hour     = time-hour [[":"] time-minute [[":"] time-second]]
+   timespec-minute   = timeopt-hour time-minute [[":"] time-second]
+   timespec-second   = "-" timeopt-minute time-second
+   timespec-base     = timespec-hour / timespec-minute / timespec-second
+
+   time              = timespec-base [time-fraction] [time-zone]
+
+   iso-date-time     = date "T" time
+It should say:
+ Time:
+
+   time-hour         = 2DIGIT ; 00-23
+   time-minute       = 2DIGIT ; 00-59
+   time-second       = 2DIGIT ; 00-58, 00-59, 00-60 based on
+                              ; leap-second rules
+   time-fraction     = ("," / ".") 1*DIGIT
+   time-numoffset    = ("+" / "-") time-hour [[":"] time-minute]
+   time-zone         = "Z" / time-numoffset
+
+   timeopt-hour      = "-" / (time-hour [":"])
+   timeopt-minute    = "-" / (time-minute [":"])
+
+   timespec-hour     = time-hour [[":"] time-minute [[":"] time-second]]
+   timespec-minute   = timeopt-hour time-minute [[":"] time-second]
+   timespec-second   = "-" timeopt-minute time-second
+   timespec-base     = timespec-hour / timespec-minute / timespec-second
+                       / timespec-midnight
+   timespec-midnight = "24" [[":"] "00" [[":"] "00"]]
+
+   time              = timespec-base [time-fraction] [time-zone]
+
+   iso-date-time     = date "T" time
+
+In the third paragraph of Appendix A, it states "ISO 8601 is not clear on 
+whether an hour of 24 is permissible only if minutes and seconds are 0. 
+This assumes that an hour of 24 is permissible in any context."
+
+This is clarified in the 2000 edition which says:
+    5.3 Time of the day
+
+   The representation of the hour by [24] is only allowed to indicate
+   midnight, see 5.3.2.
+That would result in the following ABNF change:
+  time-hour         = 2DIGIT ; 00-23
+and additions:
+  timespec-midnight = "24" [[":"] "00" [[":"] "00"]]
+  timespec-base     =/ timespec-midnight
+
+--- Errata ID 1584  [Verified] [Editorial]
+    Section: Appendix A    Reported: 2008-11-03  by Roberto Javier Godoy
+
+  Original text:
+Note that due to ambiguities in ISO 8601, some interpretations had to
+be made.  First, ISO 8601 is not clear if mixtures of basic and
+extended format are permissible.  This grammar permits mixtures.
+
+  Corrected text:
+This grammar permits mixtures of basic and extended format.
+
+  Notes:
+ISO 8601:2000 section 5.4.2 reads: 
+  d) the expression shall either be completely in basic format, in which case the minimum number of separators necessary for the required expression is used, or completely in extended format, in which case additional separators shall be used in accordance with 5.2 and 5.3.
+
+(There is similar text in section 4.3.3 of ISO 8601:2004)
+
+--- Errata ID 3710  [Verified] [Editorial]
+    Section: 6    Reported: 2013-08-26  by Thomas B
+
+  Original text:
+[IERS] International Earth Rotation Service Bulletins,
+       <http://hpiers.obspm.fr/eop-pc/products/bulletins.html>.
+
+  Corrected text:
+[IERS] International Earth Rotation Service Bulletins,
+       <http://hpiers.obspm.fr/eop-pc/products/bulletins
+        /bulletins.html>.
+
+  Notes:
+Original link is missing a "bulletins/" before the terminal "bulletins.html".
+This leads to a 404
+
+--- Errata ID 4110  [Verified] [Technical]
+    Section: Appendix A    Reported: 2014-09-12  by Derek P. Moore
+
+  Original text:
+   ISO 8601 also requires (in section 5.3.1.3) that a decimal fraction
+   be proceeded by a "0" if less than unity.  Annex B.2 of ISO 8601
+   gives examples where the decimal fractions are not preceded by a "0".
+   This grammar assumes section 5.3.1.3 is correct and that Annex B.2 is
+   in error.
+
+  Corrected text:
+   ISO 8601/Cor1:1991 also requires (in section 5.3.1.3) that a decimal
+   fraction be proceeded by "00" if less than unity.
+
+  Notes:
+ISO 8601:1988/Cor 1:1991 says:
+
+"Subclause 5.3.1.3
+"Last line, delete “shall be preceded by a zero” and insert “shall be preceded by two zeros in accordance with 4.6” "
+
+The RFC3339 grammar never allowed just one zero ("0") preceding the fraction and has always been compliant with ISO 8601/Cor 1:1991.
+
+----- Note from the RFC authors -----
+There are interpretations of ISO 8601 under which section 5.3.1.3 and Annex B.2 are entirely consistent, and the implication that they are in conflict can cause confusion.
+
+----- Note from the Area Director -----
+There is a newer version of the ISO spec, ISO 8601:2004.  That version came after this RFC, so it cannot be a definitive reference with respect to this RFC, but readers should be aware of the newer version.
+
+--- Errata ID 5624  [Held for Document Update] [Editorial]
+    Section: 5.6    Reported: 2019-02-06  by Graham Klyne
+
+  Original text:
+The following profile of ISO 8601 [ISO8601] dates SHOULD be used in
+new protocols on the Internet.  This is specified using the syntax
+description notation defined in [ABNF].
+
+  Corrected text:
+The following profile of ISO 8601 [ISO8601] dates SHOULD be used in
+new protocols on the Internet.  This is specified using the syntax
+description notation defined in [ABNF].
+
+The syntax production 'full-time' is intended for use in protocols 
+that wish to convey precise timestamps (e.g. for logging or ordering 
+of events).  Other productions (e.g. 'full-date', 'full-time', 
+'partial-time' may be referenced by applications that have different 
+requirements.
+
+  Notes:
+There has been some misunderstanding of the intended scope of RFC3339; e.g. see [1]
+
+The added paragraph clarifies the intent that RFC3339 definitions can be used by applications that don't need to convey a full date+time value.
+
+[1] https://stackoverflow.com/a/522281/324122
+
+--- Errata ID 5783  [Held for Document Update] [Technical]
+    Section: 5.6    Reported: 2019-07-15  by Felipe Gasper
+
+  Original text:
+   date-time       = full-date "T" full-time
+
+...
+
+      NOTE: ISO 8601 defines date and time separated by "T".
+      Applications using this syntax may choose, for the sake of
+      readability, to specify a full-date and full-time separated by
+      (say) a space character.
+
+  Corrected text:
+    (none)
+
+  Notes:
+This specification seems ambiguous; the ABNF allows only “T”/“t” as the separator, but the “NOTE:” paragraph describes acceptability of other separators.
+
+It’s unclear what “this syntax” refers to: if “this” refers to ISO 8601, then it seems irrelevant, but if “this” means RFC 3339, then the paragraph conflicts with the ABNF.
+
+I’m not sure of the proper fix because I don’t know the intended meaning.
+
+--- Errata ID 6533  [Held for Document Update] [Editorial]
+    Section: The Table of Contents says:    Reported: 2021-04-13  by Juli Mallett
+
+  Original text:
+   Appendix D. Leap Seconds ..............................,... 15
+
+  Corrected text:
+   Appendix D. Leap Seconds .................................. 15
+
+  Notes:
+comma to period

@@ -1,0 +1,15 @@
+Errata for RFC 9074
+============================================================
+1 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 8039  [Reported] [Technical]
+    Section: 6.1    Reported: 2024-07-21  by Dominique Hazaël-Massieux
+
+  Original text:
+acknowledged = "ACKNOWLEDGED" *acknowledgedparam ":" datetime CRLF
+
+  Corrected text:
+acknowledged = "ACKNOWLEDGED" *acknowledgedparam ":" date-time CRLF
+
+  Notes:
+to match the "date-type" defined as value type above, and the name of the ABNF definition in RFC5545

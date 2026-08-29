@@ -1,0 +1,68 @@
+Errata for RFC 7265
+============================================================
+3 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 4862  [Reported] [Editorial]
+    Section: 3.6.1    Reported: 2016-11-10  by Sean Bartell
+
+  Original text:
+   Example:
+
+   ["attach", {}, "binary", "SGVsbG8gV29ybGQh"]
+
+  Corrected text:
+   Example:
+
+   ["attach", {"encoding": "BASE64"}, "binary", "SGVsbG8gV29ybGQh"]
+
+  Notes:
+The ENCODING=BASE64 parameter must be preserved for BINARY values; no part of the RFC allows removing it.
+
+--- Errata ID 6360  [Reported] [Technical]
+    Section: GLOBAL    Reported: 2020-12-20  by Julian Cowley
+
+  Original text:
+    (none)
+
+  Corrected text:
+    (none)
+
+  Notes:
+In RFC 5545, one of the allowable values for the VERSION property is a minimum version and a maximum version, separated by a semicolon (;).  The value type is TEXT.  When the jCal value is converted back to iCalendar, the text is subject to escape with a backslash.  This yields a result which is not valid for the VERSION property.
+
+Example:
+
+[ "version", {}, "text", "2.0;2.9" ]
+
+becomes
+
+VERSION:2.0\;2.9
+
+which is invalid because it contains the backslash.
+
+--- Errata ID 9035  [Reported] [Technical]
+    Section: Appendix A    Reported: 2026-07-22  by Hugo Hörnquist
+
+  Original text:
+param-value = string / param-multi
+param-multi = begin-array
+              [ string *(value-separator string) ]
+              end-array
+
+  Corrected text:
+param-value = string / param-multi
+param-multi = begin-array
+              string *(value-separator string)
+              end-array
+
+  Notes:
+The current syntax allows empty parameter arrays, however, iCalendar
+(RFC 5545) doesn't support empty arrays, instead treating it as a
+single empty string. This breaks the one-to-one mapping between
+iCalendar and jCal.
+
+Compare with the excerpt from RFC 5545
+
+     param         = param-name "=" param-value *("," param-value)
+     param-value   = paramtext / quoted-string
+     paramtext     = *SAFE-CHAR

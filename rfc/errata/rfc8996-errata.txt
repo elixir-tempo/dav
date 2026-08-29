@@ -1,0 +1,51 @@
+Errata for RFC 8996
+============================================================
+3 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 7103  [Verified] [Editorial]
+    Section: GLOBAL    Reported: 2022-08-24  by Martin Thomson
+
+  Original text:
+<a href="https://www.rfc-editor.org/rfc/rfc%E2%80%8B%204162"
+class="eref">​ 4162</a>
+
+  Corrected text:
+<a href="https://www.rfc-editor.org/rfc/rfc4162"
+class="eref">​4162</a>
+
+  Notes:
+(Note: the line wrapping here is mine; the errata tool assumes that this is text, so it won't accept long lines.)
+
+The text for this specification is OK, but the HTML rendering has some hard-to-notice errors in the "Updates" field in the metadata block that is being caused by errors in the XML source.
+
+The XML source includes a number of Unicode zero width space characters (U+200B) after commas in the rfc@updates attribute.  xml2rfc is unable to handle these characters correctly, treating them - and the space that follows - as part of the RFC number.  It generates the bad link as you see above.
+
+This can be addressed in xml2rfc, maybe, but this is probably not XML we want to permit.
+
+Paul Wouters (AD): Verified, as this RFC won't get any updates.
+
+--- Errata ID 7769  [Held for Document Update] [Editorial]
+    Section: 1.1    Reported: 2021-03-23  by Martin Thomson
+
+  Original text:
+ServerHello.Random
+
+  Corrected text:
+ServerHello.random
+
+  Notes:
+Very pedantic, but RFC 8446 uses all lowercase for "random" to match the grammar.
+
+Paul Wouters (AD): RFC 8446 itself actually also has this problem once in Section 4.1.3
+
+--- Errata ID 7796  [Verified] [Editorial]
+    Section: 10.2    Reported: 2024-02-03  by Gaëtan Leurent
+
+  Original text:
+[Bhargavan2016] Bhargavan, K. and G. Leuren,
+
+  Corrected text:
+[Bhargavan2016] Bhargavan, K. and G. Leurent,
+
+  Notes:
+The last name "Leurent" is misspelt is the references.

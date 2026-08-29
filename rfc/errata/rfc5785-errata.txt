@@ -1,0 +1,33 @@
+Errata for RFC 5785
+============================================================
+2 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 3027  [Held for Document Update] [Editorial]
+    Section: header    Reported: 2011-11-11  by Frank Ellermann
+
+  Original text:
+Updates: 2616, 2818
+
+  Corrected text:
+    (none)
+
+  Notes:
+The document has no RFC 2818 reference, let alone any update.  The RFC 2616 reference is informative, RFC 2616 was not updated by RFC 5785.
+
+--- Errata ID 4190  [Verified] [Editorial]
+    Section: 6.2    Reported: 2014-11-27  by Lauri Rooden
+
+  Original text:
+             <http://www.w3.org/TR/2002/ REC-P3P-20020416>.
+
+
+             <http:// www.w3.org/TR/2004/REC-webarch-20041215>.
+
+  Corrected text:
+             <http://www.w3.org/TR/2002/REC-P3P-20020416>.
+
+
+             <http://www.w3.org/TR/2004/REC-webarch-20041215>.
+
+  Notes:
+There are erroneous spaces in links

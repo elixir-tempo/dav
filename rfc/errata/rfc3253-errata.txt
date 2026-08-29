@@ -1,0 +1,16 @@
+Errata for RFC 3253
+============================================================
+1 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 317  [Verified] [Technical]
+    Section: -    Reported: 2003-10-11  by Julian Reschke
+
+  Original text:
+    (none)
+
+  Corrected text:
+    (none)
+
+  Notes:
+The WebDAV working group maintains an errata list for RFC3253 at:
+http://www.webdav.org/deltav/protocol/rfc3253-issues-list.htm

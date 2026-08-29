@@ -1,0 +1,91 @@
+Errata for RFC 5546
+============================================================
+4 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 2097  [Verified] [Technical]
+    Section: 3.4.6    Reported: 2010-03-29  by Bernard Desruisseaux
+
+  Original text:
+   +--------------------+----------+-----------------------------------+
+   | Component/Property | Presence | Comment                           |
+   +--------------------+----------+-----------------------------------+
+   |                    |          |                                   |
+   | ...                |          |                                   |
+   |                    |          |                                   |
+   |   ORGANIZER        | 0        |                                   |
+
+  Corrected text:
+   +--------------------+----------+-----------------------------------+
+   | Component/Property | Presence | Comment                           |
+   +--------------------+----------+-----------------------------------+
+   |                    |          |                                   |
+   | ...                |          |                                   |
+   |                    |          |                                   |
+   |   ORGANIZER        | 1        |                                   |
+
+  Notes:
+The "ORGANIZER" property should be REQUIRED in "VTODO" calendar components with the "REFRESH" method.
+
+--- Errata ID 2331  [Verified] [Technical]
+    Section: 3.4.    Reported: 2010-07-15  by Filip Navara
+
+  Original text:
+   | REPLY          | Reply to a VTODO request.  Attendees MAY set     |
+   |                | PARTSTAT to ACCEPTED, DECLINED, TENTATIVE,       |
+   |                | DELEGATED, PARTIAL, and COMPLETED.               |
+
+  Corrected text:
+   | REPLY          | Reply to a VTODO request.  Attendees MAY set     |
+   |                | PARTSTAT to ACCEPTED, DECLINED, TENTATIVE,       |
+   |                | DELEGATED, IN-PROCESS, and COMPLETED.            |
+
+  Notes:
+The PARTSTAT value for VTODO component that is in progress is IN-PROCESS, not PARTIAL, per RFC 5545.
+
+--- Errata ID 3037  [Rejected] [Editorial]
+    Section: 3.1.3    Reported: 2011-11-30  by Praveen Bhamidipati
+
+  Original text:
+   |   DURATION         | 0 or 1   | If present, REPEAT MUST be        |
+   |                    |          | present.                          |
+   |   REPEAT           | 0 or 1   | If present, DURATION MUST be      |
+   |                    |          | present.                          |
+
+  Corrected text:
+   |   DURATION         | 0 or 1   | If present, DURATION MUST be      |
+   |                    |          | present.                          |
+   |   REPEAT           | 0 or 1   | If present, REPEAT MUST be        |
+   |                    |          | present.                          |
+
+  Notes:
+Currently, the Component/Property doesn't match the term used in Comment. That needs to be corrected.
+ --VERIFIER NOTES-- 
+Per discussion on the ietf-calsify list, this report simply misunderstands the intent of the document and is clearly false.
+
+--- Errata ID 3932  [Verified] [Editorial]
+    Section: 3.1.2    Reported: 2014-03-25  by Alfie John
+
+  Original text:
+   |   DAYLIGHT         | 0+       | MUST be one or more of either     |
+   |                    |          | STANDARD or DAYLIGHT.             |
+   |     COMMENT        | 0+       |                                   |
+   |     DTSTART        | 1        | MUST be local time format.        |
+   |     RDATE          | 0+       |                                   |
+   |     RRULE          | 0 or 1   |                                   |
+   |     TZNAME         | 0+       |                                   |
+
+  Corrected text:
+   |   DAYLIGHT         | 0+       | MUST be one or more of either     |
+   |                    |          | STANDARD or DAYLIGHT.             |
+   |     COMMENT        | 0+       |                                   |
+   |     DTSTART        | 1        | MUST be local time format.        |
+   |     RDATE          | 0+       | If present, RRULE MUST NOT be     |
+   |                    |          | present                           |
+   |     RRULE          | 0 or 1   | If present, RDATE MUST NOT be     |
+   |                    |          | present                           |
+   |     TZNAME         | 0+       |                                   |
+
+  Notes:
+The corrected text appeared in RFC 2446, however I couldn't find the reasoning as to why it was omitted in RFC 5546.
+
+The correct comments also appear a few lines below, under "STANDARD".

@@ -1,0 +1,71 @@
+Errata for RFC 6868
+============================================================
+2 erratum/errata. Source: https://www.rfc-editor.org/errata.json
+
+--- Errata ID 4374  [Reported] [Technical]
+    Section: 3    Reported: 2015-05-21  by Worik Stanton
+
+  Original text:
+   When parsing iCalendar or vCard parameter values, the following
+   apply:
+
+   o  the character sequence ^n (U+005E, U+006E) is decoded into an
+      appropriate formatted line break according to the type of system
+      being used
+
+   o  the character sequence ^^ (U+005E, U+005E) is decoded into the ^
+      character (U+005E)
+
+   o  the character sequence ^' (U+005E, U+0027) is decoded into the "
+      character (U+0022)
+
+   o  if a ^ (U+005E) character is followed by any character other than
+      the ones above, parsers MUST leave both the ^ and the following
+      character in place
+
+  Corrected text:
+
+   When parsing iCalendar or vCard parameter values, the following
+   apply:
+
+   o  first all occurrences of the character sequence ^n (U+005E,
+      U+006E) is decoded into an appropriate formatted line break
+      according to the type of system being used
+
+   o  second all occurrences of the character sequence ^' (U+005E,
+      U+0027) is decoded into the " character (U+0022)
+
+   o  third all occurrences of the character sequence ^^ (U+005E,
+      U+005E) is decoded into the ^ character (U+005E)
+
+   o  if a ^ (U+005E) character is followed by any character other than
+      the ones above, parsers MUST leave both the ^ and the following
+      character in place
+
+  Notes:
+It is unclear how a string like: FOO=^^n should be decoded.
+
+Possibly FOO=^n  or FOO=^\n or FOO=\n
+
+Section 3 implies that ^n is converted first, then ^^, then ^'.  But it is not explicit.  Also this leads to a contradiction.  FOO=^^n will become FOO=\n, not what is expected.  
+
+An equally reasonable interpretation is to proceed from the left and convert as encountered.
+
+The first gives FOO=\n  the second FOO=^n. 
+
+In the absence of an explicit definition of the order of interpretation it is impossible to decide which to use.
+
+--- Errata ID 4383  [Verified] [Technical]
+    Section: 3.2    Reported: 2015-06-01  by Mark Wierbosch
+
+  Original text:
+   GEO;X-ADDRESS="Pittsburgh Pirates^n115 Federal St^nPitt
+    sburgh, PA 15212":geo:40.446816,-80.00566
+
+  Corrected text:
+   GEO;X-ADDRESS="Pittsburgh Pirates^n115 Federal St^nPitt
+    sburgh, PA 15212":geo:40.446816\,-80.00566
+
+  Notes:
+RFC 6350 Section 3.4 states that all property values must have COMMA characters escaped with a BACKSLASH character. The GEO property value in the example contains a comma. Therefore it must be escaped with a backslash.
+(The GEO example in RFC 6350 is incorrect see Errata 3846)
