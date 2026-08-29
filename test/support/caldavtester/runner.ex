@@ -25,10 +25,11 @@ defmodule Dav.CalDAVTester.Runner do
 
   alias Dav.Cal
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.Schedule
   alias Dav.CalDAVTester.Scenario
   alias Dav.CalDAVTester.ServerInfo
   alias Dav.CalDAVTester.Verifier
-  alias Dav.Test.WritableStore
+  alias Dav.Test.SchedulingStore
   alias Dav.Web.Plug, as: DavPlug
   alias Dav.Web.Resource
   alias Dav.Xml
@@ -37,11 +38,15 @@ defmodule Dav.CalDAVTester.Runner do
 
   @root "rfc/conformance/caldavtester"
 
+  # How many of the suite's users to provision. The scheduling
+  # scenarios name up to five between them.
+  @people 5
+
   # The methods this server dispatches. Anything else in a scenario is
   # reported as skipped rather than failed: not answering `POST` is a
   # scope decision, not a defect.
   @implemented ~w(OPTIONS GET HEAD PUT DELETE MKCOL MKCALENDAR PROPFIND PROPPATCH
-                  COPY MOVE REPORT)
+                  COPY MOVE REPORT POST)
 
   # Listing a collection's members, for the compound methods.
   @allprop ~s(<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>)
@@ -183,7 +188,13 @@ defmodule Dav.CalDAVTester.Runner do
   defp perform(:delay, _request, state), do: {:passed, state}
 
   defp perform(:delete_all, request, state) do
-    for uri <- uris(request, state), child <- members(uri, state) do
+    # A `<ruri>` that still holds an unbound variable is not a
+    # collection this can empty, and asking for its members crashes
+    # rather than returning nothing.
+    for uri <- uris(request, state),
+        String.starts_with?(uri, "/"),
+        not String.contains?(uri, "$"),
+        child <- members(uri, state) do
       send_plain("DELETE", child, state)
     end
 
@@ -253,7 +264,17 @@ defmodule Dav.CalDAVTester.Runner do
     end)
   end
 
-  defp members(uri, state) do
+  defp members(uri, state) when is_binary(uri) do
+    if String.starts_with?(uri, "/") and not String.contains?(uri, "$") do
+      listing(uri, state)
+    else
+      []
+    end
+  end
+
+  defp members(_unresolved, _state), do: []
+
+  defp listing(uri, state) do
     conn = send_plain("PROPFIND", uri, state, [{"depth", "1"}], @allprop)
     collection = String.trim_trailing(uri, "/")
 
@@ -462,14 +483,16 @@ defmodule Dav.CalDAVTester.Runner do
   """
   @spec provision(Scenario.t(), map()) :: pid()
   def provision(_scenario, substitutions) do
-    homes =
-      for index <- 1..2,
+    people =
+      for index <- 1..@people,
           home = substitutions["$calendarhome#{index}:"],
           is_binary(home),
-          do: segments(home)
+          do: {index, segments(home)}
+
+    homes = Enum.map(people, &elem(&1, 1))
 
     collections =
-      for home <- homes, leaf <- ["calendar", "inbox", "outbox", "tasks"], do: home ++ [leaf]
+      for home <- homes, leaf <- ["calendar", "tasks", "notification"], do: home ++ [leaf]
 
     resources =
       ([[] | ancestors(homes)] ++ homes)
@@ -480,7 +503,22 @@ defmodule Dav.CalDAVTester.Runner do
       for path <- collections,
           do: %Resource{path: path, collection?: true, types: [Cal.calendar()]}
 
-    WritableStore.start(resources ++ calendars)
+    # RFC 6638: the Inbox and Outbox are ordinary collections
+    # distinguished by their resource type, and scheduling needs them
+    # to exist before any of it can be exercised.
+    scheduling =
+      for home <- homes,
+          {leaf, type} <- [{"inbox", Schedule.inbox()}, {"outbox", Schedule.outbox()}],
+          do: %Resource{path: home ++ [leaf], collection?: true, types: [type]}
+
+    addresses =
+      for {index, home} <- people,
+          address <- [substitutions["$cuaddr#{index}:"], substitutions["$email#{index}:"]],
+          is_binary(address),
+          into: %{},
+          do: {address, home}
+
+    SchedulingStore.start(resources ++ calendars ++ scheduling, addresses)
   end
 
   defp ancestors(homes) do
@@ -493,9 +531,9 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp plug_options(context) do
     DavPlug.init(
-      store: WritableStore,
+      store: SchedulingStore,
       context: context,
-      methods: [{"MKCALENDAR", Cal.Mkcalendar}],
+      methods: [{"MKCALENDAR", Cal.Mkcalendar}, {"POST", Cal.Outbox}],
       reports: [
         {{Xml.caldav(), "calendar-query"}, Cal.Query},
         {{Xml.caldav(), "calendar-multiget"}, Cal.Multiget},

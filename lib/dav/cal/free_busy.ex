@@ -92,7 +92,7 @@ defmodule Dav.Cal.FreeBusy do
         |> Enum.flat_map(&busy(&1, range, options))
         |> coalesce()
 
-      {:ok, {:body, "text/calendar", vfreebusy(periods, range)}}
+      {:ok, {:body, "text/calendar", write(periods, range, [])}}
     end
   end
 
@@ -257,13 +257,86 @@ defmodule Dav.Cal.FreeBusy do
 
   defp earlier?(a, b), do: Compare.compare_endpoints(a, b) == :earlier
 
+  @doc """
+  The busy periods in a parsed calendar object.
+
+  Shared with `Dav.Cal.Outbox`, because a busy-time request over a
+  scheduling Outbox asks the same question as this report and must get
+  the same answer — one computation, not two that can drift.
+
+  ### Arguments
+
+  * `calendar` is a component from `Dav.Cal.ICalendar.parse/1`.
+
+  * `range` is the `{start, finish}` window.
+
+  ### Returns
+
+  * A list of `{fbtype, {from, to}}` pairs, uncoalesced.
+
+  ### Examples
+
+      iex> ics = "BEGIN:VCALENDAR\\r\\nBEGIN:VEVENT\\r\\nDTSTART:20260615T090000Z\\r\\nDTEND:20260615T100000Z\\r\\nEND:VEVENT\\r\\nEND:VCALENDAR\\r\\n"
+      iex> {:ok, calendar} = Dav.Cal.ICalendar.parse(ics)
+      iex> [{type, {_from, _to}}] = Dav.Cal.FreeBusy.periods_of(calendar, {"20260601T000000Z", "20260701T000000Z"})
+      iex> type
+      "BUSY"
+
+  """
+  @spec periods_of(ICalendar.component(), {String.t() | nil, String.t() | nil}) ::
+          [{String.t(), {Tempo.t(), Tempo.t()}}]
+  def periods_of(calendar, range) do
+    calendar.components
+    |> Enum.filter(&(&1.name in @considered))
+    |> Enum.flat_map(&periods(&1, range))
+  end
+
+  @doc """
+  Write a `VFREEBUSY` for a set of busy periods.
+
+  ### Arguments
+
+  * `periods` is a list of `{fbtype, {from, to}}` pairs.
+
+  * `range` is the `{start, finish}` the report covers.
+
+  ### Options
+
+  * `:attendee` names the calendar user the report is about, for a
+    scheduling response.
+
+  * `:organizer` names the calendar user who asked.
+
+  ### Returns
+
+  * The iCalendar object, as a binary.
+
+  ### Examples
+
+      iex> Dav.Cal.FreeBusy.vfreebusy([], {"20260601T000000Z", "20260701T000000Z"})
+      ...> |> String.contains?("BEGIN:VFREEBUSY")
+      true
+
+  """
+  @spec vfreebusy(
+          [{String.t(), {Tempo.t(), Tempo.t()}}],
+          {String.t() | nil, String.t() | nil},
+          keyword()
+        ) ::
+          binary()
+  def vfreebusy(periods, range, options \\ []) do
+    write(coalesce(periods), range, options)
+  end
+
   ## --- writing ----------------------------------------------------
 
-  defp vfreebusy(periods, {from, to}) do
+  defp write(periods, {from, to}, options) do
     lines =
       ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Dav//CalDAV//EN", "BEGIN:VFREEBUSY"] ++
         bound("DTSTART", from) ++
         bound("DTEND", to) ++
+        bound("ORGANIZER", Keyword.get(options, :organizer)) ++
+        bound("ATTENDEE", Keyword.get(options, :attendee)) ++
         ["DTSTAMP:" <> stamp()] ++
         Enum.map(periods, &freebusy/1) ++
         ["END:VFREEBUSY", "END:VCALENDAR"]

@@ -351,6 +351,32 @@ defmodule Dav.Web.Store do
   @callback mkcalendar(path :: [String.t()], context()) ::
               {:ok, Resource.t()} | {:error, :exists | :conflict | :forbidden}
 
+  @doc """
+  Resolve a calendar user address to that user's collection home.
+
+  Optional. Scheduling needs it: an `ATTENDEE:mailto:bob@example.com`
+  in a request means nothing until the store says which resources are
+  Bob's. A store without it cannot answer a busy-time request for
+  anyone, which `Dav.Cal.Outbox` reports as an unknown calendar user
+  rather than as free time — being told someone is free when they were
+  never asked about is the one answer a scheduler must not give.
+
+  ### Arguments
+
+  * `address` is a calendar user address, typically `mailto:...`.
+
+  * `context` is the store's own context.
+
+  ### Returns
+
+  * `{:ok, resource}` for the user's home collection; or
+
+  * `{:error, :not_found}` when the address is not hosted here.
+
+  """
+  @callback principal(address :: String.t(), context :: term()) ::
+              {:ok, Resource.t()} | {:error, :not_found}
+
   @optional_callbacks read: 2,
                       put: 4,
                       delete: 2,
@@ -359,5 +385,6 @@ defmodule Dav.Web.Store do
                       patch: 3,
                       copy: 3,
                       move: 3,
-                      mkcalendar: 2
+                      mkcalendar: 2,
+                      principal: 2
 end
