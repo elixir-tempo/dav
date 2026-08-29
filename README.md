@@ -16,13 +16,25 @@ HTTP                    RFC 9110/9111/9112
 
 ## Status
 
-**Early, and honest about it.** Built so far:
+**The WebDAV base is complete, apart from locking.** Built:
 
-* `Dav.Xml` — the namespaced XML both directions need. `207 Multi-Status` responses with namespaces collected and declared once, and `PROPFIND` request parsing.
-* `Dav.Web.Resource` — an addressable resource, collection or not.
-* `Dav.Web.Store` — the storage behaviour.
+* `Dav.Xml` — namespaced XML both directions: `207 Multi-Status`, `PROPFIND` and `PROPPATCH` parsing, `DAV:error` documents, `DAV:supported-report-set`.
+* `Dav.Web.Resource`, `Dav.Web.Store` — an addressable resource, and the storage behaviour.
+* `Dav.Web.Properties` — the live properties of RFC 4918 section 15, and which of them are protected.
+* `Dav.Web.Plug` — `OPTIONS`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, `PROPFIND`, `PROPPATCH`, `COPY`, `MOVE`, and `REPORT` dispatched by qualified name.
+* `Dav.Web.Report` — the behaviour CalDAV and CardDAV attach to.
 
-Not built yet: the Plug and its method dispatch, `PROPFIND` end to end, `REPORT`, and everything in `Dav.Cal` and `Dav.Card`.
+**A store's capabilities decide the server's.** Everything except resolving and listing is an optional callback, so a read-only store yields a read-only server whose `Allow` header omits what it cannot do. Nothing is advertised that would fail.
+
+**There is no locking, and there will not be.** Class 1 only. RFC 4918 permits it, most clients tolerate it, and `LOCK` is a large fraction of the specification for something a read-mostly server does not need. Advertising `DAV: 1, 2` without implementing it would be worse than not advertising it.
+
+Not built: `Dav.Cal` and `Dav.Card`, collection synchronisation (RFC 6578), and ACL (RFC 3744).
+
+## Measured against the conformance suite
+
+Apple's CalDAVTester issues 6,407 real HTTP requests across its 193 scenarios. **5,584 of them (87%) now have a method that answers them.** What remains is `POST` (633 — scheduling and sharing), `MKCALENDAR` (125 — `Dav.Cal`) and `ACL` (64).
+
+That is a measure of surface, not of conformance: the suite tests a full CalDAV *and* CardDAV server including principals, ACL, scheduling and Apple's sharing extension, which is a groupware product rather than a protocol library. See `plans/dav.md` in the repository for where the scope stops and why.
 
 ## On parsing XML safely
 
@@ -38,7 +50,7 @@ The default is safe today. It has not always been, which is why it is stated rat
 
 ## The specifications
 
-Vendored under [`rfc/`](rfc/README.md): 41 RFCs with their errata, and Apple's CalDAVTester — 226 scenarios describing what real clients expect. Worth reading before writing code, because RFC 4791 carries 24 errata and RFC 5545 carries 39.
+Vendored under `rfc/` in the repository: 41 RFCs with their errata, and Apple's CalDAVTester — 226 scenarios describing what real clients expect. Worth reading before writing code, because RFC 4791 carries 24 errata and RFC 5545 carries 39.
 
 ## Installation
 
