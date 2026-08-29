@@ -192,9 +192,15 @@ defmodule Dav.CalDAVTester.Runner do
     end
   end
 
+  # Verified first, grabbed second. A request may both check a value
+  # and remember it — `Schedule-Tag!$schedule-tag-organizer:` asks
+  # whether the tag differs from the one grabbed last time, and the
+  # same request grabs the new one. Grabbing first compares the value
+  # against itself, so every such check passed or failed on nothing.
   defp record(request, conn, state) do
-    state = Enum.reduce(request.grabs, state, &grab(&1, conn, request, &2))
-    {verify(request, conn, state), state}
+    outcome = verify(request, conn, state)
+
+    {outcome, Enum.reduce(request.grabs, state, &grab(&1, conn, request, &2))}
   end
 
   ## --- the compound methods ---------------------------------------
@@ -260,7 +266,7 @@ defmodule Dav.CalDAVTester.Runner do
 
       chosen ->
         conn = send_plain("GET", chosen, state)
-        state = remember(request, chosen, state)
+        outcome = verify(request, conn, remember(request, chosen, state))
 
         # `graburi` is skipped here: `remember/3` has already bound it
         # to the resource that was *found*, and the general pass binds
@@ -271,9 +277,9 @@ defmodule Dav.CalDAVTester.Runner do
         state =
           request.grabs
           |> Enum.reject(&match?({:uri, _argument, _variable}, &1))
-          |> Enum.reduce(state, &grab(&1, conn, request, &2))
+          |> Enum.reduce(remember(request, chosen, state), &grab(&1, conn, request, &2))
 
-        {verify(request, conn, state), state}
+        {outcome, state}
     end
   end
 

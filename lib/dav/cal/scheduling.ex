@@ -1304,11 +1304,14 @@ defmodule Dav.Cal.Scheduling do
     end
   end
 
-  defp tag(resource, body, %{store: store, context: context} = options) do
+  # A delivered copy gets a *new* tag every time. This is the arrival
+  # of a scheduling message, which is precisely what the tag tracks —
+  # keeping the old one told the recipient's client that nothing had
+  # reached it since the last time it looked, while a fresh
+  # invitation sat in the calendar.
+  defp tag(resource, body, %{store: store, context: context}) do
     if scheduling_body?(body) and Store.supports?(store, :patch) do
-      existing = stored_schedule_tag(resource, options)
-
-      store.patch(resource, [{:set, schedule_tag(), existing || fresh_tag(body)}], context)
+      store.patch(resource, [{:set, schedule_tag(), fresh_tag(body)}], context)
     end
 
     :ok
