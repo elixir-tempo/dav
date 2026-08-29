@@ -1007,15 +1007,53 @@ defmodule Dav.Cal.Scheduling do
     with %Resource{} = object <- object_with(calendar, uid, options),
          {:ok, body} <- read(object, options),
          {:ok, stored} <- ICalendar.parse(body) do
-      updated = %{
-        stored
-        | components: Enum.map(stored.components, &accept(&1, matching(&1, replies)))
-      }
+      answered = Enum.map(stored.components, &accept(&1, matching(&1, replies)))
+
+      updated = %{stored | components: answered ++ separated(stored, replies)}
 
       write(object, ICalendar.write(updated), options)
     else
       _no_such_event -> :ok
     end
+  end
+
+  # RFC 5546 section 3.2.3: an attendee may answer for one instance of
+  # a series the organiser holds only as a rule. The reply names it by
+  # `RECURRENCE-ID`, and the organiser's copy has to gain an override
+  # to record the answer — with nowhere to put it, their decision
+  # about that one Tuesday is simply lost.
+  defp separated(stored, replies) do
+    held = schedulable(stored)
+    known = for component <- held, do: value(component, "RECURRENCE-ID")
+
+    case Enum.find(held, &is_nil(value(&1, "RECURRENCE-ID"))) do
+      nil ->
+        []
+
+      master ->
+        for reply <- replies,
+            recurrence = recurrence_of(reply),
+            not is_nil(recurrence),
+            recurrence.value not in known,
+            do: accept(overridden(master, recurrence), [reply])
+    end
+  end
+
+  defp recurrence_of(component) do
+    Enum.find(component.properties, &(&1.name == "RECURRENCE-ID"))
+  end
+
+  # An override is the master with the rule taken off and the instance
+  # it replaces named. What recurs is the series; this is one date —
+  # and it is *that* date, not the one the series starts on, so
+  # `DTSTART` moves to the instance the `RECURRENCE-ID` picks out.
+  defp overridden(master, recurrence) do
+    kept =
+      master.properties
+      |> Enum.reject(&(&1.name in ~w(RRULE RDATE EXDATE RECURRENCE-ID DTSTART)))
+      |> Kernel.++([%{recurrence | name: "DTSTART"}, recurrence])
+
+    %{master | properties: kept}
   end
 
   # The reply carries the attendee's own PARTSTAT; everything else in

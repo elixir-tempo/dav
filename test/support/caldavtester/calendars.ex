@@ -187,15 +187,30 @@ defmodule Dav.CalDAVTester.Calendars do
     end
   end
 
-  # Pairs children by component name so the report compares like with
-  # like — otherwise a missing VTIMEZONE shifts every later comparison.
+  # Pairs children by component name *and* the instance they describe,
+  # so the report compares like with like. Name alone is not enough
+  # once a recurrence has overrides: every `VEVENT` matches the first
+  # one on the other side, and the report then explains the difference
+  # between a series and one of its exceptions, which is every
+  # difference and none of them.
   defp mismatched(left_children, right_children) do
-    Enum.find_value(left_children, fn {name, _properties, _children} = child ->
-      case Enum.find(right_children, &(elem(&1, 0) == name)) do
+    Enum.find_value(left_children, fn child ->
+      case Enum.find(right_children, &counterpart?(&1, child)) do
         nil -> nil
         ^child -> nil
         other -> {child, other}
       end
+    end)
+  end
+
+  defp counterpart?({name, right, _children}, {name, left, _left_children}),
+    do: instance(right) == instance(left)
+
+  defp counterpart?(_right, _left), do: false
+
+  defp instance(properties) do
+    Enum.find_value(properties, fn {name, _parameters, value} ->
+      if name == "RECURRENCE-ID", do: value
     end)
   end
 
