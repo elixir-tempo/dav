@@ -54,7 +54,7 @@ defmodule Dav.CalDAVTester.Scenario do
             uris: [String.t()],
             headers: [{String.t(), String.t()}],
             verifiers: [Verify.t()],
-            grabs: [String.t()],
+            grabs: [{atom(), String.t() | nil, String.t() | nil}],
             user: String.t() | nil,
             end_delete?: boolean()
           }
@@ -226,9 +226,10 @@ defmodule Dav.CalDAVTester.Scenario do
     %Verify{callback: Document.text(element, "callback"), args: args}
   end
 
-  # Recorded, not acted on: these feed a value out of one response and
-  # into a later request. A scenario that needs one cannot be run
-  # faithfully yet, and saying so is better than half-running it.
+  # These feed a value out of one response and into a later request,
+  # which is why a scenario using them cannot be run request-by-request
+  # without carrying state. Each becomes `{kind, argument, variable}`,
+  # or `{:unsupported, name}` for the ones the runner cannot extract.
   @grabbers ~w(graburi grabcount grabheader grabproperty grabelement grabjson
                grabcalproperty grabcalparameter)
 
@@ -236,7 +237,36 @@ defmodule Dav.CalDAVTester.Scenario do
     for child <- element.children,
         {_namespace, local} = child.name,
         local in @grabbers,
-        do: local
+        do: grab(local, child)
+  end
+
+  # `graburi` and `grabcount` name their variable directly as text; the
+  # rest carry it in a `<variable>` child alongside what to extract.
+  defp grab("graburi", element), do: {:uri, nil, String.trim(element.text)}
+  defp grab("grabcount", element), do: {:count, nil, String.trim(element.text)}
+
+  defp grab("grabheader", element),
+    do: {:header, Document.text(element, "name"), variable(element)}
+
+  defp grab("grabproperty", element),
+    do: {:property, Document.text(element, "property"), variable(element)}
+
+  defp grab("grabelement", element),
+    do: {:element, Document.text(element, "name"), variable(element)}
+
+  defp grab("grabcalproperty", element),
+    do: {:calendar_property, Document.text(element, "name"), variable(element)}
+
+  defp grab("grabcalparameter", element),
+    do: {:calendar_parameter, Document.text(element, "name"), variable(element)}
+
+  defp grab(other, _element), do: {:unsupported, other, nil}
+
+  defp variable(element) do
+    case Document.child(element, "variable") do
+      nil -> nil
+      found -> String.trim(found.text)
+    end
   end
 
   defp features(element) do

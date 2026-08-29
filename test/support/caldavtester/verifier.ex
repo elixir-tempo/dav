@@ -14,6 +14,7 @@ defmodule Dav.CalDAVTester.Verifier do
 
   """
 
+  alias Dav.CalDAVTester.Calendars
   alias Dav.CalDAVTester.Scenario.Verify
   alias Dav.Xml
   alias Plug.Conn
@@ -66,9 +67,253 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
+  def run(%Verify{callback: "dataString", args: args}, conn) do
+    data = unwrapped(conn.resp_body, args)
+
+    cond do
+      Map.has_key?(args, "empty") and data != "" -> {:failed, "response has a body"}
+      Map.has_key?(args, "empty") -> :passed
+      data == "" -> {:failed, "no response body"}
+      true -> data_string(data, args)
+    end
+  end
+
+  def run(%Verify{callback: "prepostcondition", args: args}, conn) do
+    codes = Map.get(args, "status", ~w(403 409 507))
+
+    with :ok <- status_in(conn, codes),
+         {:ok, document} <- document(conn),
+         :ok <- rooted(document, "error") do
+      preconditions(document, Map.get(args, "error", []), args)
+    end
+  end
+
+  def run(%Verify{callback: "dataMatch", args: args}, conn) do
+    with :ok <- status_in(conn, ~w(200 207)),
+         {:ok, expected} <- data_file(args) do
+      if normalise(conn.resp_body) == normalise(expected) do
+        :passed
+      else
+        {:failed, "response does not match #{args |> Map.get("filepath", []) |> List.first()}"}
+      end
+    end
+  end
+
+  def run(%Verify{callback: "calendarDataMatch", args: args}, conn) do
+    codes = Map.get(args, "status", ~w(200 201 207))
+
+    with :ok <- status_in(conn, codes),
+         {:ok, expected} <- calendar_expected(args) do
+      Calendars.compare(conn.resp_body, expected, Map.get(args, "filter", []))
+    end
+  end
+
+  def run(%Verify{callback: "xmlElementMatch", args: args}, conn) do
+    with :ok <- status_in(conn, ~w(200 207)),
+         {:ok, document} <- document(conn),
+         {:ok, root} <- parent(document, Map.get(args, "parent", [])) do
+      element_match(root, args)
+    end
+  end
+
   def run(%Verify{callback: callback}, _conn) do
     {:skipped, "verifier #{callback} is not implemented"}
   end
+
+  ## --- data verifiers ---------------------------------------------
+
+  # `unwrap` undoes iCalendar line folding before matching, so a test
+  # can name a value that the wire form has split across lines.
+  defp unwrapped(body, args) do
+    if Map.has_key?(args, "unwrap"), do: String.replace(body, "\r\n ", ""), else: body
+  end
+
+  defp data_string(data, args) do
+    checks =
+      Enum.map(Map.get(args, "equals", []), &{:equals, &1}) ++
+        Enum.map(Map.get(args, "contains", []), &{:contains, &1}) ++
+        Enum.map(Map.get(args, "notcontains", []), &{:notcontains, &1})
+
+    each(checks, &data_check(&1, data))
+  end
+
+  defp data_check({:equals, item}, data) do
+    if data == item, do: :passed, else: {:failed, "response does not equal #{inspect(item)}"}
+  end
+
+  # A test writes newlines as `\n`; the wire uses CRLF. Upstream looks
+  # for both, so a match either way counts.
+  defp data_check({:contains, item}, data) do
+    if contains?(data, item), do: :passed, else: {:failed, "missing #{inspect(item)}"}
+  end
+
+  defp data_check({:notcontains, item}, data) do
+    if contains?(data, item), do: {:failed, "contains #{inspect(item)}"}, else: :passed
+  end
+
+  defp contains?(data, item) do
+    String.contains?(data, String.replace(item, "\n", "\r\n")) or String.contains?(data, item)
+  end
+
+  defp status_in(conn, codes) do
+    if "#{conn.status}" in codes, do: :ok, else: {:failed, "status #{conn.status}"}
+  end
+
+  defp document(conn) do
+    case Xml.parse(conn.resp_body) do
+      {:ok, document} -> {:ok, document}
+      _unparseable -> {:failed, "response is not valid XML"}
+    end
+  end
+
+  defp rooted(%{name: {_namespace, name}}, name), do: :ok
+  defp rooted(_document, name), do: {:failed, "root element is not DAV:#{name}"}
+
+  # The error document names the conditions that failed, and the set
+  # must match exactly — a server reporting an extra condition is
+  # reporting something different from what the test expected.
+  # `error-description` is prose rather than a condition, so upstream
+  # drops it and so does this.
+  @description "{http://twistedmatrix.com/xml_namespace/dav/}error-description"
+
+  defp preconditions(document, expected, args) do
+    got =
+      for child <- document.children,
+          name = clark(child.name),
+          name != @description,
+          into: MapSet.new(),
+          do: name
+
+    wanted = MapSet.new(expected)
+    missing = MapSet.difference(wanted, got)
+
+    extra =
+      if Map.has_key?(args, "ignoreextras"),
+        do: MapSet.new(),
+        else: MapSet.difference(got, wanted)
+
+    cond do
+      MapSet.size(missing) > 0 ->
+        {:failed, "conditions not returned: #{inspect(Enum.to_list(missing))}"}
+
+      MapSet.size(extra) > 0 ->
+        {:failed, "unexpected conditions: #{inspect(Enum.to_list(extra))}"}
+
+      true ->
+        :passed
+    end
+  end
+
+  defp data_file(args) do
+    case Map.get(args, "filepath", []) do
+      [path] -> read_fixture(path)
+      _none_or_many -> {:failed, "no file to compare against"}
+    end
+  end
+
+  defp read_fixture(path) do
+    case File.read(Path.join("rfc/conformance/caldavtester", path)) do
+      {:ok, contents} -> {:ok, contents}
+      _missing -> {:failed, "fixture #{path} is missing"}
+    end
+  end
+
+  defp calendar_expected(args) do
+    case {Map.get(args, "filepath", []), Map.get(args, "data", [])} do
+      {[path], _data} -> read_fixture(path)
+      {_files, [data]} -> {:ok, data}
+      _neither -> {:failed, "no calendar data to compare against"}
+    end
+  end
+
+  defp normalise(text), do: text |> String.replace("\r\n", "\n") |> String.trim()
+
+  ## --- xmlElementMatch --------------------------------------------
+
+  defp parent(document, []), do: {:ok, document}
+
+  defp parent(document, [path]) do
+    case nodes_for(document, path) do
+      [node] -> {:ok, node}
+      [] -> {:failed, "missing parent node #{path}"}
+      _many -> {:failed, "too many parent nodes #{path}"}
+    end
+  end
+
+  defp element_match(root, args) do
+    exists = Enum.map(Map.get(args, "exists", []), &{:exists, &1})
+    absent = Enum.map(Map.get(args, "notexists", []), &{:notexists, &1})
+
+    each(exists ++ absent, &path_check(&1, root))
+  end
+
+  defp path_check({:exists, path}, root) do
+    if nodes_for(root, path) == [], do: {:failed, "missing #{path}"}, else: :passed
+  end
+
+  defp path_check({:notexists, path}, root) do
+    if nodes_for(root, path) == [], do: :passed, else: {:failed, "unexpected #{path}"}
+  end
+
+  # A path is `/{ns}root/{ns}child` with optional `[test]` predicates.
+  # The leading step names the root itself; the rest descend.
+  defp nodes_for(root, path) do
+    {steps, tests} = split_path(path)
+
+    steps
+    |> Enum.reduce([root], fn step, nodes -> Enum.flat_map(nodes, &step_into(&1, step)) end)
+    |> Enum.filter(fn node -> Enum.all?(tests, &test_node(node, &1)) end)
+  end
+
+  defp split_path(path) do
+    [names | tests] = String.split(path, "[")
+
+    steps =
+      names
+      |> String.trim_leading("/")
+      |> String.split("/")
+      |> Enum.reject(&(&1 == ""))
+
+    {steps, Enum.map(tests, &String.trim_trailing(&1, "]"))}
+  end
+
+  # The first step names the node already in hand rather than one of
+  # its children, which is how upstream anchors an absolute path.
+  defp step_into(node, step) do
+    if clark(node.name) == step do
+      [node]
+    else
+      Enum.filter(node.children, &(clark(&1.name) == step))
+    end
+  end
+
+  defp test_node(node, "@" <> test) do
+    case String.split(test, "=", parts: 2) do
+      [attribute] -> Map.has_key?(node.attributes, attribute)
+      [attribute, value] -> Map.get(node.attributes, attribute) == String.trim(value, "'")
+    end
+  end
+
+  defp test_node(node, "=" <> value), do: String.trim(node.text) == value
+  defp test_node(node, "!" <> value), do: String.trim(node.text) != value
+  defp test_node(node, "*" <> value), do: String.contains?(node.text, value)
+  defp test_node(node, "$" <> value), do: not String.contains?(node.text, value)
+  defp test_node(node, "+" <> value), do: String.starts_with?(String.trim(node.text), value)
+
+  defp test_node(node, "^" <> test) do
+    {name, value} =
+      case String.split(test, "=", parts: 2) do
+        [name] -> {name, nil}
+        [name, value] -> {name, value}
+      end
+
+    Enum.any?(node.children, fn child ->
+      clark(child.name) == name and (value == nil or String.trim(child.text) == value)
+    end)
+  end
+
+  defp test_node(node, "||"), do: String.trim(node.text) != "" or node.children != []
+  defp test_node(_node, _unknown), do: true
 
   ## --- multistatus verifiers --------------------------------------
 
