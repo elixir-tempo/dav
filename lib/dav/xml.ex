@@ -643,4 +643,74 @@ defmodule Dav.Xml do
       _other -> ""
     end)
   end
+
+  @typedoc """
+  A parsed element, free of the parser's own representation.
+
+  Extensions build on this rather than on xmerl records, so that
+  `Dav.Cal` and `Dav.Card` never import a parser and the choice of one
+  stays a private matter for this module.
+  """
+  @type element :: %{
+          name: qname(),
+          attributes: %{optional(String.t()) => String.t()},
+          children: [element()],
+          text: String.t()
+        }
+
+  @doc """
+  Parse a document into a neutral element tree.
+
+  ### Arguments
+
+  * `body` is the raw request body.
+
+  ### Returns
+
+  * `{:ok, element}` for the root element; or
+
+  * `{:error, :malformed}`.
+
+  ### Examples
+
+      iex> {:ok, root} = Dav.Xml.parse(~s(<C:filter xmlns:C="urn:ietf:params:xml:ns:caldav"><C:comp-filter name="VEVENT"/></C:filter>))
+      iex> root.name
+      {"urn:ietf:params:xml:ns:caldav", "filter"}
+      iex> [child] = root.children
+      iex> {child.name, child.attributes}
+      {{"urn:ietf:params:xml:ns:caldav", "comp-filter"}, %{"name" => "VEVENT"}}
+
+      iex> Dav.Xml.parse("not xml")
+      {:error, :malformed}
+
+  """
+  @spec parse(binary()) :: {:ok, element()} | {:error, :malformed}
+  def parse(body) when is_binary(body) do
+    with {:ok, document} <- scan(String.trim(body)) do
+      case tree(document) do
+        [root] -> {:ok, root}
+        _none -> {:error, :malformed}
+      end
+    end
+  end
+
+  defp tree(
+         {:xmlElement, _n, _e, {prefix, local}, namespace, _p, _pos, attributes, content, _l, _pa,
+          _t}
+       ) do
+    [
+      %{
+        name: {uri_for(namespace, prefix), List.to_string(local)},
+        attributes: Map.new(attributes, &attribute/1),
+        children: Enum.flat_map(content, &tree/1),
+        text: text_of(content)
+      }
+    ]
+  end
+
+  defp tree(_other), do: []
+
+  defp attribute({:xmlAttribute, name, _e, _nsi, _ns, _p, _pos, _l, value, _norm}) do
+    {Atom.to_string(name), text(value)}
+  end
 end
