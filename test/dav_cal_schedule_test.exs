@@ -625,4 +625,45 @@ defmodule Dav.Cal.ScheduleTest do
       assert stored =~ "PARTSTAT=NEEDS-ACTION"
     end
   end
+
+  describe "the ETag a scheduling write reports" do
+    test "names the version the store actually holds", context do
+      event =
+        Enum.join(
+          [
+            "BEGIN:VCALENDAR",
+            "BEGIN:VEVENT",
+            "UID:validator",
+            "SUMMARY:Meeting",
+            "ORGANIZER:mailto:alice@example.com",
+            "ATTENDEE:mailto:bob@example.com",
+            "DTSTART:20260615T090000Z",
+            "END:VEVENT",
+            "END:VCALENDAR"
+          ],
+          "\r\n"
+        ) <> "\r\n"
+
+      written = DavPlug.call(conn("PUT", "/alice/calendar/v.ics", event), context.options)
+      [reported] = Conn.get_resp_header(written, "etag")
+
+      stored = DavPlug.call(conn("GET", "/alice/calendar/v.ics", ""), context.options)
+
+      # Scheduling rewrites the organiser's copy after the write —
+      # stamping SCHEDULE-STATUS, settling participation — so an ETag
+      # captured before the hooks ran describes a version that no
+      # longer exists. A client sent that validator back and had its
+      # own write refused for a change the server made itself.
+      assert [reported] == Conn.get_resp_header(stored, "etag")
+
+      again =
+        DavPlug.call(
+          conn("PUT", "/alice/calendar/v.ics", event)
+          |> Conn.put_req_header("if-match", reported),
+          context.options
+        )
+
+      assert again.status == 204
+    end
+  end
 end

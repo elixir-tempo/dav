@@ -224,9 +224,11 @@ defmodule Dav.Web.Plug do
          {:ok, outcome, resource} <- options.store.put(path, body, type, options.context) do
       written(resource, body, previous, path, options)
 
+      settled = settled(resource, path, options)
+
       conn
-      |> etag(resource)
-      |> contributed_headers(resource, options)
+      |> etag(settled)
+      |> contributed_headers(settled, options)
       |> send_resp(if(outcome == :created, do: 201, else: 204), "")
     else
       {:error, :unsupported} -> refuse(conn, options)
@@ -236,6 +238,20 @@ defmodule Dav.Web.Plug do
       {:error, :conflict} -> send_resp(conn, 409, "")
       {:error, :collection} -> send_resp(conn, 403, "")
       {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
+    end
+  end
+
+  # What the store holds once the hooks have finished with it. They
+  # may rewrite what was just written — implicit scheduling stamps its
+  # own parameters into the organiser's copy — so the resource handed
+  # back by the write describes a version that no longer exists.
+  # Reporting its `ETag` gives the client a validator that is already
+  # stale, and their next conditional request is refused for a change
+  # the server made itself.
+  defp settled(resource, path, %{store: store, context: context}) do
+    case store.resolve(path, context) do
+      {:ok, %Resource{} = current} -> current
+      _gone -> resource
     end
   end
 
