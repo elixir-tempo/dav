@@ -54,6 +54,8 @@ defmodule Dav.CalDAVTester.Scenario do
       verifiers: [],
       grabs: [],
       user: nil,
+      password: nil,
+      authenticate?: true,
       end_delete?: false,
       features: [],
       excluded: []
@@ -67,6 +69,8 @@ defmodule Dav.CalDAVTester.Scenario do
             verifiers: [Verify.t()],
             grabs: [{atom(), String.t() | nil, String.t() | nil}],
             user: String.t() | nil,
+            password: String.t() | nil,
+            authenticate?: boolean(),
             end_delete?: boolean(),
             features: [String.t()],
             excluded: [String.t()]
@@ -264,6 +268,8 @@ defmodule Dav.CalDAVTester.Scenario do
       verifiers: Enum.map(Document.children(element, "verify"), &verify/1),
       grabs: grabs(element),
       user: Map.get(element.attributes, "user"),
+      password: Map.get(element.attributes, "pswd"),
+      authenticate?: Map.get(element.attributes, "auth", "yes") == "yes",
       end_delete?: yes?(element, "end-delete"),
       features: features(element, "require-feature"),
       excluded: features(element, "exclude-feature")

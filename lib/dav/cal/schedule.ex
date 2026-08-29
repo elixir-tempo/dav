@@ -115,6 +115,49 @@ defmodule Dav.Cal.Schedule do
   def inbox?(%Resource{types: types}), do: inbox() in types
 
   @doc """
+  The resource type of an iSchedule receiver.
+
+  iSchedule is scheduling *between* servers: an organiser on one
+  server invites an attendee on another, and the message arrives at
+  the receiving server's endpoint rather than at any one user's
+  Outbox. The draft is not an RFC, and the type is named here so that
+  a deployment can mark the endpoint explicitly rather than the server
+  guessing from a path.
+
+  ### Returns
+
+  * The receiver's qualified name.
+
+  ### Examples
+
+      iex> Dav.Cal.Schedule.receiver()
+      {"urn:ietf:params:xml:ns:ischedule", "receiver"}
+
+  """
+  @spec receiver() :: Xml.qname()
+  def receiver, do: {"urn:ietf:params:xml:ns:ischedule", "receiver"}
+
+  @doc """
+  Whether a resource is an iSchedule receiver.
+
+  ### Arguments
+
+  * `resource` is a `t:Dav.Web.Resource.t/0`.
+
+  ### Returns
+
+  * `true` when it reports the receiver type.
+
+  ### Examples
+
+      iex> Dav.Cal.Schedule.receiver?(%Dav.Web.Resource{collection?: true, types: [Dav.Cal.Schedule.receiver()]})
+      true
+
+  """
+  @spec receiver?(Resource.t()) :: boolean()
+  def receiver?(%Resource{types: types}), do: receiver() in types
+
+  @doc """
   Build a `CALDAV:schedule-response` document.
 
   The answer to a `POST` on a scheduling Outbox. One `CALDAV:response`

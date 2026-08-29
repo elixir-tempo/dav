@@ -199,5 +199,13 @@ defmodule Dav.CalDAVTester.Calendars do
     end)
   end
 
-  defp names(properties), do: properties |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.take(4)
+  # The property *name* is rarely enough to see what went wrong — both
+  # sides usually have an ATTENDEE, and it is a parameter that differs.
+  defp names(properties) do
+    properties
+    |> Enum.take(3)
+    |> Enum.map_join(" | ", fn {name, parameters, value} ->
+      "#{name}#{inspect(parameters)}:#{String.slice(value, 0, 30)}"
+    end)
+  end
 end

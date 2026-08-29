@@ -233,4 +233,46 @@ defmodule Dav.XmlTest do
       assert document =~ "<D:href>mailto:a@x</D:href><D:href>mailto:b@x</D:href>"
     end
   end
+
+  describe "PROPPATCH values" do
+    test "an href-valued property keeps its structure" do
+      # Flattening `<D:href>` to text stores something that cannot be
+      # read back: the client set an href and would be handed a string.
+      body = """
+      <?xml version="1.0"?>
+      <D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+        <D:set><D:prop>
+          <C:schedule-default-calendar-URL><D:href>/calendars/work/</D:href></C:schedule-default-calendar-URL>
+        </D:prop></D:set>
+      </D:propertyupdate>
+      """
+
+      assert {:ok, [{:set, {_namespace, "schedule-default-calendar-URL"}, value}]} =
+               Xml.parse_proppatch(body)
+
+      assert value == {:hrefs, ["/calendars/work/"]}
+    end
+
+    test "a text-valued property is still text" do
+      body = """
+      <?xml version="1.0"?>
+      <D:propertyupdate xmlns:D="DAV:">
+        <D:set><D:prop><D:displayname>Work</D:displayname></D:prop></D:set>
+      </D:propertyupdate>
+      """
+
+      assert {:ok, [{:set, {"DAV:", "displayname"}, "Work"}]} = Xml.parse_proppatch(body)
+    end
+
+    test "a property holding empty elements keeps their names" do
+      body = """
+      <?xml version="1.0"?>
+      <D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+        <D:set><D:prop><C:schedule-calendar-transp><C:opaque/></C:schedule-calendar-transp></D:prop></D:set>
+      </D:propertyupdate>
+      """
+
+      assert {:ok, [{:set, _name, {:names, [{_ns, "opaque"}]}}]} = Xml.parse_proppatch(body)
+    end
+  end
 end

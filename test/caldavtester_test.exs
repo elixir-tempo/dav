@@ -72,8 +72,8 @@ defmodule Dav.CalDAVTesterTest do
     assert map_size(context.results) == 162
 
     outcomes = context.results |> Map.values() |> List.flatten()
-    assert length(outcomes) > 400
-    assert Enum.count(outcomes, &(&1 == :passed)) > 200
+    assert length(outcomes) > 2000
+    assert Enum.count(outcomes, &(&1 == :passed)) > 1000
   end
 
   test "the declared feature set is the one the server implements", context do
@@ -83,9 +83,11 @@ defmodule Dav.CalDAVTesterTest do
     declared = Features.declared()
 
     assert MapSet.member?(declared, "caldav")
-    refute MapSet.member?(declared, "implicit-scheduling")
+    # Declared because `Dav.Cal.Scheduling` implements it. Declaring a
+    # feature that is not built is what turns this figure into a claim.
+    assert MapSet.member?(declared, "implicit-scheduling")
     refute MapSet.member?(declared, "sync-report")
-    assert MapSet.size(declared) < 10
+    assert MapSet.size(declared) < 20
     assert map_size(context.results) == 162
   end
 

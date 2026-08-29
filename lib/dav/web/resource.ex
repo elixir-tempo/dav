@@ -30,9 +30,15 @@ defmodule Dav.Web.Resource do
           content_type: String.t() | nil,
           content_length: non_neg_integer() | nil,
           modified_at: DateTime.t() | nil,
-          display_name: String.t() | nil
+          display_name: String.t() | nil,
+          owner: String.t() | nil
         }
 
+  # `owner` is the principal URL of whoever owns the resource. Access
+  # control is computed from it — `DAV:owner`, `DAV:acl` and
+  # `DAV:current-user-principal` all derive from this one value, so a
+  # store that knows who owns what gets RFC 3744's properties without
+  # implementing any of it.
   defstruct path: [],
             collection?: false,
             types: [],
@@ -40,7 +46,8 @@ defmodule Dav.Web.Resource do
             content_type: nil,
             content_length: nil,
             modified_at: nil,
-            display_name: nil
+            display_name: nil,
+            owner: nil
 
   @doc """
   The resource's URL path, with the trailing slash a collection needs.

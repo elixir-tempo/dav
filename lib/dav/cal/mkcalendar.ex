@@ -45,10 +45,18 @@ defmodule Dav.Cal.Mkcalendar do
       {:error, :body} -> send_resp(conn, 415, "")
       # A calendar may not be created where something already is, and
       # MUST NOT be created inside another calendar.
-      {:error, :exists} -> send_resp(conn, 405, "")
+      # RFC 4918's `DAV:resource-must-be-null` — a bare 405 says the
+      # method was refused, this says the URL was already taken.
+      {:error, :exists} -> precondition(conn, {Xml.dav(), "resource-must-be-null"})
       {:error, :conflict} -> send_resp(conn, 409, "")
       {:error, :forbidden} -> send_resp(conn, 403, "")
     end
+  end
+
+  defp precondition(conn, condition) do
+    conn
+    |> put_resp_content_type("application/xml", "utf-8")
+    |> send_resp(403, Xml.error(condition))
   end
 
   defp supported(store) do

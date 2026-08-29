@@ -377,6 +377,56 @@ defmodule Dav.Web.Store do
   @callback principal(address :: String.t(), context :: term()) ::
               {:ok, Resource.t()} | {:error, :not_found}
 
+  @doc """
+  The calendar user addresses of a principal.
+
+  Optional, and the reverse of `c:principal/2`. Implicit scheduling
+  needs it: deciding whether a stored event is the organiser's copy or
+  an attendee's means comparing the calendar's owner against the
+  `ORGANIZER` address, and a principal URL is not an address.
+
+  ### Arguments
+
+  * `principal` is a principal URL.
+
+  * `context` is the store's own context.
+
+  ### Returns
+
+  * `{:ok, addresses}`, typically `mailto:` URLs; or
+
+  * `{:error, :not_found}`.
+
+  """
+  @callback addresses(principal :: String.t(), context :: term()) ::
+              {:ok, [String.t()]} | {:error, :not_found}
+
+  @doc """
+  The canonical form of a calendar user address.
+
+  Optional. One person may be addressed several ways — `mailto:` in
+  one client, a URN in another, a bare address in a third — and a
+  server that stores whichever spelling arrived cannot tell that two
+  ATTENDEE lines name the same person. Normalising on write is what
+  makes an attendee's reply match the invitation they were sent.
+
+  ### Arguments
+
+  * `address` is a calendar user address as written.
+
+  * `context` is the store's own context.
+
+  ### Returns
+
+  * `{:ok, canonical}`; or
+
+  * `{:error, :not_found}` for an address this server does not host,
+    which is left exactly as the client wrote it.
+
+  """
+  @callback canonical_address(address :: String.t(), context :: term()) ::
+              {:ok, String.t()} | {:error, :not_found}
+
   @optional_callbacks read: 2,
                       put: 4,
                       delete: 2,
@@ -386,5 +436,7 @@ defmodule Dav.Web.Store do
                       copy: 3,
                       move: 3,
                       mkcalendar: 2,
-                      principal: 2
+                      principal: 2,
+                      addresses: 2,
+                      canonical_address: 2
 end

@@ -134,10 +134,13 @@ defmodule Dav.Cal.QueryTest do
       refute conn.resp_body =~ "<D:response>"
     end
 
-    test "a body with no filter is malformed", context do
+    test "a body with no filter names the precondition", context do
+      # RFC 4791 section 7.8 gives this its own name. A `400` says the
+      # request was wrong; `CALDAV:valid-filter` says which part.
       conn = query(~s(<D:prop><D:getetag/></D:prop>), context.options)
 
-      assert conn.status == 400
+      assert conn.status == 403
+      assert conn.resp_body =~ "valid-filter"
     end
   end
 

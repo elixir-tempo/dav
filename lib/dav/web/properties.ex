@@ -20,6 +20,7 @@ defmodule Dav.Web.Properties do
 
   """
 
+  alias Dav.Web.Acl
   alias Dav.Web.Resource
   alias Dav.Xml
 
@@ -101,6 +102,58 @@ defmodule Dav.Web.Properties do
 
   """
   @spec fetch(Resource.t(), Xml.qname()) :: {:ok, Xml.value()} | :error
+  # `CALDAV:schedule-calendar-transp` is deliberately *not* computed
+  # here. It is a calendar's property, and this module knows nothing
+  # about calendars — a deployment sets it on the collection, where it
+  # is stored and reported like any other. Reaching into `Dav.Cal` for
+  # it would put the base's knowledge of CalDAV back exactly where the
+  # seams were built to remove it.
+
+  # Deprecated by RFC 6638 in favour of `schedule-calendar-transp`. It
+  # is named here only to mark it protected: a server that still
+  # reports it must not let it be written, and that is a fact about
+  # the name rather than about calendars.
+  def fetch(%Resource{}, {"urn:ietf:params:xml:ns:caldav", "calendar-free-busy-set"}),
+    do: {:ok, nil}
+
+  # Access control, RFC 3744. These are computed rather than stored:
+  # they describe a policy, and a server with no authentication has one
+  # policy. What matters to a client is that they are *present* — a
+  # calendar that cannot read `DAV:current-user-privilege-set` has to
+  # assume it may write, and discovers otherwise by failing.
+  def fetch(%Resource{}, {"DAV:", "supported-privilege-set"}),
+    do: {:ok, Acl.supported_privilege_set()}
+
+  def fetch(%Resource{}, {"DAV:", "current-user-privilege-set"}),
+    do: {:ok, Acl.current_user_privilege_set()}
+
+  def fetch(%Resource{}, {"DAV:", "acl-restrictions"}), do: {:ok, Acl.acl_restrictions()}
+
+  def fetch(%Resource{owner: nil}, {"DAV:", "acl"}), do: :error
+  def fetch(%Resource{owner: owner}, {"DAV:", "acl"}), do: {:ok, Acl.acl(owner)}
+
+  def fetch(%Resource{owner: nil}, {"DAV:", "owner"}), do: :error
+  def fetch(%Resource{owner: owner}, {"DAV:", "owner"}), do: {:ok, {:hrefs, [owner]}}
+
+  # "This protected property, if present, contains the URL of the
+  # principal that is the group of the resource." No groups here.
+  def fetch(%Resource{}, {"DAV:", "group"}), do: {:ok, nil}
+
+  def fetch(%Resource{}, {"DAV:", "inherited-acl-set"}), do: {:ok, nil}
+
+  # RFC 5397's `DAV:current-user-principal` is *not* here. It answers
+  # "who am I", which is a fact about the request rather than about
+  # the resource being described — the same resource returns different
+  # values to different callers. `Dav.Web.Plug` supplies it from the
+  # authenticated principal; deriving it from the resource's owner
+  # instead tells every caller they are the owner.
+
+  def fetch(%Resource{owner: nil}, {"DAV:", "principal-URL"}), do: :error
+
+  def fetch(%Resource{} = resource, {"DAV:", "principal-URL"}) do
+    if Acl.principal?(resource), do: {:ok, {:hrefs, [Resource.href(resource)]}}, else: :error
+  end
+
   def fetch(%Resource{collection?: true} = resource, {"DAV:", "resourcetype"}) do
     {:ok, {:names, [{Xml.dav(), "collection"} | resource.types]}}
   end
@@ -120,7 +173,11 @@ defmodule Dav.Web.Properties do
 
   # A collection has no length or type of its own. Reporting zero
   # would be a claim about a body it does not have.
-  def fetch(%Resource{collection?: true}, {"DAV:", "getcontentlength"}), do: :error
+  # A collection returns nothing on GET, so its content has no length —
+  # but clients ask for this property on collections constantly, and
+  # answering `404` for it makes a routine PROPFIND look half-failed.
+  # Zero is what a collection's body actually weighs.
+  def fetch(%Resource{collection?: true}, {"DAV:", "getcontentlength"}), do: {:ok, "0"}
   def fetch(%Resource{content_length: nil}, {"DAV:", "getcontentlength"}), do: :error
 
   def fetch(%Resource{content_length: length}, {"DAV:", "getcontentlength"}) do
@@ -212,5 +269,9 @@ defmodule Dav.Web.Properties do
   """
   @spec protected?(Xml.qname()) :: boolean()
   def protected?({"DAV:", local}), do: local in @protected
+
+  # RFC 6638 deprecated `calendar-free-busy-set`; a server that still
+  # reports it must not let it be written.
+  def protected?({"urn:ietf:params:xml:ns:caldav", "calendar-free-busy-set"}), do: true
   def protected?({_namespace, _local}), do: false
 end

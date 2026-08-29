@@ -102,8 +102,21 @@ defmodule Dav.Cal do
       {"/c/1.ics", "HTTP/1.1 200 OK"}
 
   """
-  @spec report_response(Resource.t(), [Xml.qname()], binary()) ::
+  @spec report_response(Resource.t(), [Xml.qname()] | :allprop | :propname, binary()) ::
           {String.t(), [{String.t(), [{Xml.qname(), Xml.value()}]}]}
+  # `DAV:allprop` and `DAV:propname` are as legal in a report as in a
+  # PROPFIND, and a client sending one and receiving an empty propstat
+  # has been told its resources have no properties.
+  def report_response(%Resource{} = object, :allprop, _data) do
+    {Resource.href(object), [{"HTTP/1.1 200 OK", Properties.all(object)}]}
+  end
+
+  def report_response(%Resource{} = object, :propname, _data) do
+    names = for {name, _value} <- Properties.all(object), do: {name, nil}
+
+    {Resource.href(object), [{"HTTP/1.1 200 OK", names}]}
+  end
+
   def report_response(%Resource{} = object, wanted, data) do
     {found, missing} =
       Enum.reduce(wanted, {[], []}, fn name, {found, missing} ->
@@ -154,8 +167,12 @@ defmodule Dav.Cal do
       "/c/1.ics"
 
   """
-  @spec report_response(Resource.t(), [Xml.qname()], binary(), Selection.t()) ::
-          {String.t(), [{String.t(), [{Xml.qname(), Xml.value()}]}]}
+  @spec report_response(
+          Resource.t(),
+          [Xml.qname()] | :allprop | :propname,
+          binary(),
+          Selection.t()
+        ) :: {String.t(), [{String.t(), [{Xml.qname(), Xml.value()}]}]}
   def report_response(%Resource{} = object, wanted, data, selection) do
     report_response(object, wanted, Selection.apply(data, selection))
   end

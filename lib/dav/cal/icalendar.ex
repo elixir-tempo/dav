@@ -32,6 +32,12 @@ defmodule Dav.Cal.ICalendar do
   # 75 octets, excluding the line break."
   @limit 75
 
+  # Properties whose values are iCalendar TEXT, and so carry escapes.
+  # Everything else — RRULE, EXDATE, GEO, FREEBUSY — uses `;` and `,`
+  # structurally.
+  @text_valued ~w(SUMMARY DESCRIPTION LOCATION COMMENT CONTACT
+                  CATEGORIES RESOURCES RELATED-TO TZNAME X-WR-CALNAME)
+
   @typedoc "One `NAME;PARAM=value:value` line."
   @type property :: %{
           name: String.t(),
@@ -45,6 +51,78 @@ defmodule Dav.Cal.ICalendar do
           properties: [property()],
           components: [component()]
         }
+
+  @doc """
+  Write a component back out as iCalendar.
+
+  The counterpart to `parse/1`, and needed wherever a component is
+  rebuilt rather than passed through: a `calendar-data` subset, or a
+  scheduling message being stored in an Inbox.
+
+  Values are **re-escaped**. Parsing turns `\\n` into a newline and
+  `\\,` into a comma, so writing the parsed value back unchanged
+  produces a line that means something different from the one that
+  came in — and, in the case of an embedded newline, a line that ends
+  the object early.
+
+  ### Arguments
+
+  * `component` is a `t:component/0`.
+
+  ### Returns
+
+  * The component as iCalendar text, folded, with CRLF endings.
+
+  ### Examples
+
+      iex> ics = "BEGIN:VCALENDAR\\r\\nBEGIN:VEVENT\\r\\nUID:1\\r\\nEND:VEVENT\\r\\nEND:VCALENDAR\\r\\n"
+      iex> {:ok, calendar} = Dav.Cal.ICalendar.parse(ics)
+      iex> Dav.Cal.ICalendar.write(calendar) == ics
+      true
+
+      iex> ics = "BEGIN:VCALENDAR\\r\\nBEGIN:VEVENT\\r\\nSUMMARY:one\\\\ntwo\\r\\nEND:VEVENT\\r\\nEND:VCALENDAR\\r\\n"
+      iex> {:ok, calendar} = Dav.Cal.ICalendar.parse(ics)
+      iex> Dav.Cal.ICalendar.write(calendar) =~ "SUMMARY:one\\\\ntwo"
+      true
+
+  """
+  @spec write(component()) :: binary()
+  def write(component) do
+    component |> content_lines() |> Enum.map_join("", &(fold(&1) <> "\r\n"))
+  end
+
+  defp content_lines(component) do
+    ["BEGIN:" <> component.name] ++
+      Enum.map(component.properties, &content_line/1) ++
+      Enum.flat_map(component.components, &content_lines/1) ++
+      ["END:" <> component.name]
+  end
+
+  defp content_line(property) do
+    parameters =
+      Enum.map_join(property.parameters, "", fn {name, value} ->
+        ";" <> name <> "=" <> value
+      end)
+
+    property.name <> parameters <> ":" <> encode(property)
+  end
+
+  # Only TEXT values are escaped. `RRULE:FREQ=WEEKLY;BYDAY=MO,TU` uses
+  # `;` and `,` as *structure*, and escaping them turns a recurrence
+  # rule into one long unparseable string — which is exactly what
+  # happened to every VTIMEZONE this rewrote.
+  defp encode(%{name: name, value: value}) when name in @text_valued, do: escape(value)
+  defp encode(%{value: value}), do: value
+
+  # RFC 5545 section 3.3.11. The backslash goes first: escaping it
+  # after the others would double the backslashes they introduced.
+  defp escape(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\n", "\\n")
+    |> String.replace(",", "\\,")
+    |> String.replace(";", "\\;")
+  end
 
   @doc """
   Fold a content line to the 75-octet limit.
@@ -155,9 +233,18 @@ defmodule Dav.Cal.ICalendar do
   # clients fold aggressively, so this is not an edge case.
   defp unfold(data) do
     data
+    |> strip_bom()
     |> String.replace(~r/\r?\n[ \t]/, "")
     |> String.split(~r/\r?\n/, trim: true)
   end
+
+  # A UTF-8 byte order mark is legal at the start of a file and carries
+  # no meaning in a stream that is already known to be UTF-8. Left in
+  # place it becomes part of the first line, so `BEGIN:VCALENDAR` reads
+  # as `\uFEFFBEGIN:VCALENDAR` and the whole object parses as empty —
+  # which is how a perfectly good calendar gets refused as malformed.
+  defp strip_bom(<<0xEF, 0xBB, 0xBF, rest::binary>>), do: rest
+  defp strip_bom(data), do: data
 
   defp collect("BEGIN:" <> name, {stack, done}) do
     {[%{name: name, properties: [], components: []} | stack], done}

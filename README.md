@@ -46,19 +46,55 @@ Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests 
 
 CalDAVTester gates 850 of its own blocks on `<require-feature>`, read against a `serverinfo.xml` describing *the server under test*. Apple's file declares 84 features because Apple's server implements 84; running this server against that list asks it thousands of questions it never claimed to answer, and a server is not non-conformant for lacking a feature it does not advertise.
 
-`Dav.CalDAVTester.Features` declares four: `caldav`, `COPY Method`, `MOVE Method`, `regular-collection`. Each is a claim checkable against the code, and the list grows only when the capability is built — a feature declared but not implemented turns a conformance figure into a claim.
+`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, and `shared-calendars`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
 
-Against that declaration the suite puts **472 tests**, of which:
+Against that declaration the suite puts **2,534 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 284 | 60% |
-| failed | 180 | 38% |
-| skipped | 8 | 2% |
+| passed | 1,800 | 71% |
+| failed | 670 | 26% |
+| skipped | 64 | 3% |
 
-Nine verifiers are ported — `statusCode`, `header`, `multistatusItems`, `propfindItems`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlElementMatch`, `prepostcondition` and `freeBusy` — along with the suite's compound directives (`DELETEALL`, `GETNEW`, `WAITCOUNT`, `GETCONTAINS`) and the `grab` elements that carry a value from one response into a later request. A check the harness cannot make is reported skipped, never counted as a pass.
+Fourteen verifiers are ported — `statusCode`, `header`, `multistatusItems`, `propfindItems`, `propfindValues`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlDataMatch`, `xmlElementMatch`, `prepostcondition`, `freeBusy` and `postFreeBusy` — along with the suite's compound directives (`DELETEALL`, `GETNEW`, `WAITCOUNT`, `GETCONTAINS`) and the `grab` elements that carry a value from one response into a later request. A check the harness cannot make is reported skipped, never counted as a pass.
 
-For scale, the whole CalDAV suite regardless of declaration is 5,624 tests. Reaching that means declaring and implementing the rest — scheduling (RFC 6638), ACL (RFC 3744), collection sync (RFC 6578), and Apple's sharing and attachment extensions — one feature at a time, driving this figure to zero at each step.
+`xmlDataMatch` and `propfindItems`'s value comparison are the places the port is deliberately not literal. Upstream normalises both documents through ElementTree's serialiser and compares the strings; that output cannot be reproduced here, so the comparison is structural — names, attributes, text and sorted children. It is a stricter test of the same thing: two documents differing only in element order compare equal, and two differing in content do not.
+
+What remains is managed attachments, the finer points of iTIP (per-instance cancellation, partstat propagation), the rest of the sharing extension, and the `ACL` method itself. The whole CalDAV suite regardless of declaration is 5,624 tests.
+
+## On sharing
+
+`Dav.Cal.Sharing` implements Apple's `calendarserver.org` extension — the one that lets one person see or edit another's calendar. No RFC defines it, and it is the most widely deployed CalDAV extension there is: without it a server can talk to Apple Calendar but not share with it.
+
+An owner `POST`s a `CS:share` at their calendar; the invitation is recorded there, reported by `CS:invite`, and a **notification** is dropped into the invitee's notification collection. That last step is the one worth insisting on: an invitee has no reason to poll a calendar they cannot yet see, so a share recorded only on the owner's side is one nobody hears about. `read` is the default access when none is named, because granting write by accident is the mistake that cannot be undone.
+
+`POST` is the one method CalDAV overloads, and `Dav.Cal.Post` routes on the *body* — iCalendar is a scheduling message, an XML document is a sharing one. Routing on the target resource would be wrong: a sharing invitation is posted at the calendar being shared, a scheduling message at an Outbox, and a reply at the invitee's home, which is neither.
+
+## On scheduling
+
+`Dav.Cal.Scheduling` is what makes this a calendar server rather than a shared filing cabinet. Storing an event that names attendees delivers the invitation to each of them — into their Inbox as a message, and into their calendar as an event — and an attendee storing their accepted copy sends a reply that updates the organiser's copy. Neither party posts to an Outbox; the scheduling is implicit in the write, which is what RFC 6638 section 3 requires.
+
+Deleting is scheduling too: an organiser removing an event cancels it for the attendees, and an attendee removing their copy declines it. A cancelled event is *marked* `STATUS:CANCELLED` in the attendee's calendar rather than made to vanish — they may have arranged their day around it.
+
+A recurrence set is one scheduling object, not several. A recurring event and its overridden instances share a `UID` across several components, and an attendee may be named on an override alone — invited to one Tuesday but not the series. Treating the first component as the whole event silently drops those people.
+
+`SCHEDULE-AGENT` decides whether this server delivers at all: `CLIENT` means the organiser's own client will send the invitation, and `NONE` that nobody should. Delivering anyway sends a duplicate, or one the organiser deliberately suppressed.
+
+`Schedule-Tag` (RFC 6638 section 8.2) is stored rather than mirrored from the ETag, and changes only when the *scheduling* content does — who is organising, who is invited, and when it happens. An attendee editing their own alarm changes the ETag; a client holding only that would resynchronise the whole event every time anyone touched anything, which is the problem the second validator exists to solve.
+
+An organiser's client sends `PARTSTAT=NEEDS-ACTION` for everyone, because that is what it was given — it has no way to know who accepted. The server does know, and writing the client's view over its own would un-accept every attendee each time the organiser edited anything. RFC 6638 section 3.2.1 says as much: an organiser may not set another participant's `PARTSTAT`. A *significant* change is the exception, and then `NEEDS-ACTION` is the right answer rather than a client's ignorance.
+
+Six details are easy to get wrong and are covered by tests: an organiser who is also an attendee is not sent an invitation; a reply carries only the attendee who replied, not the whole list; an unaccepted invitation is written `TRANSP:TRANSPARENT`, so it does not block the attendee's time; the `VTIMEZONE`s an event refers to travel with it, or the recipient's client cannot place it; and a reply is matched to its occurrence by `RECURRENCE-ID`, so accepting a series and declining one Tuesday stays two different answers.
+
+Every scheduling object is normalised as it is stored. Addresses go through `c:Dav.Web.Store.canonical_address/2` — one person may be `mailto:`, a bare address, or a URN depending on the client, and storing whichever spelling arrived means an attendee's reply stops matching the invitation it answers. The `CN` is rewritten from the principal's own name for the same reason: a client that invents a name for someone who has one would have every other participant see the invention.
+
+The rewrite happens only when it would change something, so an object already in canonical form costs one comparison and no write.
+
+## On time zones
+
+`tz` is a dependency, and the reason is `TZID`. `DTSTART;TZID=America/Los_Angeles:20260615T090000` is 16:00 UTC; reading it as 09:00 UTC moves the event seven hours, which is enough to put it inside or outside the window a client asked about. A *floating* time — no `TZID`, no `Z` — is resolved against the `CALDAV:timezone` in the request or the collection's `CALDAV:calendar-timezone`, as RFC 4791 section 3.1 requires, and an all-day value is midnight in that zone rather than midnight UTC.
+
+The database also decides whether a `VTIMEZONE` definition is required. RFC 7809 lets a client name a well-known zone and omit it; RFC 4791 section 4.1 requires it otherwise. Telling the two apart needs a zone database, and without one the check either refuses valid data or lets a typo through as a reference.
 
 ## On parsing XML safely
 

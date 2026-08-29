@@ -133,9 +133,24 @@ defmodule Dav.ConformanceFixturesTest do
              Enum.map_join(unreadable, "\n", fn {file, value} -> "  #{file}: #{value}" end)
   end
 
+  # Two fixtures are invalid on purpose: the suite sends them to check
+  # that a server refuses them. Reading them successfully would be the
+  # defect.
+  @deliberately_invalid ~w(CardDAV/vpropfinds/4.xml CardDAV/vpropfinds/5.xml)
+
+  test "the deliberately invalid bodies are refused" do
+    for file <- @deliberately_invalid do
+      body = File.read!(Path.join(@fixtures, file))
+
+      assert Xml.parse_propfind(body) == {:error, :malformed},
+             "#{file} is invalid by construction and must not parse"
+    end
+  end
+
   test "every request body a real client sends can be read" do
     failures =
       for {file, local, body} <- bodies(),
+          file not in @deliberately_invalid,
           result = parse(body, local),
           result != :skip,
           match?({:error, _reason}, result),

@@ -58,10 +58,14 @@ defmodule Dav.Cal.MkcalendarTest do
       assert conn.resp_body =~ ~s(xmlns:C="urn:ietf:params:xml:ns:caldav")
     end
 
-    test "over something that exists is 405", context do
+    test "over something that exists names DAV:resource-must-be-null", context do
       mkcalendar("/home/work", context.writable)
+      conn = mkcalendar("/home/work", context.writable)
 
-      assert mkcalendar("/home/work", context.writable).status == 405
+      # A bare 405 says the method was refused; the precondition says
+      # the URL was already taken, which is what the client can act on.
+      assert conn.status == 403
+      assert conn.resp_body =~ "resource-must-be-null"
     end
 
     test "with a missing parent is 409", context do

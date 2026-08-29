@@ -77,15 +77,17 @@ defmodule Dav.Cal.TimeRange do
   """
   @spec overlaps?(
           ICalendar.component() | ICalendar.property(),
-          {String.t() | nil, String.t() | nil}
-        ) ::
-          boolean()
+          {String.t() | nil, String.t() | nil},
+          String.t() | nil
+        ) :: boolean()
   # A `time-range` inside a `prop-filter` tests the property's own
   # value — "a CREATED within this window" — rather than a component's
   # extent. RFC 4791 section 9.9 allows both, and the filter evaluator
   # is handed whichever the filter named, so this must recognise both
   # rather than assuming a component and crashing on a property.
-  def overlaps?(%{value: value, parameters: _parameters} = property, range)
+  def overlaps?(component, range, floating \\ nil)
+
+  def overlaps?(%{value: value, parameters: _parameters} = property, range, _floating)
       when not is_map_key(property, :properties) do
     with {:ok, start} <- moment(elem(range, 0)),
          {:ok, finish} <- moment(elem(range, 1)),
@@ -96,11 +98,26 @@ defmodule Dav.Cal.TimeRange do
     end
   end
 
-  def overlaps?(component, {from, to}) do
+  # A VTODO is not an event with a different name. It may have no
+  # DTSTART at all, and then its place on the timeline comes from DUE,
+  # or COMPLETED, or CREATED, or nowhere — RFC 4791 section 9.9 gives
+  # it a table of its own with seven rows. Running the VEVENT rules
+  # over one finds nothing, because the first thing they look for is a
+  # DTSTART that is not there.
+  def overlaps?(%{name: "VTODO"} = todo, {from, to}, floating) do
+    with {:ok, start} <- moment(from),
+         {:ok, finish} <- moment(to) do
+      todo_overlaps?(todo, start, finish, floating)
+    else
+      _unreadable -> false
+    end
+  end
+
+  def overlaps?(component, {from, to}, floating) do
     with {:ok, start} <- moment(from),
          {:ok, finish} <- moment(to),
-         {:ok, dtstart} <- property_value(component, "DTSTART") do
-      extent = extent(component, dtstart)
+         {:ok, dtstart} <- property_value(component, "DTSTART", floating) do
+      extent = extent(component, dtstart, floating)
 
       component
       |> starts(dtstart)
@@ -144,13 +161,15 @@ defmodule Dav.Cal.TimeRange do
       {~s(~o"2026Y6M15DT9H0M0SZ"), ~s(~o"2026Y6M15DT10H0M0SZ")}
 
   """
-  @spec periods(ICalendar.component(), {String.t() | nil, String.t() | nil}) ::
+  @spec periods(ICalendar.component(), {String.t() | nil, String.t() | nil}, String.t() | nil) ::
           [{Tempo.t(), Tempo.t()}]
-  def periods(component, {from, to}) do
+  def periods(component, range, floating \\ nil)
+
+  def periods(component, {from, to}, floating) do
     with {:ok, start} <- moment(from),
          {:ok, finish} <- moment(to),
-         {:ok, dtstart} <- property_value(component, "DTSTART") do
-      extent = extent(component, dtstart)
+         {:ok, dtstart} <- property_value(component, "DTSTART", floating) do
+      extent = extent(component, dtstart, floating)
 
       component
       |> starts(dtstart)
@@ -177,6 +196,88 @@ defmodule Dav.Cal.TimeRange do
 
   defp earlier_of(moment, nil), do: moment
   defp earlier_of(moment, bound), do: if(earlier?(bound, moment), do: bound, else: moment)
+
+  # The RFC presents this as a table keyed on which properties are
+  # present, and it reads best kept that way: each row is one clause,
+  # named by the state it applies to.
+  defp todo_overlaps?(todo, start, finish, floating) do
+    times = %{
+      dtstart: optional(todo, "DTSTART", floating),
+      due: optional(todo, "DUE", floating),
+      completed: optional(todo, "COMPLETED", floating),
+      created: optional(todo, "CREATED", floating),
+      duration: property(todo, "DURATION")
+    }
+
+    todo_row(state(times), times, start, finish)
+  end
+
+  # Which row of the table applies, decided by presence alone. Written
+  # as a match on the shape rather than a chain of conditionals, since
+  # that is exactly what the RFC's leading `Y`/`N` columns are.
+  defp state(times) do
+    row(
+      {present?(times.dtstart), present?(times.duration), present?(times.due),
+       present?(times.completed), present?(times.created)}
+    )
+  end
+
+  defp present?(value), do: not is_nil(value)
+
+  defp row({true, true, _due, _completed, _created}), do: :dtstart_duration
+  defp row({true, false, true, _completed, _created}), do: :dtstart_due
+  defp row({true, false, false, _completed, _created}), do: :dtstart
+  defp row({false, _duration, true, _completed, _created}), do: :due
+  defp row({false, _duration, false, true, true}), do: :completed_created
+  defp row({false, _duration, false, true, false}), do: :completed
+  defp row({false, _duration, false, false, true}), do: :created
+  defp row({false, _duration, false, false, false}), do: :undated
+
+  # "(start <= DTSTART+DURATION) AND ((end > DTSTART) OR (end >= DTSTART+DURATION))"
+  defp todo_row(:dtstart_duration, times, start, finish) do
+    ends = shift(times.dtstart, times.duration.value)
+
+    not_later?(start, ends) and (later?(finish, times.dtstart) or not_later?(ends, finish))
+  end
+
+  # "((start < DUE) OR (start <= DTSTART)) AND ((end > DTSTART) OR (end >= DUE))"
+  defp todo_row(:dtstart_due, times, start, finish) do
+    (earlier?(start, times.due) or not_later?(start, times.dtstart)) and
+      (later?(finish, times.dtstart) or not_later?(times.due, finish))
+  end
+
+  defp todo_row(:dtstart, times, start, finish),
+    do: not_later?(start, times.dtstart) and later?(finish, times.dtstart)
+
+  defp todo_row(:due, times, start, finish),
+    do: earlier?(start, times.due) and not_later?(times.due, finish)
+
+  defp todo_row(:completed_created, times, start, finish) do
+    (not_later?(start, times.created) or not_later?(start, times.completed)) and
+      (not_later?(times.created, finish) or not_later?(times.completed, finish))
+  end
+
+  defp todo_row(:completed, times, start, finish),
+    do: not_later?(start, times.completed) and not_later?(times.completed, finish)
+
+  defp todo_row(:created, times, _start, finish), do: later?(finish, times.created)
+
+  # A task with no times at all is always in range: there is no
+  # evidence that it falls outside one.
+  defp todo_row(:undated, _times, _start, _finish), do: true
+
+  # An absent bound is an open end, and comparisons against it are
+  # answered by the caller rather than here.
+  defp optional(component, name, floating) do
+    case property_value(component, name, floating) do
+      {:ok, moment} -> moment
+      :error -> nil
+    end
+  end
+
+  # `earlier?/2` already answers an open end as true, so this only has
+  # to flip the arguments.
+  defp later?(a, b), do: earlier?(b, a)
 
   # "Time range tests MUST consider every recurrence instance ... if
   # any one instance matches, then the test returns true."
@@ -220,8 +321,8 @@ defmodule Dav.Cal.TimeRange do
   # length is measured once and applied to each instance's start.
   # Comparing a later instance against the original `DTEND` is how a
   # weekly event silently stops matching after its first week.
-  defp extent(component, dtstart) do
-    dtend = property_value(component, "DTEND")
+  defp extent(component, dtstart, floating) do
+    dtend = property_value(component, "DTEND", floating)
     duration = property(component, "DURATION")
 
     cond do
@@ -287,10 +388,65 @@ defmodule Dav.Cal.TimeRange do
 
   defp property(component, name), do: Enum.find(component.properties, &(&1.name == name))
 
-  defp property_value(component, name) do
+  # A `TZID` parameter is not decoration: `DTSTART;TZID=America/Los_
+  # Angeles:20260615T090000` is 16:00 UTC, and reading it as 09:00 UTC
+  # puts every event in the wrong place by hours — enough to move it
+  # into or out of the window a client asked about. Comparisons here
+  # are all against UTC instants, so the zone is applied on the way in.
+  defp property_value(component, name, floating) do
     case property(component, name) do
-      nil -> :error
-      %{value: value} -> moment(value)
+      nil ->
+        :error
+
+      %{value: value, parameters: parameters} ->
+        moment(value, zone_of(parameters, value, floating))
+    end
+  end
+
+  # A value with no `TZID` and no trailing `Z` is *floating* — the same
+  # wall-clock reading everywhere. RFC 4791 section 3.1 says a server
+  # converting one for a `time-range` must use the `CALDAV:timezone`
+  # from the request, or failing that the collection's
+  # `CALDAV:calendar-timezone`. Reading it as UTC instead silently
+  # moves every floating event by the collection's offset.
+  defp zone_of(parameters, value, floating) do
+    case Map.get(parameters, "TZID") do
+      nil -> if String.ends_with?(value, "Z"), do: nil, else: floating
+      zone -> zone
+    end
+  end
+
+  defp moment(value, nil), do: moment(value)
+
+  defp moment(value, zone) do
+    with {:ok, parsed} <- moment(value),
+         {:ok, naive} <- naive(parsed),
+         {:ok, local} <- DateTime.from_naive(naive, zone),
+         {:ok, utc} <- DateTime.shift_zone(local, "Etc/UTC") do
+      Tempo.from_iso8601(Calendar.strftime(utc, "%Y%m%dT%H%M%SZ"))
+    else
+      # An unresolvable zone leaves the value as written rather than
+      # dropping the component: a time in an unknown zone is still
+      # closer to right than no time at all.
+      _unresolvable -> moment(value)
+    end
+  end
+
+  # An all-day value converts too. `20270102` in New York begins at
+  # 05:00 UTC, not at midnight UTC, and an all-day event compared as
+  # though it were UTC starts five hours early — enough to fall inside
+  # a window it does not belong to.
+  defp naive(parsed) do
+    case Tempo.to_naive_date_time(parsed) do
+      {:ok, naive} -> {:ok, naive}
+      _not_a_date_time -> midnight(parsed)
+    end
+  end
+
+  defp midnight(parsed) do
+    case Tempo.to_elixir(parsed) do
+      {:ok, %Date{} = date} -> NaiveDateTime.new(date, ~T[00:00:00])
+      _not_a_date -> :error
     end
   end
 
@@ -300,7 +456,11 @@ defmodule Dav.Cal.TimeRange do
   # Both sides are always present here: an open end is handled before
   # a comparison is reached, and a component with no DTSTART never
   # gets this far.
+  defp earlier?(nil, _b), do: true
+  defp earlier?(_a, nil), do: true
   defp earlier?(a, b), do: Compare.compare_endpoints(a, b) == :earlier
 
+  defp not_later?(nil, _b), do: true
+  defp not_later?(_a, nil), do: true
   defp not_later?(a, b), do: Compare.compare_endpoints(a, b) in [:earlier, :same]
 end

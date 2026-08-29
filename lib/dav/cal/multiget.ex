@@ -28,6 +28,7 @@ defmodule Dav.Cal.Multiget do
   @behaviour Dav.Web.Report
 
   alias Dav.Cal
+  alias Dav.Cal.Selection
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -40,8 +41,16 @@ defmodule Dav.Cal.Multiget do
   # collection it addressed was the wrong kind. The hrefs are resolved
   # on their own merits.
   def run(%Resource{}, body, _depth, options) do
-    with {:ok, document} <- Xml.parse(body) do
+    with {:ok, document} <- Xml.parse(body),
+         :ok <- Selection.supported(calendar_data(document)) do
       {:ok, Enum.map(hrefs(document), &answer(&1, requested(document), options))}
+    end
+  end
+
+  defp calendar_data(document) do
+    case Enum.find(document.children, &named?(&1, "prop")) do
+      nil -> nil
+      element -> Enum.find(element.children, &named?(&1, "calendar-data"))
     end
   end
 
@@ -49,7 +58,17 @@ defmodule Dav.Cal.Multiget do
     for child <- document.children, named?(child, "href"), do: String.trim(child.text)
   end
 
+  # A report may ask for named properties, or for all of them, or for
+  # their names alone — the same three forms PROPFIND offers.
   defp requested(document) do
+    cond do
+      Enum.any?(document.children, &named?(&1, "allprop")) -> :allprop
+      Enum.any?(document.children, &named?(&1, "propname")) -> :propname
+      true -> named_properties(document)
+    end
+  end
+
+  defp named_properties(document) do
     case Enum.find(document.children, &named?(&1, "prop")) do
       nil -> []
       element -> for child <- element.children, do: child.name

@@ -26,12 +26,15 @@ defmodule Dav.CalDAVTester.Runner do
   alias Dav.Cal
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
+  alias Dav.Cal.Sharing
   alias Dav.CalDAVTester.Features
   alias Dav.CalDAVTester.Scenario
   alias Dav.CalDAVTester.ServerInfo
   alias Dav.CalDAVTester.Verifier
   alias Dav.Test.SchedulingStore
+  alias Dav.Web.Acl
   alias Dav.Web.Plug, as: DavPlug
+  alias Dav.Web.Principal
   alias Dav.Web.Resource
   alias Dav.Xml
   alias Plug.Conn
@@ -42,6 +45,10 @@ defmodule Dav.CalDAVTester.Runner do
   # How many of the suite's users to provision. The scheduling
   # scenarios name up to five between them.
   @people 5
+
+  # How many accounts `serverinfo.xml` declares. Credentials are
+  # checked against all of them.
+  @accounts 40
 
   # The methods this server dispatches. Anything else in a scenario is
   # reported as skipped rather than failed: not answering `POST` is a
@@ -72,7 +79,7 @@ defmodule Dav.CalDAVTester.Runner do
   """
   @spec run(Scenario.t(), map()) :: [{String.t(), String.t(), outcome()}]
   def run(scenario, substitutions) do
-    options = scenario |> provision(substitutions) |> plug_options()
+    options = scenario |> provision(substitutions) |> plug_options(substitutions)
     state = %{substitutions: substitutions, options: options, etags: %{}}
 
     # One server per scenario, and the `<start>` block runs against it
@@ -86,14 +93,31 @@ defmodule Dav.CalDAVTester.Runner do
         state
       end)
 
-    {results, _state} =
+    {results, state} =
       Enum.map_reduce(Scenario.tests(scenario, Features.declared()), state, fn {suite, test},
                                                                                state ->
         {outcome, state} = run_test(test, state)
         {{suite.name, test.name, outcome}, state}
       end)
 
+    # "Delete any resources from requests marked with 'end-delete'" —
+    # step 4 of the suite's own procedure, before the `<end>` block.
+    # Skipping it leaves a scenario's own litter for its teardown to
+    # trip over.
+    clean_up(scenario, state)
+
     results
+  end
+
+  defp clean_up(scenario, state) do
+    for {_suite, test} <- Scenario.tests(scenario, Features.declared()),
+        request <- test.requests,
+        request.end_delete?,
+        uri <- uris(request, state) do
+      send_plain("DELETE", uri, state)
+    end
+
+    :ok
   end
 
   # State threads through a scenario because the suite does: `GETNEW`
@@ -159,7 +183,7 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp run_plain(request, state) do
     if dispatched?(request.method) do
-      case send_request(request, state.substitutions, state.options) do
+      case send_request(request, state.substitutions, as(request, state)) do
         {:ok, conn} -> record(request, conn, state)
         {other, _reason} = failure -> {put_elem(failure, 0, other), state}
       end
@@ -237,7 +261,18 @@ defmodule Dav.CalDAVTester.Runner do
       chosen ->
         conn = send_plain("GET", chosen, state)
         state = remember(request, chosen, state)
-        state = Enum.reduce(request.grabs, state, &grab(&1, conn, request, &2))
+
+        # `graburi` is skipped here: `remember/3` has already bound it
+        # to the resource that was *found*, and the general pass binds
+        # it to the request's own URI instead. On a compound method
+        # that URI is the collection searched, so re-running it
+        # replaced the resource with its parent and the next request
+        # wrote to the collection.
+        state =
+          request.grabs
+          |> Enum.reject(&match?({:uri, _argument, _variable}, &1))
+          |> Enum.reduce(state, &grab(&1, conn, request, &2))
+
         {verify(request, conn, state), state}
     end
   end
@@ -267,9 +302,14 @@ defmodule Dav.CalDAVTester.Runner do
     |> Enum.find(fn uri -> String.contains?(send_plain("GET", uri, state).resp_body, text) end)
   end
 
-  # `GETNEW` exists to name a resource for later requests, so the URI
-  # it chose is written into the variable `graburi` asks for.
+  # `GETNEW` exists to name a resource for later requests. The URI it
+  # chose goes into whatever `graburi` asks for *and* into the bare
+  # `$`, which the suite uses as "the resource the last GETNEW found"
+  # — 131 requests address it that way, and without the binding each
+  # is an unresolvable URI rather than a test.
   defp remember(request, uri, state) do
+    state = bind(state, "$", uri)
+
     Enum.reduce(request.grabs, state, fn
       {:uri, _argument, variable}, state -> bind(state, variable, uri)
       _other, state -> state
@@ -302,10 +342,20 @@ defmodule Dav.CalDAVTester.Runner do
     end
   end
 
+  # A response's member URL is its *direct* child `DAV:href`, never a
+  # descendant one. Properties carry hrefs of their own —
+  # `current-user-principal`, `owner`, `calendar-home-set` — and
+  # counting those as members makes a listing report the principal
+  # URL as a resource inside the collection. The compound directives
+  # act on that listing, so DELETEALL then deletes the principal.
   defp hrefs(document) do
     for response <- descendants(document, "response"),
-        href <- descendants(response, "href"),
+        href <- children(response, "href"),
         do: String.trim(href.text)
+  end
+
+  defp children(element, name) do
+    Enum.filter(element.children, &match?(%{name: {_namespace, ^name}}, &1))
   end
 
   defp descendants(element, name) do
@@ -313,7 +363,23 @@ defmodule Dav.CalDAVTester.Runner do
     matching ++ Enum.flat_map(element.children, &descendants(&1, name))
   end
 
-  defp send_plain(method, uri, state, headers \\ [], body \\ "") do
+  # A `<ruri>` that resolved to something that is not a path — an
+  # address, or an unbound variable — cannot be requested. Answering
+  # 500 keeps a scenario moving instead of taking the sweep down.
+  defp send_plain(method, uri, state, headers \\ [], body \\ "")
+
+  defp send_plain(_method, uri, _state, _headers, _body) when not is_binary(uri),
+    do: %Plug.Conn{status: 500, resp_body: ""}
+
+  defp send_plain(method, uri, state, headers, body) do
+    if String.starts_with?(uri, "/") do
+      requested(method, uri, state, headers, body)
+    else
+      %Plug.Conn{status: 500, resp_body: ""}
+    end
+  end
+
+  defp requested(method, uri, state, headers, body) do
     conn =
       Enum.reduce(headers, PlugTest.conn(method, uri, body), fn {name, value}, conn ->
         Conn.put_req_header(conn, name, value)
@@ -322,6 +388,58 @@ defmodule Dav.CalDAVTester.Runner do
     DavPlug.call(conn, state.options)
   rescue
     _error -> %Plug.Conn{status: 500, resp_body: ""}
+  end
+
+  # A request is made *as* somebody. The suite says who with a `user`
+  # attribute, defaulting to the first account, and properties like
+  # `DAV:current-user-principal` differ per caller — a harness that
+  # ignores it cannot test access control at all.
+  defp as(request, state) do
+    Map.put(state.options, :principal, principal_for(request, state))
+  end
+
+  # Only *wrong* credentials fail. `auth='no'` marks an endpoint that
+  # does not need a user at all — the server-to-server receiver is
+  # one — and treating it as a rejection would 401 every legitimately
+  # anonymous request in the suite.
+  defp principal_for(request, state) do
+    index = account(request, state)
+
+    if correct?(request, index, state),
+      do: state.substitutions["$principal#{index}:"],
+      else: nil
+  end
+
+  defp correct?(%{password: nil}, _index, _state), do: true
+
+  # Matched against every password the server info declares, not just
+  # the numbered accounts: the suite has named ones too — an
+  # internationalised login among them — and checking only
+  # `$pswdN:` rejects those as though they were wrong. What the suite
+  # actually uses to mean "wrong credentials" is a literal that
+  # belongs to no account.
+  defp correct?(%{password: password}, _index, state) do
+    ServerInfo.expand(password, state.substitutions) in passwords(state.substitutions)
+  end
+
+  defp passwords(substitutions) do
+    for {key, value} <- substitutions,
+        String.contains?(key, "pswd"),
+        is_binary(value),
+        into: MapSet.new(),
+        do: value
+  end
+
+  defp account(%{user: nil}, _state), do: 1
+
+  # Searched across every account the server info declares, not just
+  # the ones provisioned with calendars. Authenticating is a question
+  # about credentials; whether that account has anything here is a
+  # different question, answered later by the store.
+  defp account(%{user: user}, state) do
+    name = ServerInfo.expand(user, state.substitutions)
+
+    Enum.find(1..@accounts, 1, fn index -> state.substitutions["$userid#{index}:"] == name end)
   end
 
   defp dispatched?(method), do: method in @implemented
@@ -391,11 +509,17 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp follow(nil, _path), do: nil
 
+  # The first step may name the document's own root — a `CS:shared-as`
+  # response *is* that element, and looking only among its descendants
+  # finds nothing. Every later step descends normally.
   defp follow(element, [name | rest]) do
-    element
-    |> all()
-    |> Enum.find(&(clark(&1.name) == String.trim(name)))
-    |> follow(rest)
+    wanted = String.trim(name)
+
+    if clark(element.name) == wanted do
+      follow(element, rest)
+    else
+      element |> all() |> Enum.find(&(clark(&1.name) == wanted)) |> follow(rest)
+    end
   end
 
   defp all(element), do: element.children ++ Enum.flat_map(element.children, &all/1)
@@ -428,7 +552,6 @@ defmodule Dav.CalDAVTester.Runner do
       PlugTest.conn(request.method, uri, body)
       |> put_headers(request.headers, substitutions)
       |> put_content_type(request.data)
-      |> default_depth(request)
 
     {:ok, DavPlug.call(conn, options)}
   rescue
@@ -465,22 +588,6 @@ defmodule Dav.CalDAVTester.Runner do
   defp put_content_type(conn, %{content_type: type}),
     do: Conn.put_req_header(conn, "content-type", type)
 
-  # RFC 4791 says a `REPORT` without a `Depth` header means `Depth: 0`,
-  # and this server obeys that. Upstream's client sends `Depth: 1`, and
-  # 114 of the suite's REPORTs omit the header while expecting a
-  # collection's contents back — so the harness supplies what the real
-  # client would, rather than the server bending the specification to
-  # match a header it was never sent.
-  defp default_depth(conn, %{method: "REPORT", headers: headers}) do
-    if Enum.any?(headers, fn {name, _value} -> String.downcase(name || "") == "depth" end) do
-      conn
-    else
-      Conn.put_req_header(conn, "depth", "1")
-    end
-  end
-
-  defp default_depth(conn, _request), do: conn
-
   # Verifier arguments are written in the same `$variable:` language as
   # the requests — `okhrefs` names `$calendarhome1:/calendar/1.ics` —
   # so they must be expanded too. Comparing an expanded response href
@@ -491,7 +598,7 @@ defmodule Dav.CalDAVTester.Runner do
     |> Enum.filter(&Scenario.applicable?(&1, Features.declared()))
     |> Enum.map(&expand_arguments(&1, state))
     |> Enum.reduce_while(:passed, fn check, _outcome ->
-      case Verifier.run(check, conn) do
+      case Verifier.run(check, conn, state.substitutions) do
         :passed -> {:cont, :passed}
         other -> {:halt, other}
       end
@@ -542,37 +649,79 @@ defmodule Dav.CalDAVTester.Runner do
     # separate collection would appear in every listing the suite
     # checks.
     collections =
-      for home <- homes, leaf <- ["calendar", "notification"], do: home ++ [leaf]
+      for home <- homes, leaf <- ["calendar"], do: home ++ [leaf]
+
+    owners =
+      for {index, home} <- people,
+          owner = substitutions["$principal#{index}:"],
+          is_binary(owner),
+          into: %{},
+          do: {home, owner}
 
     resources =
       ([[] | ancestors(homes)] ++ homes)
       |> Enum.uniq()
-      |> Enum.map(&%Resource{path: &1, collection?: true})
+      |> Enum.map(&%Resource{path: &1, collection?: true, owner: owner_of(&1, owners)})
 
     calendars =
       for path <- collections,
-          do: %Resource{path: path, collection?: true, types: [Cal.calendar()]}
+          do: %Resource{
+            path: path,
+            collection?: true,
+            types: [Cal.calendar()],
+            owner: owner_of(path, owners)
+          }
 
     # RFC 6638: the Inbox and Outbox are ordinary collections
     # distinguished by their resource type, and scheduling needs them
     # to exist before any of it can be exercised.
+    # A notification collection is where sharing invitations arrive.
+    notifications =
+      for home <- homes,
+          do: %Resource{
+            path: home ++ ["notification"],
+            collection?: true,
+            types: [Sharing.notification()],
+            owner: owner_of(home, owners)
+          }
+
     scheduling =
       for home <- homes,
           {leaf, type} <- [{"inbox", Schedule.inbox()}, {"outbox", Schedule.outbox()}],
-          do: %Resource{path: home ++ [leaf], collection?: true, types: [type]}
+          do: %Resource{
+            path: home ++ [leaf],
+            collection?: true,
+            types: [type],
+            owner: owner_of(home, owners)
+          }
 
+    # Every spelling resolves to the same home, the canonical `urn:`
+    # form included. Leaving it out means delivery works on the first
+    # write and stops the moment addresses are normalised, which is
+    # the moment it matters.
     addresses =
       for {index, home} <- people,
-          address <- [substitutions["$cuaddr#{index}:"], substitutions["$email#{index}:"]],
+          key <- ~w(cuaddr email cuaddrurn cuaddralt),
+          address = substitutions["$#{key}#{index}:"],
           is_binary(address),
           into: %{},
           do: {address, home}
+
+    # The suite posts server-to-server messages at a top-level
+    # endpoint, which a deployment marks explicitly.
+    receiver = [%Resource{path: ["inbox"], collection?: true, types: [Schedule.receiver()]}]
 
     principals =
       for {index, _home} <- people,
           path = substitutions["$principal#{index}:"],
           is_binary(path),
-          do: %Resource{path: segments(path), collection?: true}
+          do: %Resource{
+            path: segments(path),
+            collection?: true,
+            types: [Acl.principal()],
+            owner: path,
+            display_name: substitutions["$username#{index}:"]
+          }
 
     tree =
       principals
@@ -582,10 +731,31 @@ defmodule Dav.CalDAVTester.Runner do
       |> Enum.map(&%Resource{path: &1, collection?: true})
 
     SchedulingStore.start(
-      resources ++ calendars ++ scheduling ++ tree ++ principals,
+      resources ++ calendars ++ scheduling ++ notifications ++ tree ++ principals ++ receiver,
       addresses,
-      principal_properties(people, substitutions)
+      principal_properties(people, substitutions),
+      canonical_addresses(people, substitutions)
     )
+  end
+
+  # Every spelling of a user maps to the one form the server stores.
+  # The suite's expectations are written in that form, which is how it
+  # checks a server actually normalises rather than echoing back
+  # whatever the client sent.
+  defp canonical_addresses(people, substitutions) do
+    for {index, _home} <- people,
+        canonical = substitutions["$cuaddrurn#{index}:"],
+        is_binary(canonical),
+        spelling <- spellings(index, substitutions, canonical),
+        into: %{},
+        do: {String.downcase(spelling), canonical}
+  end
+
+  defp spellings(index, substitutions, canonical) do
+    ["$cuaddr#{index}:", "$email#{index}:", "$cuaddralt#{index}:"]
+    |> Enum.map(&substitutions[&1])
+    |> Enum.filter(&is_binary/1)
+    |> Enum.concat([canonical])
   end
 
   # RFC 6638 puts a principal's scheduling URLs on the principal
@@ -609,6 +779,14 @@ defmodule Dav.CalDAVTester.Runner do
     end
   end
 
+  # Access control is computed from ownership, so every resource inside
+  # a user's home carries their principal URL.
+  defp owner_of(path, owners) do
+    Enum.find_value(owners, fn {home, owner} ->
+      if Enum.take(path, length(home)) == home, do: owner
+    end)
+  end
+
   defp ancestors(homes) do
     homes
     |> Enum.flat_map(fn home -> for n <- 1..length(home)//1, do: Enum.take(home, n) end)
@@ -617,13 +795,25 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp segments(path), do: path |> String.split("/", trim: true)
 
-  defp plug_options(context) do
+  defp plug_options(context, substitutions) do
     DavPlug.init(
       store: SchedulingStore,
       context: context,
-      methods: [{"MKCALENDAR", Cal.Mkcalendar}, {"POST", Cal.Outbox}],
+      methods: [{"MKCALENDAR", Cal.Mkcalendar}, {"POST", Cal.Post}],
       validators: [Cal.Object],
+      hooks: [Cal.Scheduling, Cal.Sharing],
+      authentication: :required,
+      # The compound directives — GETNEW, DELETEALL and the rest —
+      # are the harness acting on its own behalf rather than a
+      # scenario's, so they act as the first account. A per-request
+      # `user` overrides this.
+      principal: substitutions["$principal1:"],
       reports: [
+        {{Xml.dav(), "acl-principal-prop-set"}, Principal.AclPrincipalPropSet},
+        {{Xml.dav(), "principal-match"}, Principal.Match},
+        {{Xml.dav(), "principal-property-search"}, Principal.PropertySearch},
+        {{Xml.dav(), "principal-search-property-set"}, Principal.SearchPropertySet},
+        {{Xml.dav(), "expand-property"}, Principal.ExpandProperty},
         {{Xml.caldav(), "calendar-query"}, Cal.Query},
         {{Xml.caldav(), "calendar-multiget"}, Cal.Multiget},
         {{Xml.caldav(), "free-busy-query"}, Cal.FreeBusy}

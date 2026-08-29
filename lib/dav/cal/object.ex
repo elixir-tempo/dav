@@ -367,9 +367,13 @@ defmodule Dav.Cal.Object do
     end
   end
 
-  defp siblings(collection, path, %{store: store, context: context}) do
+  # The resource being written never conflicts with itself, and neither
+  # does one that is about to be moved away.
+  defp siblings(collection, path, %{store: store, context: context} = options) do
+    ignoring = [path, Map.get(options, :ignoring)]
+
     case store.children(collection, context) do
-      {:ok, children} -> Enum.reject(children, &(&1.collection? or &1.path == path))
+      {:ok, children} -> Enum.reject(children, &(&1.collection? or &1.path in ignoring))
       _nothing -> []
     end
   end
@@ -415,6 +419,35 @@ defmodule Dav.Cal.Object do
   @spec applies?(Resource.t() | nil) :: boolean()
   def applies?(%Resource{} = collection), do: Cal.calendar?(collection)
   def applies?(_absent), do: false
+
+  @doc """
+  Whether a collection may be created inside this one.
+
+  ### Arguments
+
+  * `collection` is the parent collection.
+
+  ### Returns
+
+  * `{:error, precondition}` inside a calendar collection, which may
+    hold calendar object resources and nothing else; `:ok` otherwise.
+
+  ### Examples
+
+      iex> Dav.Cal.Object.permit_collection(%Dav.Web.Resource{collection?: true, types: [Dav.Cal.calendar()]})
+      {:error, {"urn:ietf:params:xml:ns:caldav", "calendar-collection-location-ok"}}
+
+      iex> Dav.Cal.Object.permit_collection(%Dav.Web.Resource{collection?: true})
+      :ok
+
+  """
+  @impl Dav.Web.Validator
+  @spec permit_collection(Resource.t() | nil) :: :ok | {:error, violation()}
+  def permit_collection(collection) do
+    if applies?(collection),
+      do: {:error, precondition("calendar-collection-location-ok")},
+      else: :ok
+  end
 
   defp precondition(name), do: {Xml.caldav(), name}
 end

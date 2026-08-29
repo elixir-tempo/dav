@@ -138,6 +138,56 @@ defmodule Dav.Xml do
   end
 
   @doc """
+  Render responses as bare `DAV:response` elements.
+
+  `DAV:expand-property` (RFC 3253 section 3.8) nests the referenced
+  resources' responses *inside* the property that pointed at them, so
+  what it needs is the responses without a `DAV:multistatus` wrapper
+  around them. Wrapping anyway produces a document a client cannot
+  read: a multistatus inside a property value is not what the grammar
+  allows.
+
+  ### Arguments
+
+  * `responses` are `{href, propstats}` pairs.
+
+  ### Returns
+
+  * The responses as iodata, with namespaces declared on each.
+
+  ### Examples
+
+      iex> Dav.Xml.responses([{"/c/", [{"HTTP/1.1 200 OK", [{{"DAV:", "displayname"}, "Work"}]}]}])
+      ...> |> IO.iodata_to_binary()
+      ...> |> String.starts_with?("<D:response")
+      true
+
+  """
+  @spec responses([{String.t(), [{String.t(), [{qname(), value()}]}]}]) :: [binary()]
+  def responses(responses) when is_list(responses) do
+    prefixes = prefixes(responses)
+    root = prefixes[@dav]
+
+    declarations =
+      Enum.map(prefixes, fn {namespace, prefix} ->
+        [" xmlns:", prefix, "=\"", escape(namespace), "\""]
+      end)
+
+    # The namespaces are declared on each response rather than on a
+    # shared root, because there is no shared root here.
+    Enum.map(responses, fn response ->
+      response
+      |> response(prefixes, root)
+      |> IO.iodata_to_binary()
+      |> String.replace(
+        "<#{root}:response>",
+        "<#{root}:response#{IO.iodata_to_binary(declarations)}>",
+        global: false
+      )
+    end)
+  end
+
+  @doc """
   Build a `207 Multi-Status` body.
 
   The shape every `PROPFIND` and most `REPORT`s answer with: one
@@ -395,15 +445,21 @@ defmodule Dav.Xml do
 
   defp propfind(body) do
     case scan(body) do
-      {:ok, document} ->
-        cond do
-          child?(document, "allprop") -> {:ok, :allprop}
-          child?(document, "propname") -> {:ok, :propname}
-          true -> {:ok, {:prop, requested(document)}}
-        end
+      {:ok, document} -> requested_form(document)
+      {:error, :malformed} = error -> error
+    end
+  end
 
-      {:error, :malformed} = error ->
-        error
+  # RFC 4918's grammar is `propfind := (propname | (allprop, include?) |
+  # prop)` — exactly one of the three. A body naming two of them is
+  # asking two different questions at once, and answering the first
+  # silently gives the client a reply to a request it did not make.
+  defp requested_form(document) do
+    case Enum.filter(~w(allprop propname prop), &child?(document, &1)) do
+      ["allprop"] -> {:ok, :allprop}
+      ["propname"] -> {:ok, :propname}
+      ["prop"] -> {:ok, {:prop, requested(document)}}
+      _none_or_several -> {:error, :malformed}
     end
   end
 
@@ -711,10 +767,36 @@ defmodule Dav.Xml do
   defp properties_of(_other), do: []
 
   defp named_value({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t} = element) do
-    [{element_qname(element), text_of(content)}]
+    [{element_qname(element), structured(content)}]
   end
 
   defp named_value(_other), do: []
+
+  # A property's value is not always text. `CALDAV:schedule-default-
+  # calendar-URL` holds a `DAV:href`, and `DAV:resourcetype` holds
+  # empty elements; flattening either to its text content stores
+  # something that cannot be read back — the client set an href and
+  # would be handed a bare string.
+  defp structured(content) do
+    case Enum.filter(
+           content,
+           &match?({:xmlElement, _n, _e, _i, _s, _p, _o, _a, _c, _l, _pa, _t}, &1)
+         ) do
+      [] -> text_of(content)
+      elements -> shaped(elements)
+    end
+  end
+
+  defp shaped(elements) do
+    if Enum.all?(elements, &(element_qname(&1) == {@dav, "href"})) do
+      {:hrefs, Enum.map(elements, &element_text/1)}
+    else
+      {:names, Enum.map(elements, &element_qname/1)}
+    end
+  end
+
+  defp element_text({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t}),
+    do: String.trim(text_of(content))
 
   defp text_of(content) do
     Enum.map_join(content, fn

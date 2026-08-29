@@ -1,6 +1,8 @@
 defmodule Dav.Web.PlugTest do
   use ExUnit.Case, async: true
 
+  doctest Dav.Web.Plug
+
   import Plug.Test
   import Plug.Conn
 
@@ -167,6 +169,36 @@ defmodule Dav.Web.PlugTest do
       conn = DavPlug.call(request("PROPFIND", "/calendars", "<not xml"), context.options)
 
       assert conn.status == 400
+    end
+  end
+
+  describe "authentication" do
+    test "an anonymous request is 401 when authentication is required", context do
+      options = %{context.options | authentication: :required, principal: nil}
+
+      conn = DavPlug.call(request("PROPFIND", "/calendars", "", [{"depth", "0"}]), options)
+
+      # A `401` and not a `403`: the server does not yet know who is
+      # asking, so the client is told to identify itself rather than
+      # that it may not have this.
+      assert conn.status == 401
+      assert [~s(Basic realm="dav")] = get_resp_header(conn, "www-authenticate")
+    end
+
+    test "an identified request proceeds when authentication is required", context do
+      options = %{context.options | authentication: :required, principal: "/principals/one/"}
+
+      conn = DavPlug.call(request("PROPFIND", "/calendars", "", [{"depth", "0"}]), options)
+
+      assert conn.status == 207
+    end
+
+    test "an anonymous request proceeds when authentication is optional", context do
+      options = %{context.options | authentication: :optional, principal: nil}
+
+      conn = DavPlug.call(request("PROPFIND", "/calendars", "", [{"depth", "0"}]), options)
+
+      assert conn.status == 207
     end
   end
 end

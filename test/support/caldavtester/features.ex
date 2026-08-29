@@ -37,7 +37,36 @@ defmodule Dav.CalDAVTester.Features do
   #   MOVE Method   — RFC 4918 MOVE, likewise.
   #   regular-collection — ordinary collections may be created inside
   #                   a calendar home, which MKCOL supports.
-  @declared ~w(caldav) ++ ["COPY Method", "MOVE Method", "regular-collection"]
+  #   current-user-principal, REPORT principal-* , expand-property
+  #                 — RFC 3744 discovery and RFC 5397, in
+  #                   `Dav.Web.Principal` and `Dav.Web.Acl`. The `ACL`
+  #                   *method* is deliberately not declared: the
+  #                   properties are computed from ownership and
+  #                   cannot yet be written.
+  @declared ~w(caldav) ++
+              [
+                "COPY Method",
+                "MOVE Method",
+                "regular-collection",
+                # RFC 3744's discovery reports and RFC 5397's
+                # `DAV:current-user-principal`, in `Dav.Web.Principal`.
+                "current-user-principal",
+                "acl-principal-prop-set",
+                "REPORT principal-match",
+                "REPORT principal-property-search",
+                "REPORT principal-search-property-set",
+                "expand-property",
+                # RFC 6638 implicit scheduling, in `Dav.Cal.Scheduling`:
+                # storing an event with attendees delivers the
+                # invitations, and an attendee's reply reaches the
+                # organiser.
+                "implicit-scheduling",
+                # Apple's sharing extension, in `Dav.Cal.Sharing`:
+                # invitations, notifications, and the shared-calendar
+                # properties. Not an RFC, and the most widely deployed
+                # CalDAV extension there is.
+                "shared-calendars"
+              ]
 
   @doc """
   The features this server declares.

@@ -44,6 +44,50 @@ defmodule Dav.Cal.Selection do
         }
 
   @doc """
+  Whether the client asked for calendar data this server can return.
+
+  `CALDAV:calendar-data` may carry `content-type` and `version`
+  attributes naming the form the client wants back. There is one form
+  this server returns — iCalendar 2.0 — and a client that asked for
+  jCal and received iCalendar would mis-parse every object rather than
+  fail cleanly, so the request is refused instead.
+
+  ### Arguments
+
+  * `element` is the `calendar-data` element, or `nil`.
+
+  ### Returns
+
+  * `:ok`, or `{:error, precondition}`.
+
+  ### Examples
+
+      iex> body = ~s(<?xml version="1.0"?><C:calendar-data xmlns:C="urn:ietf:params:xml:ns:caldav" content-type="application/calendar+json"/>)
+      iex> {:ok, element} = Dav.Xml.parse(body)
+      iex> Dav.Cal.Selection.supported(element)
+      {:error, {"urn:ietf:params:xml:ns:caldav", "supported-calendar-data"}}
+
+      iex> body = ~s(<?xml version="1.0"?><C:calendar-data xmlns:C="urn:ietf:params:xml:ns:caldav" content-type="text/calendar" version="2.0"/>)
+      iex> {:ok, element} = Dav.Xml.parse(body)
+      iex> Dav.Cal.Selection.supported(element)
+      :ok
+
+  """
+  @spec supported(Xml.element() | nil) :: :ok | {:error, Xml.qname()}
+  def supported(nil), do: :ok
+
+  def supported(element) do
+    type = Map.get(element.attributes, "content-type", "text/calendar")
+    version = Map.get(element.attributes, "version", "2.0")
+
+    if type == "text/calendar" and version == "2.0" do
+      :ok
+    else
+      {:error, {Xml.caldav(), "supported-calendar-data"}}
+    end
+  end
+
+  @doc """
   Read a selection from a `CALDAV:calendar-data` element.
 
   ### Arguments
@@ -167,24 +211,8 @@ defmodule Dav.Cal.Selection do
 
   defp write(nil), do: ""
 
-  defp write(component),
-    do: component |> lines() |> Enum.map_join("", &(ICalendar.fold(&1) <> "\r\n"))
-
-  # Built as a flat list of content lines rather than by concatenating
-  # rendered sub-components: joining strings that already end in CRLF
-  # is how a blank line creeps between components, and a blank line
-  # ends the object as far as some readers are concerned.
-  defp lines(component) do
-    ["BEGIN:" <> component.name] ++
-      Enum.map(component.properties, &line/1) ++
-      Enum.flat_map(component.components, &lines/1) ++
-      ["END:" <> component.name]
-  end
-
-  defp line(property) do
-    parameters =
-      Enum.map_join(property.parameters, "", fn {name, value} -> ";" <> name <> "=" <> value end)
-
-    property.name <> parameters <> ":" <> property.value
-  end
+  # `Dav.Cal.ICalendar.write/1` re-escapes values, which matters here:
+  # the reader turned `\\n` into a newline, and writing that back raw
+  # would end the object at the first multi-line DESCRIPTION.
+  defp write(component), do: ICalendar.write(component)
 end

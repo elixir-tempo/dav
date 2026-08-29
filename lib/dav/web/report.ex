@@ -63,7 +63,12 @@ defmodule Dav.Web.Report do
     grammar, which becomes a `400`; or
 
   * `{:error, :forbidden}`, a `403`, when the report cannot run
-    against this kind of resource at all.
+    against this kind of resource at all; or
+
+  * `{:error, qname}`, also a `403`, naming the precondition the
+    request broke — `CALDAV:supported-calendar-data` when a client
+    asks for calendar data in a media type this server does not
+    return.
 
   """
   @typedoc "What the plug resolved for this request."
@@ -77,5 +82,6 @@ defmodule Dav.Web.Report do
   @type body :: {:body, content_type :: String.t(), iodata()}
 
   @callback run(Resource.t(), body :: binary(), depth :: 0 | 1, options()) ::
-              {:ok, [response()] | body()} | {:error, :malformed | :forbidden}
+              {:ok, [response()] | body()}
+              | {:error, :malformed | :forbidden | Xml.qname()}
 end

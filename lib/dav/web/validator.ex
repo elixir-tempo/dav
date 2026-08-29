@@ -46,6 +46,25 @@ defmodule Dav.Web.Validator do
   @callback applies?(collection :: Resource.t() | nil) :: boolean()
 
   @doc """
+  Whether a collection may be created inside this one.
+
+  Optional in spirit and required by the behaviour, because the answer
+  is rarely interesting: most collections may hold others. A calendar
+  collection may not — RFC 4791 section 4.2 — and nothing in
+  `Dav.Web` knows that.
+
+  ### Arguments
+
+  * `collection` is the parent collection.
+
+  ### Returns
+
+  * `:ok`, or `{:error, qname}` naming the precondition.
+
+  """
+  @callback permit_collection(collection :: Resource.t() | nil) :: :ok | {:error, Xml.qname()}
+
+  @doc """
   Check a body before it is written.
 
   ### Arguments

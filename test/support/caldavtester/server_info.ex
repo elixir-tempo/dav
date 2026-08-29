@@ -80,12 +80,22 @@ defmodule Dav.CalDAVTester.ServerInfo do
   """
   @spec expand(String.t(), %{optional(String.t()) => String.t()}) :: String.t()
   def expand(text, substitutions) do
-    Regex.replace(~r/\$[A-Za-z0-9_.\-]+:/, text, fn key ->
+    Regex.replace(~r/\$[A-Za-z0-9_.\-]+:/, bare(text, substitutions), fn key ->
       case Map.fetch(substitutions, key) do
         {:ok, value} -> value
         :error -> dynamic(key)
       end
     end)
+  end
+
+  # A bare `$` is the suite's name for "the resource the last GETNEW
+  # found". It has no trailing colon, so the general pattern cannot
+  # match it, and it is only a variable when it stands alone.
+  defp bare(text, substitutions) do
+    case Map.fetch(substitutions, "$") do
+      {:ok, value} when text == "$" -> value
+      _not_bound_or_not_bare -> text
+    end
   end
 
   @doc """

@@ -17,6 +17,7 @@ defmodule Dav.CalDAVTester.Verifier do
   alias Dav.Cal.ICalendar
   alias Dav.CalDAVTester.Calendars
   alias Dav.CalDAVTester.Scenario.Verify
+  alias Dav.CalDAVTester.ServerInfo
   alias Dav.Xml
   alias Plug.Conn
 
@@ -37,8 +38,10 @@ defmodule Dav.CalDAVTester.Verifier do
   * `:passed`, `{:failed, reason}`, or `{:skipped, reason}`.
 
   """
-  @spec run(Verify.t(), Plug.Conn.t()) :: outcome()
-  def run(%Verify{callback: "statusCode", args: args}, conn) do
+  @spec run(Verify.t(), Plug.Conn.t(), map()) :: outcome()
+  def run(verify, conn, substitutions \\ %{})
+
+  def run(%Verify{callback: "statusCode", args: args}, conn, _substitutions) do
     expected = Map.get(args, "status", ["2xx"])
 
     if Enum.any?(expected, &status_matches?(&1, conn.status)) do
@@ -50,18 +53,18 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
-  def run(%Verify{callback: "header", args: args}, conn) do
+  def run(%Verify{callback: "header", args: args}, conn, _substitutions) do
     args |> Map.get("header", []) |> each(&header_matches(&1, conn))
   end
 
-  def run(%Verify{callback: "multistatusItems", args: args}, conn) do
+  def run(%Verify{callback: "multistatusItems", args: args}, conn, _substitutions) do
     with :ok <- multistatus_status(conn),
          {:ok, responses} <- responses(conn) do
       multistatus_items(args, responses, conn)
     end
   end
 
-  def run(%Verify{callback: "propfindItems", args: args}, conn) do
+  def run(%Verify{callback: "propfindItems", args: args}, conn, _substitutions) do
     expected = args |> Map.get("status", ["207"]) |> List.first() |> String.to_integer()
 
     with :ok <- expect_status(conn, expected),
@@ -70,7 +73,7 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
-  def run(%Verify{callback: "dataString", args: args}, conn) do
+  def run(%Verify{callback: "dataString", args: args}, conn, _substitutions) do
     data = unwrapped(conn.resp_body, args)
 
     cond do
@@ -81,7 +84,7 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
-  def run(%Verify{callback: "prepostcondition", args: args}, conn) do
+  def run(%Verify{callback: "prepostcondition", args: args}, conn, _substitutions) do
     codes = Map.get(args, "status", ~w(403 409 507))
 
     with :ok <- status_in(conn, codes),
@@ -91,9 +94,9 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
-  def run(%Verify{callback: "dataMatch", args: args}, conn) do
+  def run(%Verify{callback: "dataMatch", args: args}, conn, substitutions) do
     with :ok <- status_in(conn, ~w(200 207)),
-         {:ok, expected} <- data_file(args) do
+         {:ok, expected} <- data_file(args, substitutions) do
       if normalise(conn.resp_body) == normalise(expected) do
         :passed
       else
@@ -102,16 +105,16 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
-  def run(%Verify{callback: "calendarDataMatch", args: args}, conn) do
+  def run(%Verify{callback: "calendarDataMatch", args: args}, conn, substitutions) do
     codes = Map.get(args, "status", ~w(200 201 207))
 
     with :ok <- status_in(conn, codes),
-         {:ok, expected} <- calendar_expected(args) do
+         {:ok, expected} <- calendar_expected(args, substitutions) do
       Calendars.compare(conn.resp_body, expected, Map.get(args, "filter", []))
     end
   end
 
-  def run(%Verify{callback: "xmlElementMatch", args: args}, conn) do
+  def run(%Verify{callback: "xmlElementMatch", args: args}, conn, _substitutions) do
     with :ok <- status_in(conn, ~w(200 207)),
          {:ok, document} <- document(conn),
          {:ok, root} <- parent(document, Map.get(args, "parent", [])) do
@@ -119,14 +122,43 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
-  def run(%Verify{callback: "freeBusy", args: args}, conn) do
+  def run(%Verify{callback: "freeBusy", args: args}, conn, _substitutions) do
     with :ok <- expect_status(conn, 200),
          {:ok, periods} <- free_busy(conn.resp_body) do
       free_busy_matches(periods, args)
     end
   end
 
-  def run(%Verify{callback: callback}, _conn) do
+  def run(%Verify{callback: "xmlDataMatch", args: args}, conn, substitutions) do
+    with :ok <- status_in(conn, ~w(200 207)),
+         {:ok, expected} <- data_file(args, substitutions),
+         {:ok, actual} <- document(conn),
+         {:ok, wanted} <- parsed(expected) do
+      filters = Map.get(args, "filter", [])
+
+      if same?(strip(actual, filters), strip(wanted, filters)) do
+        :passed
+      else
+        {:failed, "XML differs from #{args |> Map.get("filepath", []) |> List.first()}"}
+      end
+    end
+  end
+
+  def run(%Verify{callback: "postFreeBusy", args: args}, conn, _substitutions) do
+    with :ok <- expect_status(conn, 200),
+         {:ok, document} <- document(conn) do
+      post_free_busy(document, args)
+    end
+  end
+
+  def run(%Verify{callback: "propfindValues", args: args}, conn, _substitutions) do
+    with :ok <- expect_status(conn, 207),
+         {:ok, responses} <- responses(conn) do
+      each(specifications(args, "props"), &property_value(&1, responses, args))
+    end
+  end
+
+  def run(%Verify{callback: callback}, _conn, _substitutions) do
     {:skipped, "verifier #{callback} is not implemented"}
   end
 
@@ -217,29 +249,139 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
-  defp data_file(args) do
+  defp data_file(args, substitutions) do
     case Map.get(args, "filepath", []) do
-      [path] -> read_fixture(path)
+      [path] -> read_fixture(path, substitutions)
       _none_or_many -> {:failed, "no file to compare against"}
     end
   end
 
-  defp read_fixture(path) do
+  # The fixture is expanded exactly as it was when the request sent it.
+  # Comparing a stored `20270101T100000` against a file still reading
+  # `$now.year.1:0101T100000` reports every dated fixture as a
+  # mismatch — the server is right and the comparison is wrong.
+  defp read_fixture(path, substitutions) do
     case File.read(Path.join("rfc/conformance/caldavtester", path)) do
-      {:ok, contents} -> {:ok, contents}
+      {:ok, contents} -> {:ok, ServerInfo.expand(contents, substitutions)}
       _missing -> {:failed, "fixture #{path} is missing"}
     end
   end
 
-  defp calendar_expected(args) do
+  defp calendar_expected(args, substitutions) do
     case {Map.get(args, "filepath", []), Map.get(args, "data", [])} do
-      {[path], _data} -> read_fixture(path)
+      {[path], _data} -> read_fixture(path, substitutions)
       {_files, [data]} -> {:ok, data}
       _neither -> {:failed, "no calendar data to compare against"}
     end
   end
 
   defp normalise(text), do: text |> String.replace("\r\n", "\n") |> String.trim()
+
+  ## --- propfindValues ---------------------------------------------
+
+  # `propfindItems` checks which properties came back; this checks
+  # what they *say*. A server can report every property a client asked
+  # for and still have the values wrong, and only this notices.
+  defp property_value({name, expected}, responses, args) do
+    found =
+      for response <- selected(responses, args),
+          propstat <- response.propstats,
+          {property, value} <- values_in(propstat),
+          property == name,
+          do: value
+
+    cond do
+      found == [] -> {:failed, "#{name} was not returned"}
+      is_nil(expected) -> :passed
+      expected == :negated -> :passed
+      Enum.any?(found, &(&1 == expected)) -> :passed
+      true -> {:failed, "#{name} is #{inspect(hd(found))}, expected #{inspect(expected)}"}
+    end
+  end
+
+  # `ignore` and `only` narrow which resources are examined, so a
+  # collection's own response does not have to satisfy expectations
+  # written for its members.
+  defp selected(responses, args) do
+    ignored = Map.get(args, "ignore", [])
+
+    case Map.get(args, "only", []) do
+      [] -> Enum.reject(responses, &(&1.href in ignored))
+      only -> Enum.filter(responses, &(&1.href in only))
+    end
+  end
+
+  defp values_in(propstat) do
+    case Enum.find(propstat.children, &local?(&1, "prop")) do
+      nil -> []
+      prop -> for child <- prop.children, do: {clark(child.name), String.trim(child.text)}
+    end
+  end
+
+  ## --- xmlDataMatch -----------------------------------------------
+
+  # Upstream normalises both sides through ElementTree's serialiser and
+  # compares the strings. That output cannot be reproduced here, so the
+  # comparison is structural instead: names, attributes, text and
+  # children, with children sorted. It is a stricter test of the same
+  # thing — two documents that differ only in element order compare
+  # equal, and two that differ in content do not.
+  defp same?(left, right) do
+    shape(left) == shape(right)
+  end
+
+  defp shape(%{name: name, attributes: attributes, text: text, children: children}) do
+    {name, attributes, String.trim(text), children |> Enum.map(&shape/1) |> Enum.sort()}
+  end
+
+  # A `filter` names elements the comparison ignores — timestamps and
+  # generated identifiers that could never match.
+  defp strip(element, []), do: element
+
+  defp strip(element, filters) do
+    kept =
+      element.children
+      |> Enum.reject(&(clark(&1.name) in filters or elem(&1.name, 1) in filters))
+      |> Enum.map(&strip(&1, filters))
+
+    %{element | children: kept}
+  end
+
+  defp parsed(text) do
+    case Xml.parse(text) do
+      {:ok, document} -> {:ok, document}
+      _unparseable -> {:failed, "the expected document is not valid XML"}
+    end
+  end
+
+  ## --- postFreeBusy -----------------------------------------------
+
+  # A `schedule-response` carrying one VFREEBUSY per attendee. Each
+  # named attendee must appear once, with the periods expected of them
+  # — an answer that reports the right times for the wrong person is
+  # not a lesser failure than reporting the wrong times.
+  defp post_free_busy(document, args) do
+    calendars =
+      for response <- elements(document, "response"),
+          data <- elements(response, "calendar-data"),
+          {:ok, calendar} <- [ICalendar.parse(data.text)],
+          component <- calendar.components,
+          component.name == "VFREEBUSY",
+          do: component
+
+    each(Map.get(args, "attendee", []), &attendee_busy(&1, calendars, args))
+  end
+
+  defp attendee_busy(attendee, calendars, args) do
+    case Enum.find(calendars, &attends?(&1, attendee)) do
+      nil -> {:failed, "no VFREEBUSY for #{attendee}"}
+      component -> free_busy_matches(periods_by_type(component), args)
+    end
+  end
+
+  defp attends?(component, attendee) do
+    Enum.any?(component.properties, &(&1.name == "ATTENDEE" and &1.value == attendee))
+  end
 
   ## --- freeBusy ---------------------------------------------------
 
@@ -266,6 +408,12 @@ defmodule Dav.CalDAVTester.Verifier do
       found -> Map.update(found, type, [period], &[period | &1])
     end
   end
+
+  @prefixes %{
+    "DAV:" => "D",
+    "urn:ietf:params:xml:ns:caldav" => "C",
+    "http://calendarserver.org/ns/" => "CS"
+  }
 
   @free_busy_types %{
     "busy" => "BUSY",
@@ -509,15 +657,9 @@ defmodule Dav.CalDAVTester.Verifier do
     ok_specs = specifications(args, "okprops")
     bad_specs = specifications(args, "badprops")
 
-    cond do
-      counted = single(args, "count") ->
-        compare(length(responses), counted, "responses")
-
-      Enum.any?(ok_specs ++ bad_specs, &xml_valued?/1) ->
-        {:skipped, "propfindItems compares a serialised XML value"}
-
-      true ->
-        each(responses, &properties_match(&1, ok_specs, bad_specs))
+    case single(args, "count") do
+      nil -> each(responses, &properties_match(&1, ok_specs, bad_specs))
+      counted -> compare(length(responses), counted, "responses")
     end
   end
 
@@ -552,8 +694,6 @@ defmodule Dav.CalDAVTester.Verifier do
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
 
-  defp xml_valued?({_property, value}), do: is_binary(value) and String.starts_with?(value, "<")
-
   defp properties_match(response, ok_specs, bad_specs) do
     {found_ok, found_bad} = collect(response)
     wanted_ok = MapSet.new(ok_specs, &elem(&1, 0))
@@ -574,8 +714,85 @@ defmodule Dav.CalDAVTester.Verifier do
         {:failed, "unexpected (OK): #{inspect(Enum.take(extra, 4))}"}
 
       true ->
-        :passed
+        valued(response, ok_specs)
     end
+  end
+
+  # A specification may name a value as well as a property. Where that
+  # value is itself XML, it is compared structurally — upstream
+  # normalises both sides through ElementTree's serialiser, and
+  # abstaining because that output cannot be reproduced left tests
+  # unmeasured for a difference that does not matter.
+  defp valued(response, specifications) do
+    each(Enum.reject(specifications, &(elem(&1, 1) in [nil, :negated])), fn {name, expected} ->
+      compare_value(name, expected, rendered(response, name))
+    end)
+  end
+
+  defp compare_value(name, _expected, []), do: {:failed, "#{name} was not returned"}
+
+  defp compare_value(name, expected, found) do
+    if Enum.any?(found, &equivalent?(&1, expected)) do
+      :passed
+    else
+      {:failed, "#{name} is #{inspect(hd(found))}, expected #{inspect(expected)}"}
+    end
+  end
+
+  # Text compares as text; XML compares as structure.
+  defp equivalent?(actual, expected) do
+    if String.starts_with?(String.trim(expected), "<") do
+      structurally_equal?(actual, expected)
+    else
+      String.trim(actual) == String.trim(expected)
+    end
+  end
+
+  defp structurally_equal?(actual, expected) do
+    with {:ok, left} <- Xml.parse(wrapped(actual)),
+         {:ok, right} <- Xml.parse(wrapped(expected)) do
+      same?(left, right)
+    else
+      _unparseable -> false
+    end
+  end
+
+  # A property's value may be several sibling elements, which is not a
+  # document until it has a root.
+  defp wrapped(fragment) do
+    ~s(<w xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:CS="http://calendarserver.org/ns/">) <>
+      fragment <> "</w>"
+  end
+
+  # The property's content as written, so a structured value can be
+  # compared against the document the test names.
+  defp rendered(response, name) do
+    for propstat <- response.propstats,
+        prop <- Enum.filter(propstat.children, &local?(&1, "prop")),
+        child <- prop.children,
+        clark(child.name) == name,
+        do: inner_xml(child)
+  end
+
+  defp inner_xml(%{children: [], text: text}), do: text
+
+  defp inner_xml(%{children: children}), do: Enum.map_join(children, "", &element_xml/1)
+
+  defp element_xml(%{name: {namespace, local}, attributes: attributes, children: [], text: ""}) do
+    "<" <> qualified(namespace, local) <> rendered_attributes(attributes) <> "/>"
+  end
+
+  defp element_xml(%{name: {namespace, local}, attributes: attributes} = element) do
+    tag = qualified(namespace, local)
+
+    "<" <>
+      tag <> rendered_attributes(attributes) <> ">" <> inner_xml(element) <> "</" <> tag <> ">"
+  end
+
+  defp qualified(namespace, local), do: (@prefixes[namespace] || "D") <> ":" <> local
+
+  defp rendered_attributes(attributes) do
+    Enum.map_join(attributes, "", fn {name, value} -> ~s( #{name}="#{value}") end)
   end
 
   # Names are compared in Clark notation — `{DAV:}getetag` — which is

@@ -35,6 +35,43 @@ defmodule Dav.Web.Plug do
 
   @multistatus 207
 
+  @doc """
+  Build the plug's options.
+
+  ### Options
+
+  * `:store` is the `Dav.Web.Store` implementation. Required.
+
+  * `:context` is passed to every store callback — the authenticated
+    principal, a tenant, a repository handle.
+
+  * `:principal` is the principal URL of whoever is making the
+    request, or `nil` when nobody is authenticated. It is what
+    `DAV:current-user-principal` reports.
+
+  * `:authentication` is `:optional`, the default, or `:required`. A
+    server that requires it answers `401` when `:principal` is `nil`,
+    so an anonymous client is told to authenticate rather than that
+    the resource is forbidden to it.
+
+  * `:reports`, `:validators`, `:hooks` and `:methods` are the four
+    extension points, each a list the request dispatches through.
+
+  ### Returns
+
+  * The options map the plug is called with.
+
+  ### Examples
+
+      iex> options = Dav.Web.Plug.init(store: Dav.Web.Store)
+      iex> options.authentication
+      :optional
+
+      iex> options = Dav.Web.Plug.init(store: Dav.Web.Store, authentication: :required)
+      iex> options.authentication
+      :required
+
+  """
   @impl Plug
   def init(options) do
     %{
@@ -42,6 +79,9 @@ defmodule Dav.Web.Plug do
       context: Keyword.get(options, :context),
       reports: Map.new(Keyword.get(options, :reports, [])),
       validators: Keyword.get(options, :validators, []),
+      hooks: Keyword.get(options, :hooks, []),
+      principal: Keyword.get(options, :principal),
+      authentication: Keyword.get(options, :authentication, :optional),
       methods: Map.new(Keyword.get(options, :methods, []))
     }
   end
@@ -71,7 +111,21 @@ defmodule Dav.Web.Plug do
 
   @impl Plug
   def call(%Plug.Conn{} = conn, %{} = options) do
-    dispatch(conn.method, conn, options)
+    if authenticated?(options), do: dispatch(conn.method, conn, options), else: challenge(conn)
+  end
+
+  # A deployment that requires authentication answers `401` with a
+  # challenge rather than `403`. The difference is "I do not know who
+  # you are" against "I know, and no" — a client that cannot tell them
+  # apart either retries forever with credentials the server has
+  # already refused, or gives up on ones it never offered.
+  defp authenticated?(%{authentication: :required, principal: nil}), do: false
+  defp authenticated?(_options), do: true
+
+  defp challenge(conn) do
+    conn
+    |> put_resp_header("www-authenticate", ~s(Basic realm="dav"))
+    |> send_resp(401, "")
   end
 
   defp dispatch("OPTIONS", conn, options) do
@@ -125,6 +179,7 @@ defmodule Dav.Web.Plug do
          {:ok, body} <- options.store.read(resource, options.context) do
       conn
       |> etag(resource)
+      |> contributed_headers(resource, options)
       |> put_resp_content_type(resource.content_type || "application/octet-stream")
       |> send_resp(200, if(method == "HEAD", do: "", else: body))
     else
@@ -144,9 +199,13 @@ defmodule Dav.Web.Plug do
     with :ok <- capable(options, :put),
          :ok <- writable(path, options),
          :ok <- validate(body, path, options, type),
+         previous = contents(path, options),
          {:ok, outcome, resource} <- options.store.put(path, body, type, options.context) do
+      written(resource, body, previous, path, options)
+
       conn
       |> etag(resource)
+      |> contributed_headers(resource, options)
       |> send_resp(if(outcome == :created, do: 201, else: 204), "")
     else
       {:error, :unsupported} -> refuse(conn, options)
@@ -164,6 +223,61 @@ defmodule Dav.Web.Plug do
       {:ok, %Resource{collection?: true}} -> {:error, :collection}
       _absent_or_document -> :ok
     end
+  end
+
+  defp removed(resource, body, options) do
+    collection = parent(resource.path, options)
+    change = %{resource: resource, body: body, previous: body, collection: collection}
+
+    for hook <- options.hooks,
+        hook.applies?(collection),
+        function_exported?(hook, :deleted, 2),
+        do: hook.deleted(change, options)
+
+    :ok
+  end
+
+  # What is there now, read before a write replaces it. A hook that
+  # must tell a significant change from a trivial one has no other way
+  # to see what the resource used to hold.
+  defp contents(path, options) when is_list(path) do
+    case options.store.resolve(path, options.context) do
+      {:ok, resource} -> contents(resource, options)
+      _absent -> nil
+    end
+  end
+
+  defp contents(resource, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :read),
+         {:ok, data} <- store.read(resource, context) do
+      IO.iodata_to_binary(data)
+    else
+      _unreadable -> nil
+    end
+  end
+
+  # A hook may add headers to a response about a resource — CalDAV's
+  # `Schedule-Tag` is the case this exists for.
+  defp contributed_headers(conn, resource, options) do
+    collection = parent(resource.path, options)
+
+    options.hooks
+    |> Enum.filter(&function_exported?(&1, :headers, 3))
+    |> Enum.flat_map(& &1.headers(resource, collection, options))
+    |> Enum.reduce(conn, fn {name, value}, conn -> put_resp_header(conn, name, value) end)
+  end
+
+  # What a collection *does* when written to is its business too:
+  # storing an event with attendees has to deliver the invitations
+  # (RFC 6638 section 3), and a hook cannot fail the write that
+  # triggered it.
+  defp written(resource, body, previous, path, options) do
+    collection = parent(path, options)
+    change = %{resource: resource, body: body, previous: previous, collection: collection}
+
+    for hook <- options.hooks, hook.applies?(collection), do: hook.written(change, options)
+
+    :ok
   end
 
   # What a collection may contain is the collection's business, not
@@ -193,7 +307,12 @@ defmodule Dav.Web.Plug do
   defp delete(conn, options) do
     with :ok <- capable(options, :delete),
          {:ok, resource} <- resolve(conn, options),
+         # Read before removing: afterwards there is nothing left to
+         # read, and a hook that must know what the resource held has
+         # no way to find out.
+         held = contents(resource, options) || "",
          :ok <- options.store.delete(resource, options.context) do
+      removed(resource, held, options)
       send_resp(conn, 204, "")
     else
       {:error, :unsupported} -> refuse(conn, options)
@@ -204,10 +323,12 @@ defmodule Dav.Web.Plug do
   defp mkcol(conn, options) do
     {:ok, body, conn} = read_body(conn)
 
+    path = Store.segments(conn.request_path)
+
     with :ok <- capable(options, :mkcol),
          :ok <- no_body(body),
-         {:ok, _resource} <-
-           options.store.mkcol(Store.segments(conn.request_path), options.context) do
+         :ok <- nestable(path, options),
+         {:ok, _resource} <- options.store.mkcol(path, options.context) do
       send_resp(conn, 201, "")
     else
       {:error, :unsupported} -> refuse(conn, options)
@@ -215,9 +336,30 @@ defmodule Dav.Web.Plug do
       {:error, :body} -> send_resp(conn, 415, "")
       {:error, :exists} -> send_resp(conn, 405, "")
       {:error, :conflict} -> send_resp(conn, 409, "")
+      {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
     end
   end
 
+  # Whether a collection may be created here is the parent collection's
+  # business, and a calendar collection says no — RFC 4791 section 4.2.
+  # The rule lives with the validators so that this module keeps
+  # knowing nothing about calendars.
+  defp nestable(path, options) do
+    collection = parent(path, options)
+
+    options.validators
+    |> Enum.filter(& &1.applies?(collection))
+    |> Enum.reduce_while(:ok, fn validator, _outcome ->
+      case validator.permit_collection(collection) do
+        :ok -> {:cont, :ok}
+        failure -> {:halt, failure}
+      end
+    end)
+  end
+
+  # "A 201 Created response SHOULD include a Location header" — a
+  # client that created a resource should not have to guess where it
+  # ended up.
   defp capable(%{store: store}, capability) do
     if Store.supports?(store, capability), do: :ok, else: {:error, :unsupported}
   end
@@ -332,6 +474,9 @@ defmodule Dav.Web.Plug do
 
       {:error, :forbidden} ->
         send_resp(conn, 403, "")
+
+      {:error, {_namespace, _local} = failed} ->
+        precondition(conn, failed)
     end
   end
 
@@ -375,9 +520,11 @@ defmodule Dav.Web.Plug do
          :ok <- distinct(source, destination),
          {:ok, replacing?} <- overwritable(conn, destination, options),
          :ok <- parent_of(destination, options),
-         :ok <- validate_transfer(source, destination, options),
+         :ok <- validate_transfer(kind, source, destination, options),
          :ok <- carry_out(kind, source, destination, options) do
-      send_resp(conn, if(replacing?, do: 204, else: 201), "")
+      if replacing?,
+        do: send_resp(conn, 204, ""),
+        else: conn |> at(destination_header(conn)) |> send_resp(201, "")
     else
       {:error, :unsupported} -> refuse(conn, options)
       {:error, :no_destination} -> send_resp(conn, 400, "")
@@ -394,14 +541,26 @@ defmodule Dav.Web.Plug do
   # submitted in the PUT request, **or targeted by a COPY or MOVE**".
   # Checking only PUT leaves the back door open: anything invalid can
   # be written to an ordinary collection and then copied in.
-  defp validate_transfer(%Resource{collection?: true}, _destination, _options), do: :ok
+  # A collection landing inside a calendar is the same rule as MKCOL,
+  # reached by another route. Guarding only MKCOL leaves it open.
+  defp validate_transfer(_kind, %Resource{collection?: true}, destination, options),
+    do: nestable(destination, options)
 
-  defp validate_transfer(source, destination, options) do
+  defp validate_transfer(kind, source, destination, options) do
     case body_of(source, options) do
-      {:ok, body} -> validate(body, destination, options, source.content_type)
-      :error -> :ok
+      # A MOVE is the same object relocating, so the source must not
+      # count against it: checking a moved event's UID against the copy
+      # it is about to stop being refuses every rename.
+      {:ok, body} ->
+        validate(body, destination, moving(kind, source, options), source.content_type)
+
+      :error ->
+        :ok
     end
   end
+
+  defp moving(:move, source, options), do: Map.put(options, :ignoring, source.path)
+  defp moving(_copy, _source, options), do: options
 
   defp body_of(source, %{store: store, context: context}) do
     if Store.supports?(store, :read) do
@@ -429,6 +588,15 @@ defmodule Dav.Web.Plug do
 
   defp elsewhere(%URI{path: nil}, _conn), do: {:error, :no_destination}
   defp elsewhere(%URI{path: path}, _conn), do: {:ok, Store.segments(path)}
+
+  # The new resource's URI, taken from the `Destination` the client
+  # sent rather than rebuilt from the parsed path: the client wrote it,
+  # it is already a valid URI, and re-encoding it would hand back a
+  # different string from the one just requested.
+  defp at(conn, nil), do: conn
+  defp at(conn, destination), do: put_resp_header(conn, "location", destination)
+
+  defp destination_header(conn), do: conn |> get_req_header("destination") |> List.first()
 
   defp distinct(%Resource{path: path}, path), do: {:error, :same}
   defp distinct(%Resource{}, _destination), do: :ok
@@ -546,12 +714,52 @@ defmodule Dav.Web.Plug do
 
   # Dead properties are whatever a client stored here, and the server
   # does not interpret them. A store that keeps none is a valid store.
-  defp dead(resource, %{store: store, context: context}) do
+  # Properties that are not live: the ones a store holds, plus the ones
+  # an extension computes. `CALDAV:schedule-tag` is the latter — it
+  # depends on the object's *content*, which only the extension that
+  # understands calendars can read, and computing it here would put
+  # knowledge of CalDAV back into the base.
+  defp dead(resource, options) do
+    stored(resource, options) |> Map.merge(contributed(resource, options))
+  end
+
+  defp stored(resource, %{store: store, context: context}) do
     if Store.supports?(store, :properties) do
       store.properties(resource, context)
     else
       %{}
     end
+  end
+
+  # Not filtered by `applies?`. That asks whether a hook cares about
+  # writes *into* a collection, which is a different question from
+  # whether it has something to say about a resource: CalDAV's
+  # `Schedule-Tag` belongs to an object inside a calendar, and Apple's
+  # `CS:invite` to the calendar itself. Each hook decides for itself.
+  defp contributed(resource, options) do
+    collection = parent(resource.path, options)
+
+    Map.merge(current_user(options), hook_properties(resource, collection, options))
+  end
+
+  # "Who am I", answered from the authenticated principal rather than
+  # from the resource. RFC 5397 exists so a client can find its own
+  # principal URL without being told it out of band, and a server that
+  # answers with the resource's owner tells every caller they own
+  # whatever they are looking at.
+  defp current_user(%{principal: nil}),
+    do: %{
+      {Xml.dav(), "current-user-principal"} => {:elements, [Xml.dav()], "<D:unauthenticated/>"}
+    }
+
+  defp current_user(%{principal: principal}),
+    do: %{{Xml.dav(), "current-user-principal"} => {:hrefs, [principal]}}
+
+  defp hook_properties(resource, collection, options) do
+    options.hooks
+    |> Enum.filter(&function_exported?(&1, :properties, 3))
+    |> Enum.flat_map(& &1.properties(resource, collection, options))
+    |> Map.new()
   end
 
   defp response(%Resource{} = resource, :allprop, reports, dead) do

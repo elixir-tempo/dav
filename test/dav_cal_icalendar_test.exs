@@ -101,4 +101,75 @@ defmodule Dav.Cal.ICalendarTest do
       assert property.value == "PT30M"
     end
   end
+
+  describe "real-world input" do
+    test "a UTF-8 byte order mark does not make the object malformed" do
+      # Left in place the BOM becomes part of the first line, so
+      # `BEGIN:VCALENDAR` reads as something else and the whole object
+      # parses as empty.
+      ics =
+        <<0xEF, 0xBB, 0xBF>> <>
+          "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      assert {:ok, calendar} = ICalendar.parse(ics)
+      assert [%{name: "VEVENT"}] = calendar.components
+    end
+
+    test "bare LF line endings are read, not only CRLF" do
+      ics = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:1\nEND:VEVENT\nEND:VCALENDAR\n"
+
+      assert {:ok, calendar} = ICalendar.parse(ics)
+      assert [%{name: "VEVENT"}] = calendar.components
+    end
+  end
+
+  describe "writing" do
+    test "a recurrence rule is not escaped" do
+      # `RRULE:FREQ=WEEKLY;BYDAY=MO,TU` uses `;` and `,` as structure.
+      # Escaping them turns a rule into one unparseable string, which
+      # is what happened to every VTIMEZONE this rewrote.
+      ics =
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nRRULE:FREQ=WEEKLY;BYDAY=MO,TU\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      {:ok, calendar} = ICalendar.parse(ics)
+
+      assert ICalendar.write(calendar) =~ "RRULE:FREQ=WEEKLY;BYDAY=MO,TU"
+    end
+
+    test "a TEXT value is escaped" do
+      ics =
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nSUMMARY:one\\, two\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      {:ok, calendar} = ICalendar.parse(ics)
+
+      assert ICalendar.write(calendar) =~ "SUMMARY:one\\, two"
+    end
+
+    test "a whole calendar survives a round trip" do
+      ics =
+        Enum.join(
+          [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "BEGIN:VTIMEZONE",
+            "TZID:US/Eastern",
+            "BEGIN:DAYLIGHT",
+            "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU",
+            "TZNAME:EDT",
+            "END:DAYLIGHT",
+            "END:VTIMEZONE",
+            "BEGIN:VEVENT",
+            "UID:1",
+            "DTSTART;TZID=US/Eastern:20260615T090000",
+            "END:VEVENT",
+            "END:VCALENDAR"
+          ],
+          "\r\n"
+        ) <> "\r\n"
+
+      {:ok, calendar} = ICalendar.parse(ics)
+
+      assert ICalendar.write(calendar) == ics
+    end
+  end
 end
