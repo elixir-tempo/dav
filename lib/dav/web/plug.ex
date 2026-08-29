@@ -198,6 +198,7 @@ defmodule Dav.Web.Plug do
 
     with :ok <- capable(options, :put),
          :ok <- writable(path, options),
+         :ok <- schedule_tag_matches(conn, path, options),
          :ok <- validate(body, path, options, type),
          previous = contents(path, options),
          {:ok, outcome, resource} <- options.store.put(path, body, type, options.context) do
@@ -209,6 +210,7 @@ defmodule Dav.Web.Plug do
       |> send_resp(if(outcome == :created, do: 201, else: 204), "")
     else
       {:error, :unsupported} -> refuse(conn, options)
+      {:error, :schedule_tag} -> send_resp(conn, 412, "")
       # A missing parent is a conflict, not an invitation to create it.
       {:error, :conflict} -> send_resp(conn, 409, "")
       {:error, :collection} -> send_resp(conn, 403, "")
@@ -258,6 +260,37 @@ defmodule Dav.Web.Plug do
 
   # A hook may add headers to a response about a resource — CalDAV's
   # `Schedule-Tag` is the case this exists for.
+  # RFC 6638 section 8.3. `If-Match` asks "has anything about this
+  # resource changed"; `If-Schedule-Tag-Match` asks the narrower
+  # question "has anything *the attendees agreed to* changed", so a
+  # client may write its own private edits without losing a race
+  # against an unrelated change. `*` matches any existing tag.
+  defp schedule_tag_matches(conn, path, options) do
+    case get_req_header(conn, "if-schedule-tag-match") do
+      [] ->
+        :ok
+
+      [wanted | _rest] ->
+        if wanted == "*" or wanted == current_schedule_tag(path, options),
+          do: :ok,
+          else: {:error, :schedule_tag}
+    end
+  end
+
+  defp current_schedule_tag(path, options) do
+    with {:ok, resource} <- options.store.resolve(path, options.context),
+         collection = parent(resource.path, options),
+         {_name, value} <-
+           options.hooks
+           |> Enum.filter(&function_exported?(&1, :headers, 3))
+           |> Enum.flat_map(& &1.headers(resource, collection, options))
+           |> Enum.find(fn {name, _value} -> name == "schedule-tag" end) do
+      value
+    else
+      _absent -> nil
+    end
+  end
+
   defp contributed_headers(conn, resource, options) do
     collection = parent(resource.path, options)
 
@@ -307,6 +340,7 @@ defmodule Dav.Web.Plug do
   defp delete(conn, options) do
     with :ok <- capable(options, :delete),
          {:ok, resource} <- resolve(conn, options),
+         :ok <- schedule_tag_matches(conn, resource.path, options),
          # Read before removing: afterwards there is nothing left to
          # read, and a hook that must know what the resource held has
          # no way to find out.
@@ -316,6 +350,7 @@ defmodule Dav.Web.Plug do
       send_resp(conn, 204, "")
     else
       {:error, :unsupported} -> refuse(conn, options)
+      {:error, :schedule_tag} -> send_resp(conn, 412, "")
       {:error, :not_found} -> send_resp(conn, 404, "")
     end
   end

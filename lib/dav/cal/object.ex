@@ -34,6 +34,7 @@ defmodule Dav.Cal.Object do
 
   alias Dav.Cal
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.Scheduling
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -98,7 +99,8 @@ defmodule Dav.Cal.Object do
          :ok <- readable_values(calendar),
          :ok <- timezones_present(calendar),
          :ok <- within_limits(calendar),
-         :ok <- unique_uid(calendar) do
+         :ok <- unique_uid(calendar),
+         :ok <- attendee_allowed(calendar, collection, path, options) do
       no_uid_conflict(calendar, collection, path, options)
     end
   end
@@ -334,6 +336,55 @@ defmodule Dav.Cal.Object do
         property.name == "UID",
         uniq: true,
         do: property.value
+  end
+
+  # RFC 6638 section 3.2.2: only the organiser creates a scheduling
+  # object, or the server does on their behalf when it delivers the
+  # invitation. An attendee writing a *new* one into their own
+  # calendar would invent a meeting nobody called, and the organiser
+  # named on it would never hear of it. Updating the copy they were
+  # sent is how they accept, so only a create is refused.
+  defp attendee_allowed(calendar, collection, path, options) do
+    addresses = Scheduling.addresses_of(collection, options)
+    {organizer, parameters} = organizer_of(calendar)
+
+    cond do
+      addresses == [] -> :ok
+      exists?(path, options) -> :ok
+      organizer in [nil | addresses] -> :ok
+      # The server only owns the scheduling it performs. An organiser
+      # this server does not host is somebody else's to police, and a
+      # client that has said it will do its own scheduling has taken
+      # the job back — refusing either would break iMIP and every
+      # `SCHEDULE-AGENT` other than `SERVER`.
+      Map.get(parameters, "SCHEDULE-AGENT", "SERVER") != "SERVER" -> :ok
+      not Scheduling.hosted?(organizer, options) -> :ok
+      # The precondition is about what an *attendee* may do. Someone
+      # not named on the event is not one, and the suite expects their
+      # write to succeed — an organiser rewriting their own event with
+      # no attendees on it yet is the case that shows the difference.
+      not attends?(calendar, addresses) -> :ok
+      true -> {:error, precondition("attendee-allowed")}
+    end
+  end
+
+  defp attends?(calendar, addresses) do
+    Enum.any?(properties_of(calendar), &(&1.name == "ATTENDEE" and &1.value in addresses))
+  end
+
+  defp organizer_of(calendar) do
+    case Enum.find(properties_of(calendar), &(&1.name == "ORGANIZER")) do
+      nil -> {nil, %{}}
+      property -> {property.value, property.parameters}
+    end
+  end
+
+  defp properties_of(calendar) do
+    for component <- calendar.components, property <- component.properties, do: property
+  end
+
+  defp exists?(path, %{store: store, context: context}) do
+    match?({:ok, _resource}, store.resolve(path, context))
   end
 
   # "MUST NOT specify an iCalendar UID property value already in use in

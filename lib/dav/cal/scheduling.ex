@@ -150,15 +150,26 @@ defmodule Dav.Cal.Scheduling do
   # exists to solve. So it is stored, and recomputed only when the
   # organiser, the attendees or the timing actually differ.
   defp stamp_schedule_tag(%{resource: resource, body: body, previous: previous}, options) do
-    with true <- scheduling_body?(body),
-         %{store: store, context: context} <- options,
+    with %{store: store, context: context} <- options,
          true <- Store.supports?(store, :patch) do
-      tag = if unchanged?(body, previous), do: kept_tag(resource, options), else: nil
-
-      store.patch(resource, [{:set, schedule_tag(), tag || fresh_tag(body)}], context)
+      store.patch(resource, [tagging(resource, body, previous, options)], context)
     end
 
     :ok
+  end
+
+  # An event whose attendees have all been removed is nobody's
+  # invitation any more, and a `Schedule-Tag` left behind on it would
+  # go on validating a scheduling object that no longer exists. So the
+  # property is removed rather than merely left unchanged.
+  defp tagging(resource, body, previous, options) do
+    if scheduling_body?(body) do
+      tag = if unchanged?(body, previous), do: kept_tag(resource, options), else: nil
+
+      {:set, schedule_tag(), tag || fresh_tag(body)}
+    else
+      {:remove, schedule_tag()}
+    end
   end
 
   defp schedule_tag, do: {Xml.caldav(), "schedule-tag"}
@@ -978,6 +989,56 @@ defmodule Dav.Cal.Scheduling do
   # asking the store which principal each address belongs to. A store
   # without that lookup cannot schedule, and says so by answering
   # nothing rather than by guessing.
+  @doc """
+  The calendar user addresses of whoever owns a collection.
+
+  ### Arguments
+
+  * `collection` is the collection being written into, or `nil`.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * The list of addresses, or `[]` when the store cannot resolve them.
+    An empty list means "unknown", not "nobody": callers treat it as a
+    reason to skip a decision rather than to refuse one.
+
+  ### Examples
+
+      iex> Dav.Cal.Scheduling.addresses_of(nil, %{})
+      []
+
+  """
+  @spec addresses_of(Resource.t() | nil, map()) :: [String.t()]
+  def addresses_of(collection, options), do: owner_addresses(collection, options)
+
+  @doc """
+  Whether a calendar user address belongs to this server.
+
+  ### Arguments
+
+  * `address` is a calendar user address, as an `ORGANIZER` or
+    `ATTENDEE` carries it.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `true` when the store can resolve the address to a calendar home
+    it hosts, and `false` otherwise — including when the store offers
+    no lookup at all.
+
+  ### Examples
+
+      iex> Dav.Cal.Scheduling.hosted?("mailto:nobody@example.com", %{store: Dav.Web.Store, context: nil})
+      false
+
+  """
+  @spec hosted?(String.t() | nil, map()) :: boolean()
+  def hosted?(nil, _options), do: false
+  def hosted?(address, options), do: not is_nil(home_of(address, options))
+
   defp owner_addresses(nil, _options), do: []
   defp owner_addresses(%Resource{owner: nil}, _options), do: []
 
