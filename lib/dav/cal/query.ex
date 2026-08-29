@@ -72,7 +72,8 @@ defmodule Dav.Cal.Query do
   defp filter_of(document) do
     with element when not is_nil(element) <- Enum.find(document.children, &named?(&1, "filter")),
          {:ok, filter} <- Filter.from_element(element),
-         :ok <- rooted(filter) do
+         :ok <- rooted(filter),
+         :ok <- Filter.valid?(filter) do
       {:ok, filter}
     else
       _not_a_filter -> {:error, {Xml.caldav(), "valid-filter"}}

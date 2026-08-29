@@ -56,6 +56,35 @@ defmodule Dav.Cal.Filter do
             text_match: nil,
             children: []
 
+  # RFC 4791 section 9.7.1. A `comp-filter` describes where a
+  # component may appear, and iCalendar's nesting is fixed: a calendar
+  # holds events, todos, journals, free/busy and time zones; events
+  # and todos hold alarms; time zones hold their standard and daylight
+  # observances; nothing holds a calendar. A filter that nests
+  # otherwise describes data that cannot exist.
+  @nesting %{
+    "VCALENDAR" => ~w(VEVENT VTODO VJOURNAL VFREEBUSY VTIMEZONE),
+    "VEVENT" => ~w(VALARM),
+    "VTODO" => ~w(VALARM),
+    "VJOURNAL" => [],
+    "VFREEBUSY" => [],
+    "VTIMEZONE" => ~w(STANDARD DAYLIGHT),
+    "STANDARD" => [],
+    "DAYLIGHT" => [],
+    "VALARM" => []
+  }
+
+  # Where a `time-range` means anything. It selects components that
+  # occupy time, so a calendar, a time zone and its observances are
+  # not among them — none of those happens at a moment.
+  @timed ~w(VEVENT VTODO VJOURNAL VFREEBUSY VALARM)
+
+  # Properties whose value is a date or date-time, and so the only
+  # ones a `time-range` inside a `prop-filter` can test. Asking for a
+  # range of `SUMMARY` compares a string against two timestamps.
+  @dated ~w(DTSTART DTEND DUE COMPLETED CREATED DTSTAMP LAST-MODIFIED
+            RECURRENCE-ID EXDATE RDATE TRIGGER FREEBUSY)
+
   @doc """
   Read a `CALDAV:filter` element into a filter.
 
@@ -278,5 +307,63 @@ defmodule Dav.Cal.Filter do
       evaluate ->
         evaluate.(target, range)
     end
+  end
+
+  @doc """
+  Whether a filter describes calendar data that could exist.
+
+  ### Arguments
+
+  * `filter` is the root filter, naming `VCALENDAR`.
+
+  ### Returns
+
+  * `:ok` when every nesting and every `time-range` is one the
+    grammar allows.
+
+  * `:error` otherwise, which the report reports as
+    `CALDAV:valid-filter`.
+
+  ### Examples
+
+      iex> Dav.Cal.Filter.valid?(%Dav.Cal.Filter{name: "VCALENDAR"})
+      :ok
+
+      iex> alarm = %Dav.Cal.Filter{name: "VALARM"}
+      iex> Dav.Cal.Filter.valid?(%Dav.Cal.Filter{name: "VCALENDAR", children: [alarm]})
+      :error
+
+  """
+  @spec valid?(t()) :: :ok | :error
+  def valid?(%__MODULE__{} = filter) do
+    if permitted?(filter), do: :ok, else: :error
+  end
+
+  defp permitted?(%__MODULE__{kind: :comp, name: name} = filter) do
+    allowed = Map.get(@nesting, name)
+
+    cond do
+      is_nil(allowed) -> nested_ok?(filter, :unknown)
+      not is_nil(filter.time_range) and name not in @timed -> false
+      true -> nested_ok?(filter, allowed)
+    end
+  end
+
+  defp permitted?(%__MODULE__{kind: :prop, name: name} = filter) do
+    is_nil(filter.time_range) or name in @dated
+  end
+
+  defp permitted?(%__MODULE__{}), do: true
+
+  # A component the grammar does not name — an `X-` extension — may
+  # hold anything, but it is still not a moment in time.
+  defp nested_ok?(filter, :unknown) do
+    is_nil(filter.time_range) and Enum.all?(filter.children, &permitted?/1)
+  end
+
+  defp nested_ok?(filter, allowed) do
+    Enum.all?(filter.children, fn child ->
+      (child.kind != :comp or child.name in allowed) and permitted?(child)
+    end)
   end
 end

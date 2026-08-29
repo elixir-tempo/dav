@@ -12,7 +12,7 @@
   "delete.xml" => 3,
   "depthreports.xml" => 10,
   "encodedURIs.xml" => 18,
-  "errors.xml" => 45,
+  "errors.xml" => 53,
   "expandproperty.xml" => 8,
   "floating.xml" => 13,
   "freebusy.xml" => 4,
