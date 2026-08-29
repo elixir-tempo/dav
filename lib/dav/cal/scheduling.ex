@@ -362,7 +362,7 @@ defmodule Dav.Cal.Scheduling do
       # everyone else.
       recipients = Enum.reject(attendees_of(components), &(&1 in addresses))
 
-      send_to(recipients, "CANCEL", components, zones, options)
+      send_to(recipients, "CANCEL", components, zones, options, every(components))
     else
       # An attendee removing their copy is declining. The reply carries
       # their own line with `PARTSTAT=DECLINED`, which is how the
@@ -381,7 +381,7 @@ defmodule Dav.Cal.Scheduling do
     else
       declined = for component <- components, do: declined(only(component, addresses), addresses)
 
-      send_to([organizer], "REPLY", declined, zones, options)
+      send_to([organizer], "REPLY", declined, zones, options, every(declined))
     end
   end
 
@@ -593,7 +593,14 @@ defmodule Dav.Cal.Scheduling do
       # advancing it on the organiser's behalf.
       components = if told == [], do: components, else: sequenced(components, change)
 
-      send_to(told, "REQUEST", components, zones(calendar), options)
+      send_to(
+        told,
+        "REQUEST",
+        components,
+        zones(calendar),
+        options,
+        announced(components, change)
+      )
 
       record(resource, restated(calendar, components), recipients, options)
     else
@@ -639,7 +646,7 @@ defmodule Dav.Cal.Scheduling do
     if organizer_delivers?(components) and notified([organizer], change) != [] do
       replies = for component <- components, do: only(component, addresses)
 
-      send_to([organizer], "REPLY", replies, zones(calendar), options)
+      send_to([organizer], "REPLY", replies, zones(calendar), options, every(replies))
       record_reply(resource, calendar, organizer, options)
     end
 
@@ -861,9 +868,9 @@ defmodule Dav.Cal.Scheduling do
     %{component | properties: properties}
   end
 
-  defp send_to([], _method, _components, _zones, _options), do: :ok
+  defp send_to([], _method, _components, _zones, _options, _announced), do: :ok
 
-  defp send_to(recipients, method, components, zones, options) do
+  defp send_to(recipients, method, components, zones, options, announced) do
     # The delivered copy carries canonical addresses too. Sending one
     # spelling and storing another is how an attendee's reply stops
     # matching the invitation it answers.
@@ -877,8 +884,11 @@ defmodule Dav.Cal.Scheduling do
             |> unagented()
             |> unextended(extensions(options))
 
+    told =
+      for component <- normalised, value(component, "RECURRENCE-ID") in announced, do: component
+
     for recipient <- recipients, home = home_of(recipient, options), not is_nil(home) do
-      deliver_to(home, recipient, method, normalised, zones, options)
+      deliver_to(home, recipient, method, normalised, told, zones, options)
     end
 
     :ok
@@ -921,6 +931,49 @@ defmodule Dav.Cal.Scheduling do
     else
       _unreadable -> nil
     end
+  end
+
+  # Which instances the message itself carries. An update that touches
+  # one Tuesday is announced as that Tuesday: sending the whole
+  # recurrence set asks the recipient to re-read a series they already
+  # have, and their client cannot tell which part is news. The copy
+  # kept in their calendar is still the whole set — only the message
+  # is narrowed.
+  defp announced(components, %{previous: nil}), do: every(components)
+
+  defp announced(components, %{previous: previous}) do
+    case ICalendar.parse(previous) do
+      {:ok, before} -> altered(components, schedulable(before)) || every(components)
+      _unreadable -> every(components)
+    end
+  end
+
+  # `nil` rather than `[]` when nothing changed, so the caller falls
+  # back to announcing everything: a message with no components at all
+  # is not a smaller message, it is a broken one.
+  defp altered(components, held) do
+    case for component <- components, altered?(component, held), do: recurrence(component) do
+      [] -> nil
+      some -> some
+    end
+  end
+
+  defp every(components), do: for(component <- components, do: recurrence(component))
+
+  defp recurrence(component), do: value(component, "RECURRENCE-ID")
+
+  defp altered?(component, held) do
+    case Enum.find(held, &(recurrence(&1) == recurrence(component))) do
+      nil -> true
+      previous -> instance(component) != instance(previous)
+    end
+  end
+
+  defp instance(component) do
+    for property <- component.properties,
+        property.name not in @bookkeeping,
+        into: MapSet.new(),
+        do: {property.name, property.value, Map.drop(property.parameters, @maintained)}
   end
 
   defp extensions(options), do: Map.get(options, :extensions) || @public
@@ -986,12 +1039,12 @@ defmodule Dav.Cal.Scheduling do
   #
   # A REPLY has no calendar copy: the organiser already has the event,
   # and what has changed is one attendee's participation.
-  defp deliver_to(home, recipient, method, components, zones, options) do
+  defp deliver_to(home, recipient, method, components, told, zones, options) do
     uid = Enum.find_value(components, &value(&1, "UID"))
 
     case collection(home, &Schedule.inbox?/1, options) do
       nil -> :ok
-      inbox -> store(inbox, message(method, components, zones), uid, options)
+      inbox -> store(inbox, message(method, told, zones), uid, options)
     end
 
     case {method, collection(home, &Cal.calendar?/1, options)} do

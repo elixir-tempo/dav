@@ -294,10 +294,33 @@ defmodule Dav.CalDAVTester.Verifier do
       found == [] -> {:failed, "#{name} was not returned"}
       is_nil(expected) -> :passed
       expected == :negated -> :passed
-      Enum.any?(found, &(&1 == expected)) -> :passed
+      Enum.any?(found, &alike?(&1, expected)) -> :passed
       true -> {:failed, "#{name} is #{inspect(hd(found))}, expected #{inspect(expected)}"}
     end
   end
+
+  # A property whose value is markup is compared as markup. Both sides
+  # name the same elements, but a prefix is a serialisation choice —
+  # `<D:href>` and `<href xmlns="DAV:">` are the same element — and
+  # comparing the strings makes the server fail for spelling a
+  # namespace differently from the scenario that wrote the
+  # expectation. The same reasoning as `xmlDataMatch`, applied where
+  # the value is a document fragment rather than a whole one.
+  defp alike?(found, expected) do
+    found == expected or fragments_alike?(found, expected)
+  end
+
+  defp fragments_alike?(found, expected) do
+    with true <- markup?(found) and markup?(expected),
+         {:ok, left} <- parsed(wrapped(found)),
+         {:ok, right} <- parsed(wrapped(expected)) do
+      same?(left, right)
+    else
+      _not_markup_or_unreadable -> false
+    end
+  end
+
+  defp markup?(value), do: is_binary(value) and String.contains?(value, "<")
 
   # `ignore` and `only` narrow which resources are examined, so a
   # collection's own response does not have to satisfy expectations
@@ -331,7 +354,19 @@ defmodule Dav.CalDAVTester.Verifier do
   end
 
   defp shape(%{name: name, attributes: attributes, text: text, children: children}) do
-    {name, attributes, String.trim(text), children |> Enum.map(&shape/1) |> Enum.sort()}
+    {name, declared(attributes), String.trim(text), children |> Enum.map(&shape/1) |> Enum.sort()}
+  end
+
+  # Namespace declarations are not content. `<D:href>` and
+  # `<href xmlns="DAV:">` are the same element written two ways, and
+  # the parser has already resolved both to the same qualified name —
+  # keeping the `xmlns` attribute alongside it makes the two compare
+  # unequal for a choice of prefix.
+  defp declared(attributes) do
+    for {name, value} <- attributes,
+        not (name == "xmlns" or String.starts_with?(name, "xmlns:")),
+        into: %{},
+        do: {name, value}
   end
 
   # A `filter` names elements the comparison ignores — timestamps and

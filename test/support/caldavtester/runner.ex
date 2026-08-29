@@ -90,6 +90,7 @@ defmodule Dav.CalDAVTester.Runner do
     state =
       Enum.reduce(scenario.setup, state, fn request, state ->
         {_outcome, state} = attempt(request, state)
+
         state
       end)
 
@@ -174,8 +175,8 @@ defmodule Dav.CalDAVTester.Runner do
     |> uris(state)
     |> Enum.find_value(fn uri ->
       cond do
-        String.contains?(uri, "$") -> String.slice(uri, 0, 40)
-        not String.starts_with?(uri, "/") -> String.slice(uri, 0, 40)
+        String.contains?(uri, "$") -> String.slice(uri, 0, 120)
+        not String.starts_with?(uri, "/") -> String.slice(uri, 0, 120)
         true -> nil
       end
     end)
@@ -492,7 +493,7 @@ defmodule Dav.CalDAVTester.Runner do
   # A name may be a path — `{ns}outer/{ns}inner` — naming a nested
   # element rather than a top-level one.
   defp grab({:element, name, variable}, conn, _request, state) do
-    bind(state, variable, first_text(conn, String.split(name || "", "/")))
+    bind(state, variable, first_text(conn, steps(name)))
   end
 
   defp grab({:calendar_property, name, variable}, conn, _request, state) do
@@ -502,6 +503,20 @@ defmodule Dav.CalDAVTester.Runner do
   defp grab({:calendar_parameter, _name, _variable}, _conn, _request, state), do: state
 
   defp grab({:unsupported, _name, _variable}, _conn, _request, state), do: state
+
+  # A path is Clark notation joined by `/` — and a namespace URI
+  # contains `/` too. Splitting the whole string on it shreds
+  # `{http://calendarserver.org/ns/}invite-notification` into pieces
+  # that match nothing, which is why every grab in that namespace came
+  # back empty while `{DAV:}` ones worked.
+  defp steps(nil), do: []
+
+  defp steps(name) do
+    case Regex.scan(~r/\{[^}]*\}[^\/]+/, name) do
+      [] -> String.split(name, "/")
+      matched -> List.flatten(matched)
+    end
+  end
 
   # Names are in Clark notation, matching how the scenarios write them.
   defp first_text(conn, path) do
