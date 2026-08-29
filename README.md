@@ -52,8 +52,8 @@ Against that declaration the suite puts **2,534 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 1,938 | 76% |
-| failed | 544 | 21% |
+| passed | 1,939 | 77% |
+| failed | 543 | 21% |
 | skipped | 52 | 2% |
 
 Fourteen verifiers are ported — `statusCode`, `header`, `multistatusItems`, `propfindItems`, `propfindValues`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlDataMatch`, `xmlElementMatch`, `prepostcondition`, `freeBusy` and `postFreeBusy` — along with the suite's compound directives (`DELETEALL`, `GETNEW`, `WAITCOUNT`, `GETCONTAINS`) and the `grab` elements that carry a value from one response into a later request. A check the harness cannot make is reported skipped, never counted as a pass.

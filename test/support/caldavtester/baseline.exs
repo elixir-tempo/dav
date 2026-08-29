@@ -49,7 +49,7 @@
   "implicitsharing.xml" => 5,
   "implicittimezones.xml" => 12,
   "implicittodo.xml" => 50,
-  "implicitxdash.xml" => 30,
+  "implicitxdash.xml" => 31,
   "mkcalendar.xml" => 14,
   "nonascii.xml" => 12,
   "options.xml" => 4,

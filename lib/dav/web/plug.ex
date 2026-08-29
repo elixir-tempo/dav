@@ -54,6 +54,12 @@ defmodule Dav.Web.Plug do
     so an anonymous client is told to authenticate rather than that
     the resource is forbidden to it.
 
+  * `:extensions` names the `X-` properties and parameters that
+    travel with a scheduling message. Which extensions are shared
+    rather than private is a matter of local agreement between
+    clients, so a deployment states it; the default carries only
+    `X-APPLE-STRUCTURED-LOCATION`.
+
   * `:reports`, `:validators`, `:hooks` and `:methods` are the four
     extension points, each a list the request dispatches through.
 
@@ -82,6 +88,7 @@ defmodule Dav.Web.Plug do
       hooks: Keyword.get(options, :hooks, []),
       principal: Keyword.get(options, :principal),
       authentication: Keyword.get(options, :authentication, :optional),
+      extensions: Keyword.get(options, :extensions),
       methods: Map.new(Keyword.get(options, :methods, []))
     }
   end

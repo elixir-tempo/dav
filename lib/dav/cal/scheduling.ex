@@ -70,8 +70,11 @@ defmodule Dav.Cal.Scheduling do
   @bookkeeping ~w(DTSTAMP LAST-MODIFIED CREATED SEQUENCE)
   @maintained ~w(SCHEDULE-STATUS SCHEDULE-AGENT RSVP)
 
-  # The `X-` properties that belong to the event rather than to one
-  # person's copy of it, and so travel with a scheduling message.
+  # The `X-` names that belong to the event rather than to one
+  # person's copy of it, and so travel with a scheduling message. A
+  # deployment says which those are — the set is a matter of local
+  # agreement between clients, not of the specification — and this is
+  # the default for one that says nothing.
   @public ~w(X-APPLE-STRUCTURED-LOCATION)
   @doc """
   Whether this hook applies — only inside a calendar collection.
@@ -872,7 +875,7 @@ defmodule Dav.Cal.Scheduling do
             |> unstamped()
             |> without_alarms()
             |> unagented()
-            |> unextended()
+            |> unextended(extensions(options))
 
     for recipient <- recipients, home = home_of(recipient, options), not is_nil(home) do
       deliver_to(home, recipient, method, normalised, zones, options)
@@ -920,18 +923,38 @@ defmodule Dav.Cal.Scheduling do
     end
   end
 
+  defp extensions(options), do: Map.get(options, :extensions) || @public
+
   # An `X-` property is private to whoever wrote it unless it is one
   # of the few that describe the meeting rather than the copy. The
   # organiser's client may hang anything it likes off its own event —
   # a colour, a local identifier, a sync marker — and none of it means
   # the same on an attendee's, where a different client will read it.
   # A structured location does: it is where everyone is going.
-  defp unextended(component) do
-    %{component | properties: Enum.reject(component.properties, &private?/1)}
+  defp unextended(component, allowed) do
+    kept =
+      component.properties
+      |> Enum.reject(&private?(&1.name, allowed))
+      |> Enum.map(&public_parameters(&1, allowed))
+
+    %{component | properties: kept}
   end
 
-  defp private?(%{name: name}) do
-    String.starts_with?(name, "X-") and name not in @public
+  # Parameters follow the same rule as properties. A client may hang
+  # its own on an `ORGANIZER` or `ATTENDEE`, and they are no more
+  # meaningful to a recipient than a private property would be.
+  defp public_parameters(property, allowed) do
+    kept =
+      for {name, value} <- property.parameters,
+          not private?(name, allowed),
+          into: %{},
+          do: {name, value}
+
+    %{property | parameters: kept}
+  end
+
+  defp private?(name, allowed) do
+    String.starts_with?(name, "X-") and name not in allowed
   end
 
   # `SCHEDULE-AGENT` says who is expected to deliver *this* message.

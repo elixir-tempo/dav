@@ -826,6 +826,13 @@ defmodule Dav.CalDAVTester.Runner do
       validators: [Cal.Object],
       hooks: [Cal.Scheduling, Cal.Sharing],
       authentication: :required,
+      # The reference deployment shares these extensions between
+      # participants; everything else a client hangs on its own copy
+      # stays there. The suite's fixtures name them, so the harness
+      # configures the same set rather than the library guessing.
+      extensions: ~w(X-TEST-ALL-PROP1 X-TEST-ALL-PARAM1
+                     X-TEST-ORGANIZER-PROP1 X-TEST-ORGANIZER-PARAM1
+                     X-APPLE-STRUCTURED-LOCATION X-APPLE-NEEDS-REPLY),
       # The compound directives — GETNEW, DELETEALL and the rest —
       # are the harness acting on its own behalf rather than a
       # scenario's, so they act as the first account. A per-request
