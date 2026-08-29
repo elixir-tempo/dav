@@ -94,10 +94,26 @@ defmodule Dav.Test.WritableStore do
     end
   end
 
+  # A collection belongs to whoever owns the one it was made in. A
+  # calendar created inside someone's calendar home is theirs, and
+  # without an owner nothing can tell whose it is — implicit
+  # scheduling reads the owner to decide which way a message goes, so
+  # an ownerless calendar accepts invitations and delivers none.
   defp create(agent, path) do
-    resource = %Resource{path: path, collection?: true}
+    resource = %Resource{path: path, collection?: true, owner: inherited(agent, path)}
     Agent.update(agent, &%{&1 | resources: [resource | &1.resources]})
     {:ok, resource}
+  end
+
+  defp inherited(agent, path) do
+    parent = Enum.drop(path, -1)
+
+    Agent.get(agent, fn state ->
+      case Enum.find(state.resources, &(&1.path == parent)) do
+        %Resource{owner: owner} -> owner
+        nil -> nil
+      end
+    end)
   end
 
   defp exists?(_agent, []), do: true
@@ -184,7 +200,13 @@ defmodule Dav.Test.WritableStore do
   end
 
   defp create_calendar(agent, path) do
-    resource = %Resource{path: path, collection?: true, types: [Cal.calendar()]}
+    resource = %Resource{
+      path: path,
+      collection?: true,
+      types: [Cal.calendar()],
+      owner: inherited(agent, path)
+    }
+
     Agent.update(agent, &%{&1 | resources: [resource | &1.resources]})
     {:ok, resource}
   end
