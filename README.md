@@ -28,11 +28,17 @@ HTTP                    RFC 9110/9111/9112
 
 **There is no locking, and there will not be.** Class 1 only. RFC 4918 permits it, most clients tolerate it, and `LOCK` is a large fraction of the specification for something a read-mostly server does not need. Advertising `DAV: 1, 2` without implementing it would be worse than not advertising it.
 
-Not built: `Dav.Cal` and `Dav.Card`, collection synchronisation (RFC 6578), and ACL (RFC 3744).
+`Dav.Cal` — CalDAV, RFC 4791 — attaches through those two seams without the base knowing what a calendar is:
+
+* `MKCALENDAR` as a `Dav.Web.Method`.
+* `calendar-query`, `calendar-multiget` and `free-busy-query` as `Dav.Web.Report`s.
+* `Dav.Cal.TimeRange` — the five-row overlap table of RFC 4791 section 9.9, with recurrence expanded through Tempo.
+
+Not built: `Dav.Card`, collection synchronisation (RFC 6578), scheduling (RFC 6638), and ACL (RFC 3744).
 
 ## Measured against the conformance suite
 
-Apple's CalDAVTester issues 6,407 real HTTP requests across its 193 scenarios. **5,584 of them (87%) now have a method that answers them.** What remains is `POST` (633 — scheduling and sharing), `MKCALENDAR` (125 — `Dav.Cal`) and `ACL` (64).
+Apple's CalDAVTester issues 6,407 real HTTP requests across its 193 scenarios. **5,709 of them (89%) now have a method that answers them.** What remains is `POST` (633 — scheduling and sharing) and `ACL` (64).
 
 That is a measure of surface, not of conformance: the suite tests a full CalDAV *and* CardDAV server including principals, ACL, scheduling and Apple's sharing extension, which is a groupware product rather than a protocol library. See `plans/dav.md` in the repository for where the scope stops and why.
 

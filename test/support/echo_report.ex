@@ -13,7 +13,7 @@ defmodule Dav.Test.EchoReport do
   alias Dav.Web.Resource
 
   @impl Dav.Web.Report
-  def run(%Resource{} = resource, body, depth, _context) do
+  def run(%Resource{} = resource, body, depth, _options) do
     if String.contains?(body, "make-it-fail") do
       {:error, :malformed}
     else

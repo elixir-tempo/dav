@@ -30,7 +30,6 @@ defmodule Dav.Web.Report do
   """
 
   alias Dav.Web.Resource
-  alias Dav.Web.Store
   alias Dav.Xml
 
   @typedoc "One resource's part of a `207 Multi-Status`."
@@ -47,16 +46,36 @@ defmodule Dav.Web.Report do
 
   * `depth` is the `Depth` header, already validated as `0` or `1`.
 
-  * `context` is the store's configuration, unchanged.
+  * `options` carries the `:store` and its `:context`. Both are passed
+    explicitly — a report routinely needs to read a collection's
+    members and their bodies, and a callback that cannot reach its
+    store is a seam drawn in the wrong place.
 
   ### Returns
 
-  * `{:ok, responses}` to be written as a `207 Multi-Status`; or
+  * `{:ok, responses}` to be written as a `207 Multi-Status`;
+
+  * `{:ok, {:body, content_type, body}}` to be sent as a `200`, for
+    the reports that compute one value rather than a fact about each
+    resource — `free-busy-query` returns a single iCalendar object;
 
   * `{:error, :malformed}` when the body does not match this report's
-    grammar, which becomes a `400`.
+    grammar, which becomes a `400`; or
+
+  * `{:error, :forbidden}`, a `403`, when the report cannot run
+    against this kind of resource at all.
 
   """
-  @callback run(Resource.t(), body :: binary(), depth :: 0 | 1, Store.context()) ::
-              {:ok, [response()]} | {:error, :malformed}
+  @typedoc "What the plug resolved for this request."
+  @type options :: %{
+          required(:store) => module(),
+          required(:context) => term(),
+          optional(atom()) => term()
+        }
+
+  @typedoc "A report that answers with one value rather than a multistatus."
+  @type body :: {:body, content_type :: String.t(), iodata()}
+
+  @callback run(Resource.t(), body :: binary(), depth :: 0 | 1, options()) ::
+              {:ok, [response()] | body()} | {:error, :malformed | :forbidden}
 end

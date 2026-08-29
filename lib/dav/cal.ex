@@ -21,6 +21,8 @@ defmodule Dav.Cal do
 
   """
 
+  alias Dav.Web.Properties
+  alias Dav.Web.Resource
   alias Dav.Xml
 
   @doc """
@@ -70,4 +72,56 @@ defmodule Dav.Cal do
   """
   @spec calendar?(Dav.Web.Resource.t()) :: boolean()
   def calendar?(%Dav.Web.Resource{types: types}), do: calendar() in types
+
+  @doc """
+  Build one resource's part of a `207 Multi-Status`.
+
+  Shared by the reports, which differ in *which* objects they answer
+  for and not in how they answer. `CALDAV:calendar-data` returns the
+  object's own body — the point of both reports, since it saves a
+  request per object.
+
+  ### Arguments
+
+  * `object` is the resolved `t:Dav.Web.Resource.t/0`.
+
+  * `wanted` is the list of property names the client asked for.
+
+  * `data` is the object's body, for `calendar-data`.
+
+  ### Returns
+
+  * A `{href, propstats}` pair for `Dav.Xml.multistatus/1`.
+
+  ### Examples
+
+      iex> object = %Dav.Web.Resource{path: ["c", "1.ics"], etag: ~s("v1")}
+      iex> {href, [{status, _properties}]} = Dav.Cal.report_response(object, [{"DAV:", "getetag"}], "")
+      iex> {href, status}
+      {"/c/1.ics", "HTTP/1.1 200 OK"}
+
+  """
+  @spec report_response(Resource.t(), [Xml.qname()], binary()) ::
+          {String.t(), [{String.t(), [{Xml.qname(), Xml.value()}]}]}
+  def report_response(%Resource{} = object, wanted, data) do
+    {found, missing} =
+      Enum.reduce(wanted, {[], []}, fn name, {found, missing} ->
+        case property(name, object, data) do
+          {:ok, value} -> {found ++ [{name, value}], missing}
+          :error -> {found, missing ++ [{name, nil}]}
+        end
+      end)
+
+    propstats =
+      [{"HTTP/1.1 200 OK", found}, {"HTTP/1.1 404 Not Found", missing}]
+      |> Enum.reject(fn {_status, properties} -> properties == [] end)
+
+    {Resource.href(object), propstats}
+  end
+
+  defp property({namespace, "calendar-data"}, _object, data) do
+    if namespace == Xml.caldav(), do: {:ok, data}, else: :error
+  end
+
+  defp property(name, object, _data), do: Properties.fetch(object, name)
 end

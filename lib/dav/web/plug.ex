@@ -248,8 +248,8 @@ defmodule Dav.Web.Plug do
          {:ok, depth} <- depth(conn),
          {:ok, resource} <- resolve(conn, options),
          {:ok, handler} <- handler(name, options),
-         {:ok, responses} <- handler.run(resource, body, depth, options.context) do
-      multistatus(conn, responses)
+         {:ok, answer} <- handler.run(resource, body, depth, options) do
+      answer(conn, answer)
     else
       {:error, :unsupported_report} ->
         precondition(conn, {Xml.dav(), "supported-report"})
@@ -265,8 +265,26 @@ defmodule Dav.Web.Plug do
 
       {:error, :not_found} ->
         send_resp(conn, 404, "")
+
+      {:error, :forbidden} ->
+        send_resp(conn, 403, "")
     end
   end
+
+  # Most reports answer as a `207 Multi-Status`, and this library
+  # writes the XML so that they all answer alike. Not all of them can:
+  # a `free-busy-query` computes one value across a whole collection,
+  # not a fact about each resource in it, and returns a single
+  # iCalendar object with a `200`. A seam that only allowed the
+  # multistatus shape would exclude a report the specification marks
+  # REQUIRED.
+  defp answer(conn, {:body, content_type, body}) do
+    conn
+    |> put_resp_content_type(content_type, "utf-8")
+    |> send_resp(200, body)
+  end
+
+  defp answer(conn, responses) when is_list(responses), do: multistatus(conn, responses)
 
   defp handler(name, %{reports: reports}) do
     case Map.fetch(reports, name) do

@@ -130,4 +130,73 @@ defmodule Dav.XmlTest do
       assert xml =~ "<n0:colour>red</n0:colour>"
     end
   end
+
+  describe "what real clients send" do
+    # Both of these were found by running the request bodies in
+    # rfc/conformance/caldavtester/Resource through the parser. Neither
+    # was caught by tests written from the specification, because both
+    # are about how clients write XML rather than what the XML means.
+
+    test "a default namespace declaration names elements as surely as a prefix" do
+      # Apple's own fixtures use this form throughout. Reading only
+      # prefixed names dropped the elements silently — a whole request
+      # became malformed with nothing to point at.
+      body = """
+      <?xml version='1.0' encoding='UTF-8'?>
+      <calendar-query xmlns='urn:ietf:params:xml:ns:caldav'>
+        <prop xmlns='DAV:'><getetag/></prop>
+      </calendar-query>
+      """
+
+      assert {:ok, root} = Xml.parse(body)
+      assert root.name == {Xml.caldav(), "calendar-query"}
+      assert [prop] = root.children
+      assert prop.name == {Xml.dav(), "prop"}
+      assert [getetag] = prop.children
+      assert getetag.name == {Xml.dav(), "getetag"}
+    end
+
+    test "the same, for a REPORT's name" do
+      body = ~s(<?xml version='1.0'?><calendar-query xmlns='urn:ietf:params:xml:ns:caldav'/>)
+
+      assert Xml.report_name(body) == {:ok, {Xml.caldav(), "calendar-query"}}
+    end
+
+    test "and for PROPFIND's requested properties" do
+      body = """
+      <?xml version='1.0'?>
+      <propfind xmlns='DAV:'><prop><getetag/><displayname/></prop></propfind>
+      """
+
+      assert {:ok, {:prop, names}} = Xml.parse_propfind(body)
+      assert names == [{Xml.dav(), "getetag"}, {Xml.dav(), "displayname"}]
+    end
+
+    test "non-ASCII text does not make a document malformed" do
+      # xmerl decodes by the document's own declaration, so the body
+      # must reach it as bytes. As codepoints, an accented character
+      # is reported as illegal and the whole request is refused.
+      body = """
+      <?xml version="1.0" encoding="utf-8" ?>
+      <D:propfind xmlns:D="DAV:"><D:prop><D:displayname>té</D:displayname></D:prop></D:propfind>
+      """
+
+      assert {:ok, root} = Xml.parse(body)
+      assert [prop] = root.children
+      assert [displayname] = prop.children
+      assert displayname.text == "té"
+    end
+
+    test "and survives a round trip through PROPPATCH" do
+      body = """
+      <?xml version="1.0" encoding="utf-8" ?>
+      <D:propertyupdate xmlns:D="DAV:" xmlns:x="http://example.test/">
+        <D:set><D:prop><x:ville>Genève</x:ville></D:prop></D:set>
+      </D:propertyupdate>
+      """
+
+      assert {:ok, [{:set, {"http://example.test/", "ville"}, "Genève"}]} =
+               Xml.parse_proppatch(body)
+    end
+  end
 end

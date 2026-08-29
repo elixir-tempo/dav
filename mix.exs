@@ -86,6 +86,12 @@ defmodule Dav.MixProject do
   defp deps do
     [
       {:plug, "~> 1.16"},
+      # Time is Tempo's. `Tempo.ICal.from_ical/2` reads calendar data
+      # into intervals and `Tempo.RRule` expands recurrences, which is
+      # what `time-range` filtering needs and the hardest part of
+      # CalDAV to get right. iCalendar parsing arrives transitively
+      # through Tempo rather than as a dependency of its own.
+      {:ex_tempo, "~> 1.5"},
       # Request bodies are namespaced XML of well-known shape, which is
       # what SweetXml's extraction is good at. It rides on xmerl, and
       # `Dav.Xml` always scans with `allow_entities: false` — OTP 29

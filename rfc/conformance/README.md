@@ -4,9 +4,9 @@ Two suites matter for this family, and only one of them is vendored.
 
 ## CalDAVTester — vendored
 
-Apple's CalDAV and CardDAV conformance suite, in `caldavtester/`. See
-`caldavtester/FETCHING.md` for the pinned commit and for the fixture
-directory that was deliberately left out.
+Apple's CalDAV and CardDAV conformance suite, in `caldavtester/`,
+complete with its fixtures. See `caldavtester/FETCHING.md` for the
+pinned commit.
 
 It is worth having locally even before there is anything to run it
 against: each of the 226 scenarios is a sequence of requests with the

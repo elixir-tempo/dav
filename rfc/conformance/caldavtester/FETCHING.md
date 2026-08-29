@@ -1,33 +1,36 @@
-# CalDAVTester — what is here and what is not
+# CalDAVTester — provenance
 
-Vendored from https://github.com/apple/ccs-caldavtester at commit
-`bed21e5924275552c1561febc8203a9f194cf737` on 2026-08-29. Apache-2.0; see LICENSE.txt.
+Vendored complete from https://github.com/apple/ccs-caldavtester at
+commit `bed21e5924275552c1561febc8203a9f194cf737` on 2026-08-29. Apache-2.0; see LICENSE.txt.
 
-**Upstream is archived** — it was frozen in February 2024 and will not
-change again, which is why vendoring it is reasonable rather than lazy.
+**Upstream is archived** — frozen in February 2024 and it will not
+change again, which is why vendoring it is reasonable rather than lazy,
+and why the pinned commit above will not move.
 
 ## What is here
 
-* `scripts/` — 226 XML test scenarios. Each is a sequence of requests with
-  the responses a conformant server must give. This is the encoded
-  interop knowledge and the reason to vendor anything at all: it is
-  worth reading while implementing, not only running.
+* `scripts/` — 0 XML test scenarios. Each is a sequence of requests with
+  the responses a conformant server must give, which makes the suite a
+  better statement of what real clients expect than the RFCs are:
+  where an RFC says what is permitted, these say what Apple Calendar
+  will actually do.
+
+* `Resource/` — the calendar and contact fixtures the scenarios load.
 
 * `verifiers/` — the response checks the scenarios refer to.
 
-## What is not here
-
-`Resource/` — about 17 MB of sample calendar and contact fixtures the
-scenarios load. Omitted to keep this repository small. **The suite will
-not run without them**; fetch with:
-
-```bash
-curl -sSL https://github.com/apple/ccs-caldavtester/archive/bed21e5924275552c1561febc8203a9f194cf737.tar.gz | tar xz
-```
+The fixtures were left out at first, to keep the repository small. That
+was a mistake worth recording: **189 of the 193 scenarios reference
+them**, and none carry request bodies inline, so without them the
+scenarios were not merely un-runnable but largely unreadable. A
+scenario that points at `Resource/CardDAV/vpropfinds/1.xml` tells you
+nothing if that file is absent.
 
 ## One deliberate change from upstream
 
-`scripts/.gitignore`, containing `/tests/`, has been deleted. It is
-upstream's own build hygiene and it silently excluded 195 of the 323
-vendored files — including every test scenario, which is the entire
-reason for vendoring this. Nothing else has been modified.
+Four `.gitignore` files have been deleted — `scripts/.gitignore`,
+`Resource/.gitignore`, and two empty ones under `Resource/CalDAV/`.
+They are upstream's own build hygiene, and the first silently excluded
+195 of the vendored files, including every test scenario. Two were
+empty and the fourth named a directory the archive does not contain.
+Nothing else has been modified.

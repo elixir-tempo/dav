@@ -188,6 +188,36 @@ defmodule Dav.Xml do
     ]
   end
 
+  # A response is normally one or more propstats, but a resource that
+  # could not be read at all carries a bare status instead — there are
+  # no properties to report a status *for*. `calendar-multiget` needs
+  # this: it must answer for every href it was given, including the
+  # ones that are not there.
+  defp response({href, {:status, status}}, _prefixes, root) do
+    [
+      "<",
+      root,
+      ":response>",
+      "<",
+      root,
+      ":href>",
+      escape(href),
+      "</",
+      root,
+      ":href>",
+      "<",
+      root,
+      ":status>",
+      escape(status),
+      "</",
+      root,
+      ":status>",
+      "</",
+      root,
+      ":response>"
+    ]
+  end
+
   defp response({href, propstats}, prefixes, root) do
     [
       "<",
@@ -273,6 +303,7 @@ defmodule Dav.Xml do
   defp prefixes(responses) do
     used =
       for {_href, propstats} <- responses,
+          is_list(propstats),
           {_status, properties} <- propstats,
           {{namespace, _local}, value} <- properties,
           candidate <- [namespace | within(value)],
@@ -359,13 +390,22 @@ defmodule Dav.Xml do
     end
   end
 
+  # Two things here are load-bearing.
+  #
   # `allow_entities: false` is passed rather than assumed. OTP 29
   # refuses external entities by default, but the default has changed
   # before and enabling them demonstrably reads local files into the
   # document — which is a request body from an unauthenticated client.
+  #
+  # The body goes in as **bytes**, not codepoints. xmerl decodes
+  # according to the document's own declaration, so handing it
+  # `String.to_charlist/1` presents `é` as character 233 and the whole
+  # document is refused as containing an illegal character. Any
+  # accented summary or non-Latin name would make an otherwise valid
+  # request malformed.
   defp scan(body) do
     {document, _rest} =
-      :xmerl_scan.string(String.to_charlist(body),
+      :xmerl_scan.string(:binary.bin_to_list(body),
         allow_entities: false,
         quiet: true
       )
@@ -377,45 +417,63 @@ defmodule Dav.Xml do
     _kind, _value -> {:error, :malformed}
   end
 
-  defp child?({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t}, local) do
-    Enum.any?(content, fn
-      {:xmlElement, _n, _e, {_prefix, name}, _ns, _p, _pos, _a, _c, _l, _pa, _t} ->
-        List.to_string(name) == local
-
-      _other ->
-        false
-    end)
+  defp child?(element, local) do
+    element |> children_of() |> Enum.any?(&(local_name(&1) == local))
   end
 
-  defp child?(_other, _local), do: false
-
-  # The names asked for are the *children of* `DAV:prop`, not every
-  # element in the document — the request element itself is not a
-  # property, and neither is anything a client wraps around it.
   defp requested(document) do
     case find_prop(document) do
       nil ->
         []
 
-      {:xmlElement, _n, _e, _ns, _nsi, _p, _pos, _a, content, _l, _pa, _t} ->
-        content |> Enum.flat_map(&qname/1) |> Enum.uniq()
+      element ->
+        element |> children_of() |> Enum.flat_map(&qname/1) |> Enum.uniq()
     end
   end
 
-  defp find_prop({:xmlElement, _n, _e, nsinfo, _ns, _p, _pos, _a, content, _l, _pa, _t} = element) do
-    case nsinfo do
-      {_prefix, ~c"prop"} -> element
-      _other -> Enum.find_value(content, &find_prop/1)
+  defp find_prop({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t} = element) do
+    if local_name(element) == "prop" do
+      element
+    else
+      Enum.find_value(content, &find_prop/1)
     end
   end
 
   defp find_prop(_other), do: nil
 
-  defp qname({:xmlElement, _n, _e, {prefix, local}, namespace, _p, _pos, _a, _c, _l, _pa, _t}) do
-    [{uri_for(namespace, prefix), List.to_string(local)}]
+  defp qname({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, _c, _l, _pa, _t} = element) do
+    [element_qname(element)]
   end
 
   defp qname(_other), do: []
+
+  # A name may be prefixed — `C:filter` with `xmlns:C` — or unprefixed
+  # under a default namespace: `<filter>` inside
+  # `<calendar-query xmlns="urn:ietf:params:xml:ns:caldav">`. Both are
+  # ordinary, both appear in real client requests, and reading only
+  # the first form drops the second silently rather than failing
+  # loudly, which is how it survives a test suite written by hand.
+  defp element_qname({:xmlElement, name, _e, nsinfo, namespace, _p, _pos, _a, _c, _l, _pa, _t}) do
+    case nsinfo do
+      {prefix, local} -> {uri_for(namespace, prefix), List.to_string(local)}
+      _unprefixed -> {default_uri(namespace), Atom.to_string(name)}
+    end
+  end
+
+  # Whitespace between elements is a node too, and asking it for a
+  # name must be answered rather than crash — an empty name matches
+  # nothing, which is the right outcome.
+  defp element_qname(_not_an_element), do: {"", ""}
+
+  defp default_uri({:xmlNamespace, default, _nodes}), do: text(default)
+  defp default_uri(_other), do: ""
+
+  defp local_name(element), do: element |> element_qname() |> elem(1)
+
+  defp children_of({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t}),
+    do: content
+
+  defp children_of(_other), do: []
 
   defp uri_for({:xmlNamespace, _default, nodes}, prefix) do
     case List.keyfind(nodes, prefix, 0) do
@@ -595,11 +653,12 @@ defmodule Dav.Xml do
     end
   end
 
-  defp update(
-         {:xmlElement, _n, _e, {_prefix, ~c"propertyupdate"}, _ns, _p, _pos, _a, content, _l, _pa,
-          _t}
-       ) do
-    {:ok, Enum.flat_map(content, &instructions/1)}
+  defp update({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t} = element) do
+    if local_name(element) == "propertyupdate" do
+      {:ok, Enum.flat_map(content, &instructions/1)}
+    else
+      {:error, :malformed}
+    end
   end
 
   defp update(_other), do: {:error, :malformed}
@@ -607,10 +666,17 @@ defmodule Dav.Xml do
   # `set` and `remove` are read in the order they appear, and so are
   # the properties inside each.
   defp instructions(
-         {:xmlElement, _n, _e, {_prefix, verb}, _ns, _p, _pos, _a, content, _l, _pa, _t}
-       )
-       when verb in [~c"set", ~c"remove"] do
-    kind = if verb == ~c"set", do: :set, else: :remove
+         {:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t} = element
+       ) do
+    verb = local_name(element)
+
+    if verb in ["set", "remove"], do: read_instructions(verb, content), else: []
+  end
+
+  defp instructions(_other), do: []
+
+  defp read_instructions(verb, content) do
+    kind = if verb == "set", do: :set, else: :remove
 
     content
     |> Enum.flat_map(&properties_of/1)
@@ -619,20 +685,16 @@ defmodule Dav.Xml do
     end)
   end
 
-  defp instructions(_other), do: []
-
   defp properties_of(
-         {:xmlElement, _n, _e, {_prefix, ~c"prop"}, _ns, _p, _pos, _a, content, _l, _pa, _t}
+         {:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t} = element
        ) do
-    Enum.flat_map(content, &named_value/1)
+    if local_name(element) == "prop", do: Enum.flat_map(content, &named_value/1), else: []
   end
 
   defp properties_of(_other), do: []
 
-  defp named_value(
-         {:xmlElement, _n, _e, {prefix, local}, namespace, _p, _pos, _a, content, _l, _pa, _t}
-       ) do
-    [{{uri_for(namespace, prefix), List.to_string(local)}, text_of(content)}]
+  defp named_value({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t} = element) do
+    [{element_qname(element), text_of(content)}]
   end
 
   defp named_value(_other), do: []
@@ -695,12 +757,11 @@ defmodule Dav.Xml do
   end
 
   defp tree(
-         {:xmlElement, _n, _e, {prefix, local}, namespace, _p, _pos, attributes, content, _l, _pa,
-          _t}
+         {:xmlElement, _n, _e, _nsi, _ns, _p, _pos, attributes, content, _l, _pa, _t} = element
        ) do
     [
       %{
-        name: {uri_for(namespace, prefix), List.to_string(local)},
+        name: element_qname(element),
         attributes: Map.new(attributes, &attribute/1),
         children: Enum.flat_map(content, &tree/1),
         text: text_of(content)
