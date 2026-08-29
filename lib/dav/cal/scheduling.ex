@@ -289,7 +289,7 @@ defmodule Dav.Cal.Scheduling do
         resource,
         collection,
         calendar,
-        sequenced(components, change),
+        components,
         organizer,
         change,
         options
@@ -412,7 +412,9 @@ defmodule Dav.Cal.Scheduling do
   defp sequenced(components, %{previous: previous}) do
     case ICalendar.parse(previous) do
       {:ok, before} ->
-        if changed?(components, schedulable(before)), do: bumped(components), else: components
+        held = schedulable(before)
+
+        if changed?(components, held), do: bumped(components, held), else: components
 
       _unreadable ->
         components
@@ -431,24 +433,42 @@ defmodule Dav.Cal.Scheduling do
         do: {property.name, property.value}
   end
 
-  defp bumped(components), do: Enum.map(components, &raise_sequence/1)
+  defp bumped(components, held), do: Enum.map(components, &raise_sequence(&1, held))
 
-  defp raise_sequence(component) do
-    next = component |> value("SEQUENCE") |> next_sequence()
+  # A client that numbers its own revisions is left alone. `SEQUENCE`
+  # belongs to the organiser, and their client is entitled to raise it
+  # when it edits — so the server only supplies a number when the
+  # client has not moved past the one already stored. Adding one to
+  # whatever arrived instead put every such event a revision ahead of
+  # the copy the attendees were sent.
+  defp raise_sequence(component, held) do
+    stored = component |> counterpart(held) |> sequence_number()
+    sent = sequence_number(component)
+    next = if sent > stored, do: sent, else: stored + 1
 
     properties =
       Enum.reject(component.properties, &(&1.name == "SEQUENCE")) ++
-        [%{name: "SEQUENCE", parameters: %{}, value: next}]
+        [%{name: "SEQUENCE", parameters: %{}, value: Integer.to_string(next)}]
 
     %{component | properties: properties}
   end
 
-  defp next_sequence(nil), do: "1"
+  defp counterpart(component, held) do
+    recurrence = value(component, "RECURRENCE-ID")
 
-  defp next_sequence(value) do
+    Enum.find(held, &(value(&1, "RECURRENCE-ID") == recurrence))
+  end
+
+  defp sequence_number(nil), do: 0
+
+  defp sequence_number(component), do: component |> value("SEQUENCE") |> to_sequence()
+
+  defp to_sequence(nil), do: 0
+
+  defp to_sequence(value) do
     case Integer.parse(value) do
-      {number, _rest} -> Integer.to_string(number + 1)
-      :error -> "1"
+      {number, _rest} -> number
+      :error -> 0
     end
   end
 
@@ -515,9 +535,18 @@ defmodule Dav.Cal.Scheduling do
       # An organiser adjusting their own alarm would otherwise put a
       # fresh invitation in every attendee's Inbox, asking them to
       # look at an event that is exactly as they left it.
-      send_to(notified(recipients, change), "REQUEST", components, zones(calendar), options)
+      told = notified(recipients, change)
 
-      record(resource, calendar, recipients, change, options)
+      # And the version rises exactly when somebody is told. Raised
+      # here and not before, because `SEQUENCE` is the organiser's own
+      # numbering: an attendee declining one instance adds an
+      # `EXDATE`, which looks like a change to the timing and had them
+      # advancing it on the organiser's behalf.
+      components = if told == [], do: components, else: sequenced(components, change)
+
+      send_to(told, "REQUEST", components, zones(calendar), options)
+
+      record(resource, restated(calendar, components), recipients, change, options)
     else
       reply(resource, calendar, components, organizer, addresses, change, options)
     end
@@ -772,6 +801,21 @@ defmodule Dav.Cal.Scheduling do
     end
 
     :ok
+  end
+
+  # Substituted in place, not rebuilt. Collecting the timezones and
+  # appending the schedulable components drops anything that is
+  # neither, and reorders what survives.
+  defp restated(calendar, components) do
+    revised =
+      Map.new(components, &{{&1.name, value(&1, "RECURRENCE-ID")}, &1})
+
+    replaced =
+      Enum.map(calendar.components, fn component ->
+        Map.get(revised, {component.name, value(component, "RECURRENCE-ID")}, component)
+      end)
+
+    %{calendar | components: replaced}
   end
 
   defp notified(recipients, %{previous: nil}), do: recipients
