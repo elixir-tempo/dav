@@ -218,6 +218,7 @@ defmodule Dav.Web.Plug do
     with :ok <- capable(options, :put),
          :ok <- writable(path, options),
          :ok <- schedule_tag_matches(conn, path, options),
+         :ok <- entity_tag_matches(conn, path, options),
          :ok <- validate(body, path, options, type),
          previous = contents(path, options),
          {:ok, outcome, resource} <- options.store.put(path, body, type, options.context) do
@@ -230,6 +231,7 @@ defmodule Dav.Web.Plug do
     else
       {:error, :unsupported} -> refuse(conn, options)
       {:error, :schedule_tag} -> send_resp(conn, 412, "")
+      {:error, :entity_tag} -> send_resp(conn, 412, "")
       # A missing parent is a conflict, not an invitation to create it.
       {:error, :conflict} -> send_resp(conn, 409, "")
       {:error, :collection} -> send_resp(conn, 403, "")
@@ -293,6 +295,46 @@ defmodule Dav.Web.Plug do
         if wanted == "*" or wanted == current_schedule_tag(path, options),
           do: :ok,
           else: {:error, :schedule_tag}
+    end
+  end
+
+  # RFC 7232 sections 3.1 and 3.2. `If-Match` says "only if this is
+  # still what I last saw", and `If-None-Match: *` says "only if it is
+  # not there at all" — the second is how a client creates a resource
+  # without racing another that is creating the same one. Both answer
+  # `412` rather than overwriting, because a lost update is worse than
+  # a refused request.
+  defp entity_tag_matches(conn, path, options) do
+    current = current_etag(path, options)
+
+    cond do
+      not matched?(get_req_header(conn, "if-match"), current) -> {:error, :entity_tag}
+      not unmatched?(get_req_header(conn, "if-none-match"), current) -> {:error, :entity_tag}
+      true -> :ok
+    end
+  end
+
+  defp matched?([], _current), do: true
+  defp matched?(_headers, nil), do: false
+  defp matched?([wanted | _rest], current), do: wanted == "*" or listed?(wanted, current)
+
+  defp unmatched?([], _current), do: true
+  defp unmatched?(_headers, nil), do: true
+  defp unmatched?([wanted | _rest], current), do: wanted != "*" and not listed?(wanted, current)
+
+  # A condition may carry several tags, and a weak comparison ignores
+  # the `W/` prefix a proxy may have added.
+  defp listed?(wanted, current) do
+    wanted
+    |> String.split(",")
+    |> Enum.map(&(&1 |> String.trim() |> String.replace_prefix("W/", "")))
+    |> Enum.member?(String.replace_prefix(current, "W/", ""))
+  end
+
+  defp current_etag(path, %{store: store, context: context}) do
+    case store.resolve(path, context) do
+      {:ok, %Resource{etag: etag}} -> etag
+      _absent -> nil
     end
   end
 
@@ -386,6 +428,7 @@ defmodule Dav.Web.Plug do
     with :ok <- capable(options, :delete),
          {:ok, resource} <- resolve(conn, options),
          :ok <- schedule_tag_matches(conn, resource.path, options),
+         :ok <- entity_tag_matches(conn, resource.path, options),
          # Read before removing: afterwards there is nothing left to
          # read, and a hook that must know what the resource held has
          # no way to find out.
@@ -396,6 +439,7 @@ defmodule Dav.Web.Plug do
     else
       {:error, :unsupported} -> refuse(conn, options)
       {:error, :schedule_tag} -> send_resp(conn, 412, "")
+      {:error, :entity_tag} -> send_resp(conn, 412, "")
       {:error, :not_found} -> send_resp(conn, 404, "")
     end
   end
@@ -597,6 +641,8 @@ defmodule Dav.Web.Plug do
     with :ok <- capable(options, kind),
          {:ok, destination} <- destination(conn),
          {:ok, source} <- resolve(conn, options),
+         :ok <- entity_tag_matches(conn, source.path, options),
+         :ok <- schedule_tag_matches(conn, source.path, options),
          :ok <- distinct(source, destination),
          {:ok, replacing?} <- overwritable(conn, destination, options),
          :ok <- parent_of(destination, options),
@@ -608,6 +654,8 @@ defmodule Dav.Web.Plug do
     else
       {:error, :unsupported} -> refuse(conn, options)
       {:error, :no_destination} -> send_resp(conn, 400, "")
+      {:error, :entity_tag} -> send_resp(conn, 412, "")
+      {:error, :schedule_tag} -> send_resp(conn, 412, "")
       {:error, :not_found} -> send_resp(conn, 404, "")
       {:error, :same} -> send_resp(conn, 403, "")
       {:error, :would_overwrite} -> send_resp(conn, 412, "")

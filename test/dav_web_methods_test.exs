@@ -166,4 +166,54 @@ defmodule Dav.Web.MethodsTest do
       assert conn.status == 415
     end
   end
+
+  describe "conditional requests" do
+    test "PUT with a stale If-Match is refused", context do
+      conn =
+        send_request("PUT", "/files/note.txt", context.writable, "new", [{"if-match", ~s("gone")}])
+
+      # `412` and not `409`: the request was well formed and the
+      # server understood it, but the resource is no longer what the
+      # client believed it was overwriting.
+      assert conn.status == 412
+      assert send_request("GET", "/files/note.txt", context.writable).resp_body != "new"
+    end
+
+    test "PUT with a matching If-Match proceeds", context do
+      etag = send_request("GET", "/files/note.txt", context.writable) |> get_resp_header("etag")
+
+      conn =
+        send_request("PUT", "/files/note.txt", context.writable, "new", [{"if-match", hd(etag)}])
+
+      assert conn.status == 204
+    end
+
+    test "If-Match: * requires the resource to exist", context do
+      assert send_request("PUT", "/files/note.txt", context.writable, "x", [{"if-match", "*"}]).status ==
+               204
+
+      assert send_request("PUT", "/files/new.txt", context.writable, "x", [{"if-match", "*"}]).status ==
+               412
+    end
+
+    test "If-None-Match: * refuses to overwrite", context do
+      assert send_request("PUT", "/files/note.txt", context.writable, "x", [
+               {"if-none-match", "*"}
+             ]).status == 412
+
+      # The point of the header: creating a resource without racing
+      # another client creating the same one.
+      assert send_request("PUT", "/files/new.txt", context.writable, "x", [
+               {"if-none-match", "*"}
+             ]).status == 201
+    end
+
+    test "DELETE with a stale If-Match is refused", context do
+      conn =
+        send_request("DELETE", "/files/note.txt", context.writable, "", [{"if-match", ~s("gone")}])
+
+      assert conn.status == 412
+      assert send_request("GET", "/files/note.txt", context.writable).status == 200
+    end
+  end
 end
