@@ -38,9 +38,21 @@ Not built: `Dav.Card`, collection synchronisation (RFC 6578), scheduling (RFC 66
 
 ## Measured against the conformance suite
 
-Apple's CalDAVTester issues 6,407 real HTTP requests across its 193 scenarios. **5,709 of them (89%) now have a method that answers them.** What remains is `POST` (633 — scheduling and sharing) and `ACL` (64).
+Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests real clients make, with the responses a conformant server must give. Upstream drives them from Python over HTTP against a provisioned server. `Dav.CalDAVTester` runs the same files in Elixir, in-process through `Plug.Test`, so the measurement runs in CI beside everything else and needs no Python, no socket and no account database.
 
-That is a measure of surface, not of conformance: the suite tests a full CalDAV *and* CardDAV server including principals, ACL, scheduling and Apple's sharing extension, which is a groupware product rather than a protocol library. See `plans/dav.md` in the repository for where the scope stops and why.
+Of the 5,624 CalDAV tests it attempts:
+
+| outcome | tests | |
+| --- | ---: | --- |
+| passed | 1,029 | 18% |
+| failed | 1,135 | 20% |
+| skipped | 3,460 | 62% |
+
+**A check this harness cannot make is skipped, never counted as a pass.** The largest skips are `calendarDataMatch` (640), the harness's own `GETNEW`/`WAITDELETEALL` polling directives (1,068 together), `POST` (301) and `grab` directives that carry a value from one response into a later request (172). Naming them is the point: a harness that quietly counts what it did not check turns a measurement into a fiction.
+
+The failures are mostly scope rather than defect. Nearly half the suite tests implicit scheduling, and much of the rest tests Apple's sharing extension, managed attachments and ACL — a groupware product rather than a protocol library. See `plans/dav.md` for where the scope stops and why.
+
+For comparison, the weaker measure this replaces: 5,709 of the suite's 6,407 requests (89%) have a method that answers them at all. That counts surface, not conformance, and the two numbers should not be confused.
 
 ## On parsing XML safely
 

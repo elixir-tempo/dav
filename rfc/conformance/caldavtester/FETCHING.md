@@ -9,7 +9,7 @@ and why the pinned commit above will not move.
 
 ## What is here
 
-* `scripts/` — 0 XML test scenarios. Each is a sequence of requests with
+* `scripts/` — 193 XML test scenarios (162 CalDAV, 31 CardDAV), holding 6,675 individual tests. Each is a sequence of requests with
   the responses a conformant server must give, which makes the suite a
   better statement of what real clients expect than the RFCs are:
   where an RFC says what is permitted, these say what Apple Calendar
@@ -18,6 +18,12 @@ and why the pinned commit above will not move.
 * `Resource/` — the calendar and contact fixtures the scenarios load.
 
 * `verifiers/` — the response checks the scenarios refer to.
+
+**The harness itself is not vendored** — `caldavtester.py` and its
+`src/` are not here, only the data it reads. Running the suite would
+also need a populated `serverinfo.xml`, authentication and provisioned
+principals, none of which this library has. The scenarios are used
+here as a corpus of what real clients send, not as a test runner.
 
 The fixtures were left out at first, to keep the repository small. That
 was a mistake worth recording: **189 of the 193 scenarios reference
