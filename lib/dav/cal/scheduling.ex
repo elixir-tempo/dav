@@ -916,16 +916,34 @@ defmodule Dav.Cal.Scheduling do
   # By UID, not by file name. A client names its own resources, and
   # `1.ics` holding an event whose UID is a long opaque string is the
   # normal case rather than the exception.
-  defp cancel(calendar, _components, uid, options) do
+  defp cancel(calendar, components, uid, options) do
     with %Resource{} = object <- object_with(calendar, uid, options),
          {:ok, body} <- read(object, options),
          {:ok, stored} <- ICalendar.parse(body) do
-      updated = %{stored | components: Enum.map(stored.components, &cancelled(&1, nil))}
+      withdrawn = for component <- components, do: value(component, "RECURRENCE-ID")
+
+      updated = %{
+        stored
+        | components: Enum.map(stored.components, &cancelled_if(&1, withdrawn))
+      }
 
       write(object, ICalendar.write(updated), options)
     else
       _no_such_event -> :ok
     end
+  end
+
+  # A `CANCEL` names the instances it withdraws. One carrying the
+  # master — a component with no `RECURRENCE-ID` — withdraws the whole
+  # series; one naming a single override leaves the rest standing.
+  # Cancelling everything regardless cleared an attendee's calendar of
+  # meetings that are still going ahead.
+  defp cancelled_if(%{name: "VTIMEZONE"} = zone, _withdrawn), do: zone
+
+  defp cancelled_if(component, withdrawn) do
+    if nil in withdrawn or value(component, "RECURRENCE-ID") in withdrawn,
+      do: cancelled(component, nil),
+      else: component
   end
 
   defp cancelled(%{name: "VTIMEZONE"} = zone, _component), do: zone
