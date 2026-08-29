@@ -493,10 +493,29 @@ defmodule Dav.Cal.Scheduling do
     for component <- components,
         property <- component.properties,
         property.name == "ATTENDEE",
-        server_delivers?(property),
+        delivers?(property),
         uniq: true,
         do: property.value
   end
+
+  # This server does not implement `SCHEDULE-AGENT=CLIENT` for an
+  # attendee: a client that says it will deliver its own invitation
+  # cannot be held to it, and an attendee who is never told is worse
+  # than one told twice. The parameter is dropped rather than kept,
+  # so nothing later claims a delivery method the server did not use.
+  # `NONE` is different — it is the organiser asking for silence, and
+  # that is honoured.
+  defp delivers?(property) do
+    Map.get(property.parameters, "SCHEDULE-AGENT", "SERVER") != "NONE"
+  end
+
+  defp promoted(%{name: "ATTENDEE"} = property) do
+    if Map.get(property.parameters, "SCHEDULE-AGENT") == "CLIENT",
+      do: %{property | parameters: Map.delete(property.parameters, "SCHEDULE-AGENT")},
+      else: property
+  end
+
+  defp promoted(property), do: property
 
   defp server_delivers?(property) do
     Map.get(property.parameters, "SCHEDULE-AGENT", "SERVER") == "SERVER"
@@ -538,7 +557,12 @@ defmodule Dav.Cal.Scheduling do
       # sent to the attendees and kept for the organiser, so an
       # invitation cannot say one thing in the Inbox and another in
       # the organiser's calendar.
-      components = Enum.map(components, &remembered(&1, change))
+      components =
+        components
+        |> Enum.map(&remembered(&1, change))
+        |> Enum.map(fn component ->
+          %{component | properties: Enum.map(component.properties, &promoted/1)}
+        end)
 
       recipients =
         if organizer_delivers?(components) do
@@ -838,7 +862,7 @@ defmodule Dav.Cal.Scheduling do
     # matching the invitation it answers.
     normalised =
       for component <- components,
-          do: component |> stamp([], options) |> unstamped() |> without_alarms()
+          do: component |> stamp([], options) |> unstamped() |> without_alarms() |> unagented()
 
     for recipient <- recipients, home = home_of(recipient, options), not is_nil(home) do
       deliver_to(home, recipient, method, normalised, zones, options)
@@ -884,6 +908,19 @@ defmodule Dav.Cal.Scheduling do
     else
       _unreadable -> nil
     end
+  end
+
+  # `SCHEDULE-AGENT` says who is expected to deliver *this* message.
+  # It is the organiser's own bookkeeping, kept on their copy and
+  # meaningless on a recipient's: by the time it arrives, the question
+  # of who would deliver it has been answered.
+  defp unagented(component) do
+    properties =
+      Enum.map(component.properties, fn property ->
+        %{property | parameters: Map.delete(property.parameters, "SCHEDULE-AGENT")}
+      end)
+
+    %{component | properties: properties}
   end
 
   # RFC 5546 section 3.6: an alarm is the property of whoever set it.

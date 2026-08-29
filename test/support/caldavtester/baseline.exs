@@ -42,7 +42,7 @@
   "implicitscenario1.xml" => 106,
   "implicitscenario2.xml" => 23,
   "implicitscenario3.xml" => 19,
-  "implicitscheduleagent.xml" => 63,
+  "implicitscheduleagent.xml" => 72,
   "implicitscheduletag.xml" => 131,
   "implicitsecurity.xml" => 65,
   "implicitsequence.xml" => 20,
