@@ -201,7 +201,11 @@ defmodule Dav.Cal.Scheduling do
   # What the attendees agreed to: who is organising, who is invited,
   # and when it happens. Everything else may change without anyone
   # needing to be told — including a `CN`, which the server rewrites
-  # on the way in and which names nobody differently.
+  # on the way in and which names nobody differently, and the
+  # parameters the server maintains itself. Those last matter here
+  # because this compares a client's body against the stored copy the
+  # server normalised, so counting them makes every write look like a
+  # change.
   defp scheduling_shape(body) do
     with {:ok, calendar} <- ICalendar.parse(body),
          [_ | _] = components <- schedulable(calendar) do
@@ -209,12 +213,20 @@ defmodule Dav.Cal.Scheduling do
           property <- component.properties,
           property.name in ["ATTENDEE", "ORGANIZER" | @significant],
           into: MapSet.new(),
-          do:
-            {property.name, property.value,
-             Map.drop(property.parameters, ["SCHEDULE-STATUS", "CN"])}
+          do: {property.name, property.value, comparable(property.parameters)}
     else
       _unreadable -> nil
     end
+  end
+
+  # An absent `PARTSTAT` *is* `NEEDS-ACTION` — RFC 5545 says so — and
+  # the server writes the default out where a client left it implied.
+  # Comparing the two spellings as different made every write look
+  # like a change of participation.
+  defp comparable(parameters) do
+    parameters
+    |> Map.drop(["CN" | @maintained])
+    |> Map.put_new("PARTSTAT", "NEEDS-ACTION")
   end
 
   defp kept_tag(resource, options), do: stored_schedule_tag(resource, options)
@@ -522,6 +534,12 @@ defmodule Dav.Cal.Scheduling do
       # whose invitations this server does not send. It still keeps
       # their copy — the event is theirs — but the message is the
       # client's to deliver, or nobody's.
+      # Whose answer is whose, settled once: the same components are
+      # sent to the attendees and kept for the organiser, so an
+      # invitation cannot say one thing in the Inbox and another in
+      # the organiser's calendar.
+      components = Enum.map(components, &remembered(&1, change))
+
       recipients =
         if organizer_delivers?(components) do
           components
@@ -546,7 +564,7 @@ defmodule Dav.Cal.Scheduling do
 
       send_to(told, "REQUEST", components, zones(calendar), options)
 
-      record(resource, restated(calendar, components), recipients, change, options)
+      record(resource, restated(calendar, components), recipients, options)
     else
       reply(resource, calendar, components, organizer, addresses, change, options)
     end
@@ -636,16 +654,15 @@ defmodule Dav.Cal.Scheduling do
   # ATTENDEE. That is how an organiser's client shows "invited" beside
   # one name and nothing beside another — without it the organiser has
   # no way to tell a delivered invitation from a lost one.
-  defp record(_resource, _calendar, [], _change, _options), do: :ok
+  defp record(_resource, _calendar, [], _options), do: :ok
 
-  defp record(resource, calendar, recipients, change, %{store: store, context: context} = options) do
+  defp record(resource, calendar, recipients, %{store: store, context: context} = options) do
     if Store.supports?(store, :put) do
       updated = %{
         calendar
         | components:
             calendar.components
             |> Enum.map(&stamp(&1, recipients, options))
-            |> Enum.map(&remembered(&1, change))
       }
 
       store.put(resource.path, ICalendar.write(updated), @calendar_type, context)
@@ -664,7 +681,7 @@ defmodule Dav.Cal.Scheduling do
   # A *significant* change is the exception: moving the event asks
   # everyone again, and the organiser's `NEEDS-ACTION` is then the
   # right answer rather than a client's ignorance.
-  defp remembered(component, %{previous: nil}), do: component
+  defp remembered(component, %{previous: nil}), do: restore_participation(component, [])
 
   defp remembered(component, %{body: body, previous: previous}) do
     with {:ok, before} <- ICalendar.parse(previous),
@@ -693,17 +710,44 @@ defmodule Dav.Cal.Scheduling do
           into: %{},
           do: {property.value, status}
 
-    %{component | properties: Enum.map(component.properties, &participating(&1, known))}
+    organizer = value(component, "ORGANIZER")
+
+    %{
+      component
+      | properties: Enum.map(component.properties, &participating(&1, known, organizer))
+    }
   end
 
-  defp participating(%{name: "ATTENDEE", value: value} = property, known) do
+  # `NEEDS-ACTION` is the one answer an organiser may give on someone
+  # else's behalf: it is not a claim about what they decided, it is
+  # the question being asked again. Every other value is theirs alone,
+  # and the stored one stands — an organiser's client sending
+  # `DECLINED` for an attendee who accepted is reporting its own
+  # ignorance, not their change of mind.
+  # The organiser answers for themselves, and one who invites
+  # themselves has plainly accepted. Every other answer is its
+  # owner's: the stored one stands, and where there is none — a first
+  # invitation, or an attendee just added — nobody has been asked yet.
+  # An organiser's client sending `ACCEPTED` for everyone it invites
+  # is reporting its own ignorance, and storing it shows a meeting the
+  # whole room agreed to before anyone heard of it.
+  defp participating(%{name: "ATTENDEE", value: value} = property, known, organizer) do
+    if value == organizer,
+      do: property,
+      else: %{property | parameters: answered_or_asked(property.parameters, known, value)}
+  end
+
+  defp participating(property, _known, _organizer), do: property
+
+  # Being put back to `NEEDS-ACTION` is being asked, and asking
+  # carries `RSVP=TRUE` — the attendee's client uses it to know a
+  # reply is wanted rather than that the event simply appeared.
+  defp answered_or_asked(parameters, known, value) do
     case Map.fetch(known, value) do
-      {:ok, status} -> %{property | parameters: Map.put(property.parameters, "PARTSTAT", status)}
-      :error -> property
+      {:ok, answer} -> Map.put(parameters, "PARTSTAT", answer)
+      :error -> parameters |> Map.put("PARTSTAT", "NEEDS-ACTION") |> Map.put("RSVP", "TRUE")
     end
   end
-
-  defp participating(property, _known), do: property
 
   defp stamp(component, recipients, options) do
     properties =
