@@ -23,6 +23,13 @@ defmodule Dav.Web.Properties do
   alias Dav.Web.Resource
   alias Dav.Xml
 
+  # The properties this server computes, and therefore owns. Being
+  # protected is a fact about the *name*, not about whether a given
+  # resource happens to have a value for it — a resource with no ETag
+  # still must not let a client invent one.
+  @live ~w(resourcetype displayname getetag getcontentlength getcontenttype
+           getlastmodified creationdate supported-report-set)
+
   @days ~w(Mon Tue Wed Thu Fri Sat Sun)
   @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
 
@@ -50,8 +57,7 @@ defmodule Dav.Web.Properties do
   """
   @spec all(Resource.t()) :: [{Xml.qname(), Xml.value()}]
   def all(%Resource{} = resource) do
-    for name <- ~w(resourcetype displayname getetag getcontentlength getcontenttype
-                   getlastmodified creationdate),
+    for name <- @live -- ["supported-report-set"],
         {:ok, value} <- [fetch(resource, {Xml.dav(), name})] do
       {{Xml.dav(), name}, value}
     end
@@ -77,7 +83,7 @@ defmodule Dav.Web.Properties do
 
       iex> resource = %Dav.Web.Resource{path: ["c"], collection?: true}
       iex> Dav.Web.Properties.fetch(resource, {"DAV:", "resourcetype"})
-      {:ok, {:elements, "<D:collection/>"}}
+      {:ok, {:names, [{"DAV:", "collection"}]}}
 
       iex> resource = %Dav.Web.Resource{path: ["c", "1.ics"], etag: ~s("abc")}
       iex> Dav.Web.Properties.fetch(resource, {"DAV:", "getetag"})
@@ -88,11 +94,12 @@ defmodule Dav.Web.Properties do
 
   """
   @spec fetch(Resource.t(), Xml.qname()) :: {:ok, Xml.value()} | :error
-  def fetch(%Resource{collection?: true}, {"DAV:", "resourcetype"}) do
-    {:ok, {:elements, "<D:collection/>"}}
+  def fetch(%Resource{collection?: true} = resource, {"DAV:", "resourcetype"}) do
+    {:ok, {:names, [{Xml.dav(), "collection"} | resource.types]}}
   end
 
-  def fetch(%Resource{}, {"DAV:", "resourcetype"}), do: {:ok, nil}
+  def fetch(%Resource{types: []}, {"DAV:", "resourcetype"}), do: {:ok, nil}
+  def fetch(%Resource{types: types}, {"DAV:", "resourcetype"}), do: {:ok, {:names, types}}
 
   def fetch(%Resource{} = resource, {"DAV:", "displayname"}) do
     case resource.display_name || Resource.name(resource) do
@@ -165,4 +172,38 @@ defmodule Dav.Web.Properties do
     "#{day}, #{pad.(at.day)} #{month} #{at.year} " <>
       "#{pad.(at.hour)}:#{pad.(at.minute)}:#{pad.(at.second)} GMT"
   end
+
+  @doc """
+  Whether a property is the server's to compute rather than a client's
+  to set.
+
+  `PROPPATCH` on one of these is `403`, and RFC 4918 asks for the
+  `cannot-modify-protected-property` precondition rather than silent
+  acceptance — a client that believes it set an ETag will behave
+  incorrectly later.
+
+  `DAV:displayname` is treated as protected here, which is stricter
+  than the specification requires: it says displayname SHOULD be
+  settable. Revisit when a store wants to own it.
+
+  ### Arguments
+
+  * `qname` is the property's `{namespace, local}` name.
+
+  ### Returns
+
+  * `true` when the server owns the property.
+
+  ### Examples
+
+      iex> Dav.Web.Properties.protected?({"DAV:", "getetag"})
+      true
+
+      iex> Dav.Web.Properties.protected?({"http://example.test/", "colour"})
+      false
+
+  """
+  @spec protected?(Xml.qname()) :: boolean()
+  def protected?({"DAV:", local}), do: local in @live
+  def protected?({_namespace, _local}), do: false
 end

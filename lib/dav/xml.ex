@@ -30,11 +30,30 @@ defmodule Dav.Xml do
   @type qname :: {namespace :: String.t(), local :: String.t()}
 
   @typedoc """
-  What a property is worth. A binary is text content; `{:elements,
-  iodata}` is already-serialised child elements, which is how
-  structured values like `DAV:resourcetype` are given.
+  What a property is worth.
+
+  A binary is text content. The structured forms exist so that the
+  builder can see which namespaces a value uses and declare them —
+  a value carrying `<C:calendar/>` in a prefix nobody bound produces a
+  document strict clients reject, and that failure is invisible until
+  a real client refuses to sync.
+
+  * `{:names, qnames}` renders each as an empty element, which is what
+    `DAV:resourcetype` and most flag-like values are.
+
+  * `{:report_set, qnames}` is `DAV:supported-report-set`, whose
+    nesting the specification fixes.
+
+  * `{:elements, namespaces, iodata}` is the escape hatch for content
+    this module cannot construct. The namespaces used **must** be
+    listed, because that is the only way they get declared.
   """
-  @type value :: String.t() | {:elements, iodata()} | nil
+  @type value ::
+          String.t()
+          | {:names, [qname()]}
+          | {:report_set, [qname()]}
+          | {:elements, [String.t()], iodata()}
+          | nil
 
   @doc """
   The WebDAV namespace, `DAV:`.
@@ -217,10 +236,36 @@ defmodule Dav.Xml do
     tag = [prefixes[namespace], ":", local]
 
     case value do
-      nil -> ["<", tag, "/>"]
-      {:elements, inner} -> ["<", tag, ">", inner, "</", tag, ">"]
-      text when is_binary(text) -> ["<", tag, ">", escape(text), "</", tag, ">"]
+      nil ->
+        ["<", tag, "/>"]
+
+      {:names, names} ->
+        ["<", tag, ">", Enum.map(names, &empty(&1, prefixes)), "</", tag, ">"]
+
+      {:report_set, names} ->
+        ["<", tag, ">", Enum.map(names, &report(&1, prefixes)), "</", tag, ">"]
+
+      {:elements, _namespaces, inner} ->
+        ["<", tag, ">", inner, "</", tag, ">"]
+
+      text when is_binary(text) ->
+        ["<", tag, ">", escape(text), "</", tag, ">"]
     end
+  end
+
+  # Namespaces a structured value will use, so they are declared
+  # alongside the ones the property names contribute. Without this a
+  # value carrying `<C:calendar/>` emits an unbound prefix, which is
+  # malformed XML that only fails at a real client.
+  defp within({:names, names}), do: for({namespace, _local} <- names, do: namespace)
+  defp within({:report_set, names}), do: for({namespace, _local} <- names, do: namespace)
+  defp within({:elements, namespaces, _inner}), do: namespaces
+  defp within(_other), do: []
+
+  defp empty({namespace, local}, prefixes), do: ["<", prefixes[namespace], ":", local, "/>"]
+
+  defp report(name, prefixes) do
+    ["<D:supported-report><D:report>", empty(name, prefixes), "</D:report></D:supported-report>"]
   end
 
   # `DAV:` always takes the first prefix so the common case reads the
@@ -229,8 +274,9 @@ defmodule Dav.Xml do
     used =
       for {_href, propstats} <- responses,
           {_status, properties} <- propstats,
-          {{namespace, _local}, _value} <- properties,
-          do: namespace
+          {{namespace, _local}, value} <- properties,
+          candidate <- [namespace | within(value)],
+          do: candidate
 
     others = used |> Enum.uniq() |> Enum.reject(&(&1 == @dav)) |> Enum.sort()
 
@@ -385,4 +431,216 @@ defmodule Dav.Xml do
   defp text(value) when is_atom(value), do: Atom.to_string(value)
   defp text(value) when is_binary(value), do: value
   defp text(value) when is_list(value), do: List.to_string(value)
+
+  @doc """
+  The name of the report a `REPORT` body asks for.
+
+  `REPORT` is extensible by design: the method itself says nothing
+  about what is wanted, and the root element of the body names it. That
+  is the mechanism CalDAV and CardDAV extend WebDAV through, and it is
+  why the method belongs in the base rather than in either of them.
+
+  ### Arguments
+
+  * `body` is the raw request body.
+
+  ### Returns
+
+  * `{:ok, qname}` naming the report; or
+
+  * `{:error, :malformed}` when the body is not XML, or is empty — a
+    `REPORT` without a body asks for nothing.
+
+  ### Examples
+
+      iex> Dav.Xml.report_name(~s(<?xml version="1.0"?><D:sync-collection xmlns:D="DAV:"/>))
+      {:ok, {"DAV:", "sync-collection"}}
+
+      iex> Dav.Xml.report_name(~s(<C:calendar-query xmlns:C="urn:ietf:params:xml:ns:caldav"/>))
+      {:ok, {"urn:ietf:params:xml:ns:caldav", "calendar-query"}}
+
+      iex> Dav.Xml.report_name("")
+      {:error, :malformed}
+
+  """
+  @spec report_name(binary()) :: {:ok, qname()} | {:error, :malformed}
+  def report_name(body) when is_binary(body) do
+    body |> String.trim() |> named()
+  end
+
+  defp named(""), do: {:error, :malformed}
+
+  defp named(body) do
+    with {:ok, document} <- scan(body) do
+      root(qname(document))
+    end
+  end
+
+  defp root([name]), do: {:ok, name}
+  defp root(_nothing), do: {:error, :malformed}
+
+  @doc """
+  A `DAV:error` document naming a precondition that failed.
+
+  RFC 4918 gives errors a body of their own so a client learns *which*
+  rule it broke rather than only that something was refused. A `403`
+  with `DAV:supported-report` inside is a different instruction from a
+  bare `403`: it says the request was well-formed and this resource
+  does not offer that report.
+
+  ### Arguments
+
+  * `condition` is the precondition's `t:qname/0`.
+
+  ### Returns
+
+  * The XML document as `t:iolist/0`.
+
+  ### Examples
+
+      iex> Dav.Xml.error({"DAV:", "supported-report"}) |> IO.iodata_to_binary()
+      ~s(<?xml version="1.0" encoding="utf-8"?><D:error xmlns:D="DAV:"><D:supported-report/></D:error>)
+
+  """
+  @spec error(qname()) :: iolist()
+  def error({namespace, local}) do
+    {prefix, declaration} =
+      if namespace == @dav do
+        {"D", [~s( xmlns:D="), @dav, ~s(")]}
+      else
+        {"E", [~s( xmlns:D="), @dav, ~s(" xmlns:E="), escape(namespace), ~s(")]}
+      end
+
+    [
+      ~s(<?xml version="1.0" encoding="utf-8"?>),
+      "<D:error",
+      declaration,
+      "><",
+      prefix,
+      ":",
+      local,
+      "/></D:error>"
+    ]
+  end
+
+  @doc """
+  A `DAV:supported-report-set` value from a list of report names.
+
+  The nesting is the specification's, and it is deeper than it looks:
+  a set contains `supported-report` elements, each of which contains a
+  `report` element, which contains the report's own element.
+
+  ### Arguments
+
+  * `names` is a list of report `t:qname/0`s.
+
+  ### Returns
+
+  * A `t:value/0` ready to be given to `multistatus/1`.
+
+  ### Examples
+
+      iex> Dav.Xml.supported_report_set([{"DAV:", "sync-collection"}])
+      {:report_set, [{"DAV:", "sync-collection"}]}
+
+  """
+  @spec supported_report_set([qname()]) :: value()
+  def supported_report_set(names) when is_list(names), do: {:report_set, names}
+
+  @doc """
+  Read a `PROPPATCH` request body.
+
+  Instructions come back **in document order**, which RFC 4918 calls
+  out as an explicit exception to XML's usual indifference to
+  ordering: a client may set a property and then remove it, and the
+  result depends on which came first.
+
+  ### Limits
+
+  A `set` value is captured as its text content. A dead property whose
+  value is structured XML round-trips as the text inside it, which is
+  wrong for clients that store markup — and is recorded here rather
+  than discovered later.
+
+  ### Arguments
+
+  * `body` is the raw request body.
+
+  ### Returns
+
+  * `{:ok, instructions}` where each is `{:set, qname, value}` or
+    `{:remove, qname}`, in document order; or
+
+  * `{:error, :malformed}` when the body is not a `propertyupdate`.
+
+  ### Examples
+
+      iex> body = ~s(<?xml version="1.0"?><D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><D:displayname>Kim</D:displayname></D:prop></D:set></D:propertyupdate>)
+      iex> Dav.Xml.parse_proppatch(body)
+      {:ok, [{:set, {"DAV:", "displayname"}, "Kim"}]}
+
+      iex> body = ~s(<?xml version="1.0"?><D:propertyupdate xmlns:D="DAV:"><D:remove><D:prop><D:displayname/></D:prop></D:remove></D:propertyupdate>)
+      iex> Dav.Xml.parse_proppatch(body)
+      {:ok, [{:remove, {"DAV:", "displayname"}}]}
+
+      iex> Dav.Xml.parse_proppatch(~s(<D:propfind xmlns:D="DAV:"/>))
+      {:error, :malformed}
+
+  """
+  @spec parse_proppatch(binary()) ::
+          {:ok, [{:set, qname(), String.t()} | {:remove, qname()}]} | {:error, :malformed}
+  def parse_proppatch(body) when is_binary(body) do
+    with {:ok, document} <- scan(String.trim(body)) do
+      update(document)
+    end
+  end
+
+  defp update(
+         {:xmlElement, _n, _e, {_prefix, ~c"propertyupdate"}, _ns, _p, _pos, _a, content, _l, _pa,
+          _t}
+       ) do
+    {:ok, Enum.flat_map(content, &instructions/1)}
+  end
+
+  defp update(_other), do: {:error, :malformed}
+
+  # `set` and `remove` are read in the order they appear, and so are
+  # the properties inside each.
+  defp instructions(
+         {:xmlElement, _n, _e, {_prefix, verb}, _ns, _p, _pos, _a, content, _l, _pa, _t}
+       )
+       when verb in [~c"set", ~c"remove"] do
+    kind = if verb == ~c"set", do: :set, else: :remove
+
+    content
+    |> Enum.flat_map(&properties_of/1)
+    |> Enum.map(fn {name, value} ->
+      if kind == :set, do: {:set, name, value}, else: {:remove, name}
+    end)
+  end
+
+  defp instructions(_other), do: []
+
+  defp properties_of(
+         {:xmlElement, _n, _e, {_prefix, ~c"prop"}, _ns, _p, _pos, _a, content, _l, _pa, _t}
+       ) do
+    Enum.flat_map(content, &named_value/1)
+  end
+
+  defp properties_of(_other), do: []
+
+  defp named_value(
+         {:xmlElement, _n, _e, {prefix, local}, namespace, _p, _pos, _a, content, _l, _pa, _t}
+       ) do
+    [{{uri_for(namespace, prefix), List.to_string(local)}, text_of(content)}]
+  end
+
+  defp named_value(_other), do: []
+
+  defp text_of(content) do
+    Enum.map_join(content, fn
+      {:xmlText, _parents, _pos, _lang, value, _type} -> List.to_string(value)
+      _other -> ""
+    end)
+  end
 end

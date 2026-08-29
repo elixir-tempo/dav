@@ -46,11 +46,50 @@ defmodule Dav.XmlTest do
         build([
           {"/c/",
            [
-             {"HTTP/1.1 200 OK", [{{Xml.dav(), "resourcetype"}, {:elements, "<D:collection/>"}}]}
+             {"HTTP/1.1 200 OK",
+              [{{Xml.dav(), "resourcetype"}, {:names, [{Xml.dav(), "collection"}]}}]}
            ]}
         ])
 
       assert xml =~ "<D:resourcetype><D:collection/></D:resourcetype>"
+    end
+
+    test "a structured value's own namespaces are declared, not just the property's" do
+      # The bug this guards: a calendar's resourcetype carries
+      # CALDAV:calendar inside a DAV: property. Collecting namespaces
+      # from names alone emits an unbound prefix — malformed XML that
+      # only fails at a real client.
+      xml =
+        build([
+          {"/c/",
+           [
+             {"HTTP/1.1 200 OK",
+              [
+                {{Xml.dav(), "resourcetype"},
+                 {:names, [{Xml.dav(), "collection"}, {Xml.caldav(), "calendar"}]}}
+              ]}
+           ]}
+        ])
+
+      assert xml =~ ~s(xmlns:C="urn:ietf:params:xml:ns:caldav")
+      assert xml =~ "<C:calendar/>"
+    end
+
+    test "and the same for a report set naming an extension's report" do
+      xml =
+        build([
+          {"/c/",
+           [
+             {"HTTP/1.1 200 OK",
+              [
+                {{Xml.dav(), "supported-report-set"},
+                 Xml.supported_report_set([{Xml.caldav(), "calendar-query"}])}
+              ]}
+           ]}
+        ])
+
+      assert xml =~ ~s(xmlns:C="urn:ietf:params:xml:ns:caldav")
+      assert xml =~ "<C:calendar-query/>"
     end
 
     test "one response may carry several statuses at once" do

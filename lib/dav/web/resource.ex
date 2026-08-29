@@ -2,6 +2,12 @@ defmodule Dav.Web.Resource do
   @moduledoc """
   One addressable thing in a DAV namespace.
 
+  Beyond collection-or-not, a resource may carry extra **resource
+  types** — `CALDAV:calendar`, `CARDDAV:addressbook` — which is how
+  the extensions mark their own collections without the base learning
+  what they mean. RFC 4791 requires a calendar to report both
+  `DAV:collection` and `CALDAV:calendar`.
+
   A resource is either a **collection** — a container of other
   resources, which is what a directory and a calendar both are — or an
   ordinary resource with a body. The distinction matters more than it
@@ -19,6 +25,7 @@ defmodule Dav.Web.Resource do
   @type t :: %__MODULE__{
           path: [String.t()],
           collection?: boolean(),
+          types: [{String.t(), String.t()}],
           etag: String.t() | nil,
           content_type: String.t() | nil,
           content_length: non_neg_integer() | nil,
@@ -28,6 +35,7 @@ defmodule Dav.Web.Resource do
 
   defstruct path: [],
             collection?: false,
+            types: [],
             etag: nil,
             content_type: nil,
             content_length: nil,
