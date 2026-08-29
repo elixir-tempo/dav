@@ -80,18 +80,144 @@ defmodule Dav.CalDAVTester.ServerInfo do
   """
   @spec expand(String.t(), %{optional(String.t()) => String.t()}) :: String.t()
   def expand(text, substitutions) do
-    Regex.replace(~r/\$[A-Za-z0-9_-]+:/, text, fn key ->
-      Map.get(substitutions, key, key)
+    Regex.replace(~r/\$[A-Za-z0-9_.\-]+:/, text, fn key ->
+      case Map.fetch(substitutions, key) do
+        {:ok, value} -> value
+        :error -> dynamic(key)
+      end
     end)
   end
 
+  @doc """
+  Expand a substitution the server info file cannot hold.
+
+  Some of the suite's variables are computed per use rather than
+  declared: dates relative to today, and fresh `UID`s. They are the
+  reason a fixture can be reused — `$uidrandom:` is what stops the
+  same event body colliding with itself, and `$now.year.1:` is what
+  keeps a fixture written in 2007 in the future.
+
+  Leaving them unexpanded is not harmless. It writes the literal text
+  `$uidrandom:` into every `UID`, so the twenty-fourth fixture to use
+  it collides with the first, and a server enforcing
+  `CALDAV:no-uid-conflict` correctly refuses a request the suite
+  expects to succeed.
+
+  ### Arguments
+
+  * `key` is the unexpanded variable, including its `$` and `:`.
+
+  ### Returns
+
+  * The computed value, or the key unchanged when it is not one of
+    these — an unknown variable stays visible rather than becoming an
+    empty string.
+
+  ### Examples
+
+      iex> Dav.CalDAVTester.ServerInfo.dynamic("$now.year.0:") == "#{Date.utc_today().year}"
+      true
+
+      iex> Dav.CalDAVTester.ServerInfo.dynamic("$uidrandom:") != Dav.CalDAVTester.ServerInfo.dynamic("$uidrandom:")
+      true
+
+      iex> Dav.CalDAVTester.ServerInfo.dynamic("$unknown:")
+      "$unknown:"
+
+  """
+  @spec dynamic(String.t()) :: String.t()
+  def dynamic(key) do
+    case key do
+      "$now:" -> stamp(0)
+      "$uidrandom:" -> uuid()
+      "$now.year." <> rest -> year(rest)
+      "$now." <> rest -> day(rest)
+      "$uid" <> rest -> stable(rest)
+      _unknown -> key
+    end
+  end
+
+  # `$now.year.1:0101T100000` is next year followed by a literal date,
+  # so this yields the year alone.
+  defp year(rest) do
+    case Integer.parse(String.trim_trailing(rest, ":")) do
+      {offset, ""} -> "#{Date.utc_today().year + offset}"
+      _unreadable -> "$now.year." <> rest
+    end
+  end
+
+  # `$now.1:T180000` is tomorrow followed by a literal time.
+  defp day(rest) do
+    case Integer.parse(String.trim_trailing(rest, ":")) do
+      {offset, ""} -> stamp(offset)
+      _unreadable -> "$now." <> rest
+    end
+  end
+
+  defp stamp(offset) do
+    Date.utc_today() |> Date.add(offset) |> Calendar.strftime("%Y%m%d")
+  end
+
+  # `$uid1:` names the same UID everywhere it appears in a run, which
+  # is what lets one fixture reference another's event.
+  defp stable(rest) do
+    index = String.trim_trailing(rest, ":")
+
+    if index =~ ~r/^[0-9]+$/ do
+      "caldavtester-uid-" <> String.pad_leading(index, 4, "0")
+    else
+      "$uid" <> rest
+    end
+  end
+
+  defp uuid do
+    16 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)
+  end
+
   ## --- reading ----------------------------------------------------
+
+  # The harness's own variables, which upstream computes from the
+  # server it is pointed at rather than declaring in the file. `$host:`
+  # prefixes every `Destination` header in the suite, and left
+  # unexpanded it makes each COPY and MOVE look like a request to
+  # another server — answered `502`, with no body, so the test reports
+  # "not valid XML" and the real cause stays hidden.
+  #
+  # Requests here go straight to the plug, so the host is the one
+  # `Plug.Test` gives them.
+  @harness %{
+    "$host:" => "http://www.example.com",
+    "$hostssl:" => "https://www.example.com",
+    "$port:" => "80",
+    "$sslport:" => "443"
+  }
+
+  # A server that does not declare `split-calendars` keeps VTODOs in
+  # the main calendar rather than a separate collection, and the
+  # suite's expectations say so — `101.ics`, written to the tasks path,
+  # is expected back from a query on the calendar. Pointing the two
+  # paths at one collection is what "no split calendars" means.
+  @unsplit ~w(taskspath polls)
 
   defp pairs(document) do
     document
     |> elements("substitutions")
     |> Enum.flat_map(&entries/1)
     |> Map.new()
+    |> Map.merge(@harness)
+    |> unsplit()
+  end
+
+  defp unsplit(substitutions) do
+    aliases =
+      for name <- @unsplit,
+          index <- 1..40//1,
+          calendar = Map.get(substitutions, "$calendarpath#{index}:"),
+          is_binary(calendar),
+          into: %{},
+          do: {"$#{name}#{index}:", calendar}
+
+    Map.merge(substitutions, aliases)
   end
 
   defp entries(container) do
@@ -145,9 +271,18 @@ defmodule Dav.CalDAVTester.ServerInfo do
   defp resolve(substitutions, 0), do: substitutions
 
   defp resolve(substitutions, budget) do
-    expanded = Map.new(substitutions, fn {key, value} -> {key, expand(value, substitutions)} end)
+    expanded =
+      Map.new(substitutions, fn {key, value} -> {key, statically(value, substitutions)} end)
 
     if expanded == substitutions, do: expanded, else: resolve(expanded, budget - 1)
+  end
+
+  # Resolving the table itself must not compute the dynamic values: a
+  # `$uidrandom:` baked into a stored value would be the same UID
+  # everywhere it was used, which is the opposite of what it means.
+  # They are computed per use, in `expand/2`.
+  defp statically(text, substitutions) do
+    Regex.replace(~r/\$[A-Za-z0-9_.\-]+:/, text, &Map.get(substitutions, &1, &1))
   end
 
   defp elements(element, name) do

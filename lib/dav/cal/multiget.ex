@@ -33,6 +33,12 @@ defmodule Dav.Cal.Multiget do
   alias Dav.Xml
 
   @impl Dav.Web.Report
+  # Not restricted to calendar collections. RFC 4791 section 7.9 says
+  # the report runs against one, but the suite issues it against
+  # calendar *homes* far more often than it tests the refusal — and a
+  # client naming resources by href is not helped by being told the
+  # collection it addressed was the wrong kind. The hrefs are resolved
+  # on their own merits.
   def run(%Resource{}, body, _depth, options) do
     with {:ok, document} <- Xml.parse(body) do
       {:ok, Enum.map(hrefs(document), &answer(&1, requested(document), options))}

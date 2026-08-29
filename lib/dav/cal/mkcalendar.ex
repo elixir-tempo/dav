@@ -29,14 +29,16 @@ defmodule Dav.Cal.Mkcalendar do
   import Plug.Conn
 
   alias Dav.Web.Store
+  alias Dav.Xml
 
   @impl Dav.Web.Method
-  def call(conn, path, %{store: store, context: context}) do
+  def call(conn, path, %{store: store, context: context} = options) do
     {:ok, body, conn} = read_body(conn)
 
     with :ok <- supported(store),
-         :ok <- empty(body),
-         {:ok, _resource} <- store.mkcalendar(path, context) do
+         {:ok, properties} <- requested(body),
+         {:ok, resource} <- store.mkcalendar(path, context) do
+      apply_properties(resource, properties, options)
       send_resp(conn, 201, "")
     else
       {:error, :unsupported} -> send_resp(conn, 405, "")
@@ -53,6 +55,52 @@ defmodule Dav.Cal.Mkcalendar do
     if Store.supports?(store, :mkcalendar), do: :ok, else: {:error, :unsupported}
   end
 
-  defp empty(""), do: :ok
-  defp empty(_body), do: {:error, :body}
+  # "Clients can either specify the value of the DAV:displayname
+  # property in the request body of the MKCALENDAR request, or
+  # alternatively issue a PROPPATCH" — so a body is not merely
+  # tolerated, it is the documented way to name a calendar as it is
+  # created. Refusing it forced every client into a second round trip
+  # and failed the one form the specification shows.
+  defp requested(""), do: {:ok, []}
+
+  defp requested(body) do
+    case Xml.parse(body) do
+      {:ok, %{name: {_namespace, "mkcalendar"}} = document} -> {:ok, properties(document)}
+      _not_a_mkcalendar_body -> {:error, :body}
+    end
+  end
+
+  # The body has the shape of a PROPPATCH: `DAV:set` holding a
+  # `DAV:prop` of the properties to give the new collection.
+  defp properties(document) do
+    for set <- children(document, "set"),
+        prop <- children(set, "prop"),
+        property <- prop.children,
+        do: {property.name, value(property)}
+  end
+
+  defp value(%{children: [], text: text}), do: String.trim(text)
+  defp value(%{children: children}), do: {:names, Enum.map(children, & &1.name)}
+
+  defp children(element, name) do
+    Enum.filter(element.children, &match?(%{name: {_namespace, ^name}}, &1))
+  end
+
+  # Properties are best-effort: RFC 4791 lets a server reject the whole
+  # request if it cannot set them, but a store with no `patch/3` can
+  # still make the calendar, and a nameless calendar is more useful
+  # than none.
+  defp apply_properties(_resource, [], _options), do: :ok
+
+  defp apply_properties(resource, properties, %{store: store, context: context}) do
+    if Store.supports?(store, :patch) do
+      store.patch(
+        resource,
+        Enum.map(properties, fn {name, value} -> {:set, name, value} end),
+        context
+      )
+    end
+
+    :ok
+  end
 end

@@ -42,23 +42,23 @@ Not built yet: implicit scheduling on `PUT`, iTIP delivery to Inboxes, `Dav.Card
 
 Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests real clients make, with the responses a conformant server must give. Upstream drives them from Python over HTTP against a provisioned server. `Dav.CalDAVTester` runs the same files in Elixir, in-process through `Plug.Test`, so the measurement runs in CI beside everything else and needs no Python, no socket and no account database.
 
-Of the 5,624 CalDAV tests it attempts:
+### The denominator is what this server declares
+
+CalDAVTester gates 850 of its own blocks on `<require-feature>`, read against a `serverinfo.xml` describing *the server under test*. Apple's file declares 84 features because Apple's server implements 84; running this server against that list asks it thousands of questions it never claimed to answer, and a server is not non-conformant for lacking a feature it does not advertise.
+
+`Dav.CalDAVTester.Features` declares four: `caldav`, `COPY Method`, `MOVE Method`, `regular-collection`. Each is a claim checkable against the code, and the list grows only when the capability is built — a feature declared but not implemented turns a conformance figure into a claim.
+
+Against that declaration the suite puts **472 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 1,963 | 35% |
-| failed | 2,803 | 50% |
-| skipped | 858 | 15% |
+| passed | 284 | 60% |
+| failed | 180 | 38% |
+| skipped | 8 | 2% |
 
-Getting there meant implementing the suite's own compound directives — `DELETEALL`, `GETNEW`, `WAITCOUNT`, `WAITDELETEALL`, `GETCONTAINS` and the rest — which are the harness's, not the server's, and the `grab` elements that carry a value out of one response and into a later request. Every `WAIT` collapses to a single check, because this server is called synchronously in-process: there is no other party to wait for.
+Nine verifiers are ported — `statusCode`, `header`, `multistatusItems`, `propfindItems`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlElementMatch`, `prepostcondition` and `freeBusy` — along with the suite's compound directives (`DELETEALL`, `GETNEW`, `WAITCOUNT`, `GETCONTAINS`) and the `grab` elements that carry a value from one response into a later request. A check the harness cannot make is reported skipped, never counted as a pass.
 
-Nine verifiers are ported: `statusCode`, `header`, `multistatusItems`, `propfindItems`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlElementMatch` and `prepostcondition`. `calendarDataMatch` compares iCalendar structurally after the filters `serverinfo.xml` prescribes, since a server must stamp its own `DTSTAMP` and `PRODID` and may fold and order differently.
-
-**A check this harness cannot make is skipped, never counted as a pass.**
-
-The remaining failures are the work, not the boundary. They divide as: scheduling 1,215 (RFC 6638), core CalDAV 575 (RFC 4791 defects), Apple sharing 312, ACL 216 (RFC 3744), collection sync 113 (RFC 6578), managed attachments 65. Full conformance is the objective, and Apple's extensions count toward it — Apple Calendar is the client most CalDAV servers actually serve, and this suite is Apple's.
-
-For comparison, the weaker measure this replaces: 5,709 of the suite's 6,407 requests (89%) have a method that answers them at all. That counts surface, not conformance, and the two numbers should not be confused.
+For scale, the whole CalDAV suite regardless of declaration is 5,624 tests. Reaching that means declaring and implementing the rest — scheduling (RFC 6638), ACL (RFC 3744), collection sync (RFC 6578), and Apple's sharing and attachment extensions — one feature at a time, driving this figure to zero at each step.
 
 ## On parsing XML safely
 

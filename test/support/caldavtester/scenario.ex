@@ -26,12 +26,21 @@ defmodule Dav.CalDAVTester.Scenario do
   alias Dav.CalDAVTester.Document
 
   defmodule Verify do
-    @moduledoc "One response check: a verifier callback and its arguments."
-    defstruct [:callback, args: %{}]
+    @moduledoc """
+    One response check: a verifier callback and its arguments.
+
+    A check carries its own feature gates. The same request often has
+    two, expecting different results from a server that splits
+    calendars and one that does not — running both means one of them
+    always fails.
+    """
+    defstruct [:callback, args: %{}, features: [], excluded: []]
 
     @type t :: %__MODULE__{
             callback: String.t(),
-            args: %{optional(String.t()) => [String.t()]}
+            args: %{optional(String.t()) => [String.t()]},
+            features: [String.t()],
+            excluded: [String.t()]
           }
   end
 
@@ -45,7 +54,9 @@ defmodule Dav.CalDAVTester.Scenario do
       verifiers: [],
       grabs: [],
       user: nil,
-      end_delete?: false
+      end_delete?: false,
+      features: [],
+      excluded: []
     ]
 
     @type t :: %__MODULE__{
@@ -56,31 +67,36 @@ defmodule Dav.CalDAVTester.Scenario do
             verifiers: [Verify.t()],
             grabs: [{atom(), String.t() | nil, String.t() | nil}],
             user: String.t() | nil,
-            end_delete?: boolean()
+            end_delete?: boolean(),
+            features: [String.t()],
+            excluded: [String.t()]
           }
   end
 
   defmodule Test do
     @moduledoc "One named test: a sequence of requests that must all pass."
-    defstruct [:name, :description, requests: [], ignore?: false]
+    defstruct [:name, :description, requests: [], ignore?: false, features: [], excluded: []]
 
     @type t :: %__MODULE__{
             name: String.t(),
             description: String.t() | nil,
             requests: [Request.t()],
-            ignore?: boolean()
+            ignore?: boolean(),
+            features: [String.t()],
+            excluded: [String.t()]
           }
   end
 
   defmodule Suite do
     @moduledoc "A named group of tests within a scenario."
-    defstruct [:name, tests: [], ignore?: false, features: []]
+    defstruct [:name, tests: [], ignore?: false, features: [], excluded: []]
 
     @type t :: %__MODULE__{
             name: String.t(),
             tests: [Test.t()],
             ignore?: boolean(),
-            features: [String.t()]
+            features: [String.t()],
+            excluded: [String.t()]
           }
   end
 
@@ -148,12 +164,58 @@ defmodule Dav.CalDAVTester.Scenario do
 
   """
   @spec tests(t()) :: [{Suite.t(), Test.t()}]
-  def tests(%__MODULE__{} = scenario) do
+  def tests(%__MODULE__{} = scenario, features \\ nil) do
     for suite <- scenario.suites,
         not suite.ignore?,
+        applicable?(scenario, features),
+        applicable?(suite, features),
         test <- suite.tests,
         not test.ignore?,
+        applicable?(test, features),
         do: {suite, test}
+  end
+
+  @doc """
+  Whether a scenario, suite, test or request applies to a server.
+
+  The suite is written against a server that declares what it supports,
+  and gates 850 of its own blocks on those declarations. A server that
+  never claims `dropbox` is not failing `dropbox` tests — it is not
+  being asked them. Ignoring this makes a conformance figure measure
+  the wrong thing in both directions.
+
+  ### Arguments
+
+  * `item` is anything carrying `features` and `excluded` lists.
+
+  * `features` is the set the server declares, or `nil` to run
+    everything.
+
+  ### Returns
+
+  * `true` when every required feature is declared and no excluded one
+    is.
+
+  ### Examples
+
+      iex> suite = %Dav.CalDAVTester.Scenario.Suite{name: "x", features: ["caldav"]}
+      iex> Dav.CalDAVTester.Scenario.applicable?(suite, MapSet.new(["caldav"]))
+      true
+
+      iex> suite = %Dav.CalDAVTester.Scenario.Suite{name: "x", features: ["dropbox"]}
+      iex> Dav.CalDAVTester.Scenario.applicable?(suite, MapSet.new(["caldav"]))
+      false
+
+  """
+  @spec applicable?(map(), MapSet.t() | nil) :: boolean()
+  def applicable?(_item, nil), do: true
+
+  def applicable?(item, features) do
+    required = Map.get(item, :features, [])
+    excluded = Map.get(item, :excluded, [])
+
+    Enum.all?(required, &MapSet.member?(features, &1)) and
+      not Enum.any?(excluded, &MapSet.member?(features, &1))
   end
 
   ## --- reading ----------------------------------------------------
@@ -162,7 +224,7 @@ defmodule Dav.CalDAVTester.Scenario do
     %__MODULE__{
       path: path,
       description: Document.text(document, "description"),
-      features: features(document),
+      features: features(document, "require-feature"),
       setup: requests_in(Document.child(document, "start")),
       teardown: requests_in(Document.child(document, "end")),
       suites: Enum.map(Document.children(document, "test-suite"), &suite/1)
@@ -173,7 +235,8 @@ defmodule Dav.CalDAVTester.Scenario do
     %Suite{
       name: Map.get(element.attributes, "name", ""),
       ignore?: yes?(element, "ignore"),
-      features: features(element),
+      features: features(element, "require-feature"),
+      excluded: features(element, "exclude-feature"),
       tests: Enum.map(Document.children(element, "test"), &test/1)
     }
   end
@@ -183,6 +246,8 @@ defmodule Dav.CalDAVTester.Scenario do
       name: Map.get(element.attributes, "name", ""),
       description: Document.text(element, "description"),
       ignore?: yes?(element, "ignore"),
+      features: features(element, "require-feature"),
+      excluded: features(element, "exclude-feature"),
       requests: requests_in(element)
     }
   end
@@ -199,7 +264,9 @@ defmodule Dav.CalDAVTester.Scenario do
       verifiers: Enum.map(Document.children(element, "verify"), &verify/1),
       grabs: grabs(element),
       user: Map.get(element.attributes, "user"),
-      end_delete?: yes?(element, "end-delete")
+      end_delete?: yes?(element, "end-delete"),
+      features: features(element, "require-feature"),
+      excluded: features(element, "exclude-feature")
     }
   end
 
@@ -223,7 +290,12 @@ defmodule Dav.CalDAVTester.Scenario do
         {Document.text(argument, "name"), values}
       end
 
-    %Verify{callback: Document.text(element, "callback"), args: args}
+    %Verify{
+      callback: Document.text(element, "callback"),
+      args: args,
+      features: features(element, "require-feature"),
+      excluded: features(element, "exclude-feature")
+    }
   end
 
   # These feed a value out of one response and into a later request,
@@ -269,8 +341,8 @@ defmodule Dav.CalDAVTester.Scenario do
     end
   end
 
-  defp features(element) do
-    case Document.child(element, "require-feature") do
+  defp features(element, name) do
+    case Document.child(element, name) do
       nil -> []
       found -> for child <- Document.children(found, "feature"), do: String.trim(child.text)
     end

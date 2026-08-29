@@ -21,6 +21,7 @@ defmodule Dav.Cal do
 
   """
 
+  alias Dav.Cal.Selection
   alias Dav.Web.Properties
   alias Dav.Web.Resource
   alias Dav.Xml
@@ -124,4 +125,38 @@ defmodule Dav.Cal do
   end
 
   defp property(name, object, _data), do: Properties.fetch(object, name)
+
+  @doc """
+  Build a response, returning only the part of the object asked for.
+
+  As `report_response/3`, but honouring a `CALDAV:calendar-data`
+  selection — see `Dav.Cal.Selection`.
+
+  ### Arguments
+
+  * `object` is the resolved `t:Dav.Web.Resource.t/0`.
+
+  * `wanted` is the list of property names.
+
+  * `data` is the object's body.
+
+  * `selection` is a `t:Dav.Cal.Selection.t/0`.
+
+  ### Returns
+
+  * A `{href, propstats}` pair for `Dav.Xml.multistatus/1`.
+
+  ### Examples
+
+      iex> object = %Dav.Web.Resource{path: ["c", "1.ics"], etag: ~s("v1")}
+      iex> {href, _propstats} = Dav.Cal.report_response(object, [], "", :everything)
+      iex> href
+      "/c/1.ics"
+
+  """
+  @spec report_response(Resource.t(), [Xml.qname()], binary(), Selection.t()) ::
+          {String.t(), [{String.t(), [{Xml.qname(), Xml.value()}]}]}
+  def report_response(%Resource{} = object, wanted, data, selection) do
+    report_response(object, wanted, Selection.apply(data, selection))
+  end
 end

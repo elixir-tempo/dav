@@ -99,6 +99,13 @@ defmodule Dav.MixProject do
       # changed before and `allow_entities: true` demonstrably leaks
       # local files into the parsed document.
       {:sweet_xml, "~> 0.7"},
+      # A time zone database, so that `TZID=America/Los_Angeles` can be
+      # told from a typo. RFC 7809 lets a client name a well-known zone
+      # and omit the VTIMEZONE definition, and RFC 4791 section 4.1
+      # requires the definition otherwise — distinguishing the two is
+      # the difference between accepting valid data and accepting
+      # anything.
+      {:tz, "~> 0.28"},
       # Serving and driving the server are test concerns. A library
       # that hands you a Plug should not choose your web server.
       {:bandit, "~> 1.5", only: [:dev, :test]},

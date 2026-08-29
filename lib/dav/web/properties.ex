@@ -30,6 +30,13 @@ defmodule Dav.Web.Properties do
   @live ~w(resourcetype displayname getetag getcontentlength getcontenttype
            getlastmodified creationdate supported-report-set)
 
+  # `displayname` is live in the sense that the server computes a
+  # default, but RFC 4918 section 15.2 says it "SHOULD NOT be
+  # protected" — a client is entitled to name a collection, through
+  # PROPPATCH or in a MKCALENDAR body. Treating it as protected refuses
+  # both, and returns the path segment however the user renamed it.
+  @protected @live -- ["displayname"]
+
   @days ~w(Mon Tue Wed Thu Fri Sat Sun)
   @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
 
@@ -204,6 +211,6 @@ defmodule Dav.Web.Properties do
 
   """
   @spec protected?(Xml.qname()) :: boolean()
-  def protected?({"DAV:", local}), do: local in @live
+  def protected?({"DAV:", local}), do: local in @protected
   def protected?({_namespace, _local}), do: false
 end

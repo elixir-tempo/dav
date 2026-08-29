@@ -44,16 +44,22 @@ defmodule Dav.Cal.Query do
   alias Dav.Cal
   alias Dav.Cal.Filter
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.Selection
   alias Dav.Cal.TimeRange
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
 
   @impl Dav.Web.Report
-  def run(%Resource{} = collection, body, _depth, options) do
+  # A query on an ordinary collection is answered, not refused. It
+  # searches the calendars beneath it and finds nothing of its own,
+  # which is what a client asking "is there anything here" means — and
+  # what the conformance suite expects. Refusing it would also make a
+  # calendar home unqueryable, since a home is a plain collection.
+  def run(%Resource{} = target, body, depth, options) do
     with {:ok, document} <- Xml.parse(body),
          {:ok, filter} <- filter_of(document) do
-      {:ok, matching(collection, filter, requested(document), options)}
+      {:ok, matching(target, filter, depth, document, options)}
     end
   end
 
@@ -73,18 +79,55 @@ defmodule Dav.Cal.Query do
     end
   end
 
-  defp matching(collection, filter, wanted, options) do
-    for object <- members(collection, options),
+  defp matching(target, filter, depth, document, options) do
+    wanted = requested(document)
+    selection = Selection.from_element(calendar_data(document))
+
+    for object <- scope(target, depth, options),
         {:ok, data} <- [read(object, options)],
         {:ok, calendar} <- [ICalendar.parse(data)],
         Filter.match?(filter, calendar, time_range: &TimeRange.overlaps?/2),
-        do: Cal.report_response(object, wanted, data)
+        do: Cal.report_response(object, wanted, data, selection)
   end
 
-  defp members(collection, %{store: store, context: context}) do
+  # The `calendar-data` element does double duty: naming it asks for
+  # the object, and its children say how much of it.
+  defp calendar_data(document) do
+    case Enum.find(document.children, &named?(&1, "prop")) do
+      nil -> nil
+      element -> Enum.find(element.children, &named?(&1, "calendar-data"))
+    end
+  end
+
+  # Depth bounds how far the search *descends*, not whether the target
+  # itself is searched. A calendar collection's own objects are always
+  # in scope — a `Depth: 0` query on a calendar asks about that
+  # calendar, and answering "nothing" because a collection is not
+  # itself a calendar object would be a pedantic reading of a request
+  # whose meaning is obvious. `1` adds the objects of its child
+  # collections, and `infinity` keeps going.
+  defp scope(%Resource{collection?: false} = object, _depth, _options), do: [object]
+
+  defp scope(collection, 0, options), do: objects(collection, options)
+
+  defp scope(collection, 1, options) do
+    {collections, objects} = split(collection, options)
+
+    objects ++ Enum.flat_map(collections, &objects(&1, options))
+  end
+
+  defp scope(collection, :infinity, options) do
+    {collections, objects} = split(collection, options)
+
+    objects ++ Enum.flat_map(collections, &scope(&1, :infinity, options))
+  end
+
+  defp objects(collection, options), do: collection |> split(options) |> elem(1)
+
+  defp split(collection, %{store: store, context: context}) do
     case store.children(collection, context) do
-      {:ok, children} -> Enum.reject(children, & &1.collection?)
-      _nothing -> []
+      {:ok, children} -> Enum.split_with(children, & &1.collection?)
+      _nothing -> {[], []}
     end
   end
 

@@ -147,7 +147,9 @@ defmodule Dav.Web.MethodsTest do
       conn = send_request("MKCOL", "/files/new", context.writable)
 
       assert conn.status == 201
-      assert send_request("PROPFIND", "/files/new", context.writable).status == 207
+
+      assert send_request("PROPFIND", "/files/new", context.writable, "", [{"depth", "0"}]).status ==
+               207
     end
 
     test "over something that exists is 405", context do

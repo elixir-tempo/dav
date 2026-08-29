@@ -99,10 +99,41 @@ defmodule Dav.Cal.ScheduleTest do
     assert DavPlug.call(conn("POST", "/bob/calendar", body), context.options).status == 403
   end
 
-  test "a body that is not a busy-time request is a 400", context do
+  test "a body that is not a scheduling message names the precondition", context do
+    # RFC 6638 section 5.2: a bare 400 tells a client its request was
+    # wrong; the precondition tells it which rule it broke.
     body = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    conn = DavPlug.call(conn("POST", "/alice/outbox/", body), context.options)
 
-    assert DavPlug.call(conn("POST", "/alice/outbox/", body), context.options).status == 400
+    assert conn.status == 403
+    assert conn.resp_body =~ "valid-scheduling-message"
+  end
+
+  test "a VFREEBUSY request with no ORGANIZER names valid-organizer", context do
+    body =
+      Enum.join(
+        [
+          "BEGIN:VCALENDAR",
+          "METHOD:REQUEST",
+          "BEGIN:VFREEBUSY",
+          "ATTENDEE:mailto:bob@example.com",
+          "END:VFREEBUSY",
+          "END:VCALENDAR"
+        ],
+        "\r\n"
+      ) <> "\r\n"
+
+    conn = DavPlug.call(conn("POST", "/alice/outbox/", body), context.options)
+
+    assert conn.status == 403
+    assert conn.resp_body =~ "valid-organizer"
+  end
+
+  test "a body that is not iCalendar at all names valid-calendar-data", context do
+    conn = DavPlug.call(conn("POST", "/alice/outbox/", "not a calendar"), context.options)
+
+    assert conn.status == 403
+    assert conn.resp_body =~ "valid-calendar-data"
   end
 
   test "the scheduling collections report their resource types", context do

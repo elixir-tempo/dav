@@ -44,6 +44,12 @@ defmodule Dav.Xml do
   * `{:report_set, qnames}` is `DAV:supported-report-set`, whose
     nesting the specification fixes.
 
+  * `{:hrefs, urls}` renders each as a `DAV:href`, which is how every
+    property that points at another resource is written —
+    `CALDAV:calendar-home-set`, `CALDAV:schedule-inbox-URL` and their
+    kind. A bare string there would be read as text, and a client
+    looking for an `href` child would find none.
+
   * `{:elements, namespaces, iodata}` is the escape hatch for content
     this module cannot construct. The namespaces used **must** be
     listed, because that is the only way they get declared.
@@ -52,6 +58,7 @@ defmodule Dav.Xml do
           String.t()
           | {:names, [qname()]}
           | {:report_set, [qname()]}
+          | {:hrefs, [String.t()]}
           | {:elements, [String.t()], iodata()}
           | nil
 
@@ -275,6 +282,9 @@ defmodule Dav.Xml do
       {:report_set, names} ->
         ["<", tag, ">", Enum.map(names, &report(&1, prefixes)), "</", tag, ">"]
 
+      {:hrefs, hrefs} ->
+        ["<", tag, ">", Enum.map(hrefs, &href(&1, prefixes)), "</", tag, ">"]
+
       {:elements, _namespaces, inner} ->
         ["<", tag, ">", inner, "</", tag, ">"]
 
@@ -289,10 +299,17 @@ defmodule Dav.Xml do
   # malformed XML that only fails at a real client.
   defp within({:names, names}), do: for({namespace, _local} <- names, do: namespace)
   defp within({:report_set, names}), do: for({namespace, _local} <- names, do: namespace)
+  defp within({:hrefs, _hrefs}), do: [dav()]
   defp within({:elements, namespaces, _inner}), do: namespaces
   defp within(_other), do: []
 
   defp empty({namespace, local}, prefixes), do: ["<", prefixes[namespace], ":", local, "/>"]
+
+  defp href(value, prefixes) do
+    tag = [prefixes[dav()], ":href"]
+
+    ["<", tag, ">", escape(value), "</", tag, ">"]
+  end
 
   defp report(name, prefixes) do
     ["<D:supported-report><D:report>", empty(name, prefixes), "</D:report></D:supported-report>"]

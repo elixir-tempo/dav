@@ -61,7 +61,8 @@ defmodule Dav.Web.PlugTest do
 
   describe "PROPFIND" do
     test "an empty body means allprop, which is what several clients send", context do
-      conn = DavPlug.call(request("PROPFIND", "/calendars", ""), context.options)
+      conn =
+        DavPlug.call(request("PROPFIND", "/calendars", "", [{"depth", "0"}]), context.options)
 
       assert conn.status == 207
       assert conn.resp_body =~ "<D:displayname>Calendars</D:displayname>"
@@ -141,10 +142,23 @@ defmodule Dav.Web.PlugTest do
         )
 
       assert conn.status == 403
+      # A bare 403 does not say which rule was broken.
+      assert conn.resp_body =~ "propfind-finite-depth"
+    end
+
+    test "an absent Depth header means infinity, not one", context do
+      # RFC 4918 section 9.1: "Servers SHOULD treat a request without a
+      # Depth header as if a Depth: infinity header was included."
+      # Defaulting to 1 silently answers a different question from the
+      # one a client that omits the header is asking.
+      conn = DavPlug.call(request("PROPFIND", "/", ""), context.options)
+
+      assert conn.status == 403
+      assert conn.resp_body =~ "propfind-finite-depth"
     end
 
     test "a missing resource is 404, not an empty multistatus", context do
-      conn = DavPlug.call(request("PROPFIND", "/nowhere", ""), context.options)
+      conn = DavPlug.call(request("PROPFIND", "/nowhere", "", [{"depth", "0"}]), context.options)
 
       assert conn.status == 404
     end

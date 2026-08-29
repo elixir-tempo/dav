@@ -199,4 +199,38 @@ defmodule Dav.XmlTest do
                Xml.parse_proppatch(body)
     end
   end
+
+  describe "href-valued properties" do
+    test "each URL becomes a DAV:href child" do
+      # A property that points at another resource writes its value as
+      # `DAV:href`. A bare string would be read as text, and a client
+      # looking for the href child would find none.
+      document =
+        Xml.multistatus([
+          {"/p/",
+           [{"HTTP/1.1 200 OK", [{{Xml.caldav(), "calendar-home-set"}, {:hrefs, ["/c/"]}}]}]}
+        ])
+        |> IO.iodata_to_binary()
+
+      assert document =~ "calendar-home-set"
+      assert document =~ "<D:href>/c/</D:href>"
+    end
+
+    test "several URLs each get their own href" do
+      document =
+        Xml.multistatus([
+          {"/p/",
+           [
+             {"HTTP/1.1 200 OK",
+              [
+                {{Xml.caldav(), "calendar-user-address-set"},
+                 {:hrefs, ["mailto:a@x", "mailto:b@x"]}}
+              ]}
+           ]}
+        ])
+        |> IO.iodata_to_binary()
+
+      assert document =~ "<D:href>mailto:a@x</D:href><D:href>mailto:b@x</D:href>"
+    end
+  end
 end

@@ -75,7 +75,27 @@ defmodule Dav.Cal.TimeRange do
       false
 
   """
-  @spec overlaps?(ICalendar.component(), {String.t() | nil, String.t() | nil}) :: boolean()
+  @spec overlaps?(
+          ICalendar.component() | ICalendar.property(),
+          {String.t() | nil, String.t() | nil}
+        ) ::
+          boolean()
+  # A `time-range` inside a `prop-filter` tests the property's own
+  # value — "a CREATED within this window" — rather than a component's
+  # extent. RFC 4791 section 9.9 allows both, and the filter evaluator
+  # is handed whichever the filter named, so this must recognise both
+  # rather than assuming a component and crashing on a property.
+  def overlaps?(%{value: value, parameters: _parameters} = property, range)
+      when not is_map_key(property, :properties) do
+    with {:ok, start} <- moment(elem(range, 0)),
+         {:ok, finish} <- moment(elem(range, 1)),
+         {:ok, moment} <- moment(value) do
+      ends_after_start?(:instant, moment, start) and starts_before_end?(moment, finish)
+    else
+      _unreadable -> false
+    end
+  end
+
   def overlaps?(component, {from, to}) do
     with {:ok, start} <- moment(from),
          {:ok, finish} <- moment(to),

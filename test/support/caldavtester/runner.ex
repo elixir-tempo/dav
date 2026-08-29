@@ -26,6 +26,7 @@ defmodule Dav.CalDAVTester.Runner do
   alias Dav.Cal
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
+  alias Dav.CalDAVTester.Features
   alias Dav.CalDAVTester.Scenario
   alias Dav.CalDAVTester.ServerInfo
   alias Dav.CalDAVTester.Verifier
@@ -86,7 +87,8 @@ defmodule Dav.CalDAVTester.Runner do
       end)
 
     {results, _state} =
-      Enum.map_reduce(Scenario.tests(scenario), state, fn {suite, test}, state ->
+      Enum.map_reduce(Scenario.tests(scenario, Features.declared()), state, fn {suite, test},
+                                                                               state ->
         {outcome, state} = run_test(test, state)
         {{suite.name, test.name, outcome}, state}
       end)
@@ -107,6 +109,16 @@ defmodule Dav.CalDAVTester.Runner do
   end
 
   defp attempt(request, state) do
+    if Scenario.applicable?(request, Features.declared()) do
+      dispatch(request, state)
+    else
+      # A request gated on a feature this server does not declare is
+      # not part of the scenario for this server at all.
+      {:passed, state}
+    end
+  end
+
+  defp dispatch(request, state) do
     case compound(request.method) do
       {:ok, directive} -> perform(directive, request, state)
       :no -> plain(request, state)
@@ -158,7 +170,7 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp record(request, conn, state) do
     state = Enum.reduce(request.grabs, state, &grab(&1, conn, request, &2))
-    {verify(request, conn), state}
+    {verify(request, conn, state), state}
   end
 
   ## --- the compound methods ---------------------------------------
@@ -226,7 +238,7 @@ defmodule Dav.CalDAVTester.Runner do
         conn = send_plain("GET", chosen, state)
         state = remember(request, chosen, state)
         state = Enum.reduce(request.grabs, state, &grab(&1, conn, request, &2))
-        {verify(request, conn), state}
+        {verify(request, conn, state), state}
     end
   end
 
@@ -416,6 +428,7 @@ defmodule Dav.CalDAVTester.Runner do
       PlugTest.conn(request.method, uri, body)
       |> put_headers(request.headers, substitutions)
       |> put_content_type(request.data)
+      |> default_depth(request)
 
     {:ok, DavPlug.call(conn, options)}
   rescue
@@ -452,13 +465,46 @@ defmodule Dav.CalDAVTester.Runner do
   defp put_content_type(conn, %{content_type: type}),
     do: Conn.put_req_header(conn, "content-type", type)
 
-  defp verify(request, conn) do
-    Enum.reduce_while(request.verifiers, :passed, fn check, _outcome ->
+  # RFC 4791 says a `REPORT` without a `Depth` header means `Depth: 0`,
+  # and this server obeys that. Upstream's client sends `Depth: 1`, and
+  # 114 of the suite's REPORTs omit the header while expecting a
+  # collection's contents back — so the harness supplies what the real
+  # client would, rather than the server bending the specification to
+  # match a header it was never sent.
+  defp default_depth(conn, %{method: "REPORT", headers: headers}) do
+    if Enum.any?(headers, fn {name, _value} -> String.downcase(name || "") == "depth" end) do
+      conn
+    else
+      Conn.put_req_header(conn, "depth", "1")
+    end
+  end
+
+  defp default_depth(conn, _request), do: conn
+
+  # Verifier arguments are written in the same `$variable:` language as
+  # the requests — `okhrefs` names `$calendarhome1:/calendar/1.ics` —
+  # so they must be expanded too. Comparing an expanded response href
+  # against an unexpanded expectation fails every time, and looks like
+  # a server returning the wrong resource.
+  defp verify(request, conn, state) do
+    request.verifiers
+    |> Enum.filter(&Scenario.applicable?(&1, Features.declared()))
+    |> Enum.map(&expand_arguments(&1, state))
+    |> Enum.reduce_while(:passed, fn check, _outcome ->
       case Verifier.run(check, conn) do
         :passed -> {:cont, :passed}
         other -> {:halt, other}
       end
     end)
+  end
+
+  defp expand_arguments(check, state) do
+    arguments =
+      Map.new(check.args, fn {name, values} ->
+        {name, Enum.map(values, &ServerInfo.expand(&1, state.substitutions))}
+      end)
+
+    %{check | args: arguments}
   end
 
   ## --- the server under test --------------------------------------
@@ -491,8 +537,12 @@ defmodule Dav.CalDAVTester.Runner do
 
     homes = Enum.map(people, &elem(&1, 1))
 
+    # No `tasks` collection: this server does not declare
+    # `split-calendars`, so VTODOs live in the calendar and a
+    # separate collection would appear in every listing the suite
+    # checks.
     collections =
-      for home <- homes, leaf <- ["calendar", "tasks", "notification"], do: home ++ [leaf]
+      for home <- homes, leaf <- ["calendar", "notification"], do: home ++ [leaf]
 
     resources =
       ([[] | ancestors(homes)] ++ homes)
@@ -518,7 +568,45 @@ defmodule Dav.CalDAVTester.Runner do
           into: %{},
           do: {address, home}
 
-    SchedulingStore.start(resources ++ calendars ++ scheduling, addresses)
+    principals =
+      for {index, _home} <- people,
+          path = substitutions["$principal#{index}:"],
+          is_binary(path),
+          do: %Resource{path: segments(path), collection?: true}
+
+    tree =
+      principals
+      |> Enum.map(& &1.path)
+      |> ancestors()
+      |> Enum.uniq()
+      |> Enum.map(&%Resource{path: &1, collection?: true})
+
+    SchedulingStore.start(
+      resources ++ calendars ++ scheduling ++ tree ++ principals,
+      addresses,
+      principal_properties(people, substitutions)
+    )
+  end
+
+  # RFC 6638 puts a principal's scheduling URLs on the principal
+  # resource, which is how a client finds an Inbox at all. A store
+  # supplies them; here they are seeded so the suite can ask for them.
+  defp principal_properties(people, substitutions) do
+    for {index, home} <- people,
+        path = substitutions["$principal#{index}:"],
+        is_binary(path),
+        into: %{} do
+      {segments(path),
+       %{
+         {Xml.caldav(), "calendar-home-set"} => {:hrefs, ["/" <> Enum.join(home, "/") <> "/"]},
+         {Xml.caldav(), "schedule-inbox-URL"} =>
+           {:hrefs, ["/" <> Enum.join(home ++ ["inbox"], "/") <> "/"]},
+         {Xml.caldav(), "schedule-outbox-URL"} =>
+           {:hrefs, ["/" <> Enum.join(home ++ ["outbox"], "/") <> "/"]},
+         {Xml.caldav(), "calendar-user-address-set"} =>
+           {:hrefs, Enum.filter([substitutions["$cuaddr#{index}:"]], &is_binary/1)}
+       }}
+    end
   end
 
   defp ancestors(homes) do
@@ -534,6 +622,7 @@ defmodule Dav.CalDAVTester.Runner do
       store: SchedulingStore,
       context: context,
       methods: [{"MKCALENDAR", Cal.Mkcalendar}, {"POST", Cal.Outbox}],
+      validators: [Cal.Object],
       reports: [
         {{Xml.caldav(), "calendar-query"}, Cal.Query},
         {{Xml.caldav(), "calendar-multiget"}, Cal.Multiget},

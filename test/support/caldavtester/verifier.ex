@@ -14,6 +14,7 @@ defmodule Dav.CalDAVTester.Verifier do
 
   """
 
+  alias Dav.Cal.ICalendar
   alias Dav.CalDAVTester.Calendars
   alias Dav.CalDAVTester.Scenario.Verify
   alias Dav.Xml
@@ -43,7 +44,9 @@ defmodule Dav.CalDAVTester.Verifier do
     if Enum.any?(expected, &status_matches?(&1, conn.status)) do
       :passed
     else
-      {:failed, "status #{conn.status}, expected #{Enum.join(expected, ", ")}"}
+      # The body carries the precondition on a 403 or 409, which is the
+      # difference between "it refused" and knowing which rule refused.
+      {:failed, "status #{conn.status}, expected #{Enum.join(expected, ", ")}#{detail(conn)}"}
     end
   end
 
@@ -116,6 +119,13 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
+  def run(%Verify{callback: "freeBusy", args: args}, conn) do
+    with :ok <- expect_status(conn, 200),
+         {:ok, periods} <- free_busy(conn.resp_body) do
+      free_busy_matches(periods, args)
+    end
+  end
+
   def run(%Verify{callback: callback}, _conn) do
     {:skipped, "verifier #{callback} is not implemented"}
   end
@@ -159,10 +169,13 @@ defmodule Dav.CalDAVTester.Verifier do
     if "#{conn.status}" in codes, do: :ok, else: {:failed, "status #{conn.status}"}
   end
 
+  # The body is quoted in the failure because "not valid XML" on its
+  # own hides the usual cause, which is a body that is empty or is not
+  # XML at all rather than one that is malformed.
   defp document(conn) do
     case Xml.parse(conn.resp_body) do
       {:ok, document} -> {:ok, document}
-      _unparseable -> {:failed, "response is not valid XML"}
+      _unparseable -> {:failed, "not valid XML: #{inspect(String.slice(conn.resp_body, 0, 60))}"}
     end
   end
 
@@ -227,6 +240,53 @@ defmodule Dav.CalDAVTester.Verifier do
   end
 
   defp normalise(text), do: text |> String.replace("\r\n", "\n") |> String.trim()
+
+  ## --- freeBusy ---------------------------------------------------
+
+  # The response is one VFREEBUSY, and its FREEBUSY properties are
+  # compared as *sets* per FBTYPE. Order carries no meaning — two
+  # servers may coalesce and emit in different orders and both be
+  # right — but the sets must match exactly, so a period the server
+  # invented fails just as loudly as one it lost.
+  defp free_busy(body) do
+    with {:ok, calendar} <- ICalendar.parse(body),
+         [component] <- Enum.filter(calendar.components, &(&1.name == "VFREEBUSY")) do
+      {:ok, periods_by_type(component)}
+    else
+      _not_one_vfreebusy -> {:failed, "response is not a single VFREEBUSY"}
+    end
+  end
+
+  defp periods_by_type(component) do
+    for property <- component.properties,
+        property.name == "FREEBUSY",
+        type = Map.get(property.parameters, "FBTYPE", "BUSY"),
+        period <- String.split(property.value, ","),
+        reduce: %{} do
+      found -> Map.update(found, type, [period], &[period | &1])
+    end
+  end
+
+  @free_busy_types %{
+    "busy" => "BUSY",
+    "tentative" => "BUSY-TENTATIVE",
+    "unavailable" => "BUSY-UNAVAILABLE"
+  }
+
+  defp free_busy_matches(periods, args) do
+    each(Map.to_list(@free_busy_types), fn {argument, type} ->
+      expected = MapSet.new(Map.get(args, argument, []))
+      actual = MapSet.new(Map.get(periods, type, []))
+
+      if MapSet.equal?(expected, actual) do
+        :passed
+      else
+        {:failed,
+         "#{type} periods differ: missing #{inspect(Enum.take(MapSet.difference(expected, actual), 3))}, " <>
+           "unexpected #{inspect(Enum.take(MapSet.difference(actual, expected), 3))}"}
+      end
+    end)
+  end
 
   ## --- xmlElementMatch --------------------------------------------
 
@@ -329,7 +389,7 @@ defmodule Dav.CalDAVTester.Verifier do
   defp responses(conn) do
     case Xml.parse(conn.resp_body) do
       {:ok, document} -> {:ok, Enum.map(elements(document, "response"), &classify/1)}
-      _unparseable -> {:failed, "response is not valid XML"}
+      _unparseable -> {:failed, "not valid XML: #{inspect(String.slice(conn.resp_body, 0, 60))}"}
     end
   end
 
@@ -381,6 +441,10 @@ defmodule Dav.CalDAVTester.Verifier do
       href_sets?(args) ->
         hrefs(args, ok, bad, conn)
 
+      args == %{} ->
+        # "If no hrefs requested, then assume none should come back."
+        compare(MapSet.size(ok) + MapSet.size(bad), 0, "responses")
+
       true ->
         {:skipped, "multistatusItems form not implemented: #{inspect(Map.keys(args))}"}
     end
@@ -423,11 +487,15 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
+  # Expected hrefs are *not* decoded. Upstream unquotes only what the
+  # response carried, so a test naming `2%20a.ics` is comparing against
+  # a response href that decoded to exactly that. Decoding both sides
+  # turns one `%20` into a space and reports a correct server as
+  # returning the wrong resource.
   defp href_set(args, name, prefix) do
     for href <- Map.get(args, name, []), into: MapSet.new() do
       href
       |> then(&if String.starts_with?(&1, "/"), do: &1, else: Path.join(prefix, &1))
-      |> URI.decode()
       |> String.trim_trailing("/")
     end
   end
@@ -570,6 +638,13 @@ defmodule Dav.CalDAVTester.Verifier do
 
   defp local?(%{name: {_namespace, name}}, name), do: true
   defp local?(_element, _name), do: false
+
+  defp detail(%{resp_body: body}) when is_binary(body) and body != "" do
+    " — " <>
+      String.slice(String.replace(body, ~r/<\?xml[^>]*\?>|xmlns:?[A-Za-z]*="[^"]*"/, ""), 0, 120)
+  end
+
+  defp detail(_no_body), do: ""
 
   # "2xx" is any status in that class; a bare number is exact.
   defp status_matches?(<<digit::binary-1, "xx">>, status) do

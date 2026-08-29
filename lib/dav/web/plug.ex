@@ -41,6 +41,7 @@ defmodule Dav.Web.Plug do
       store: Keyword.fetch!(options, :store),
       context: Keyword.get(options, :context),
       reports: Map.new(Keyword.get(options, :reports, [])),
+      validators: Keyword.get(options, :validators, []),
       methods: Map.new(Keyword.get(options, :methods, []))
     }
   end
@@ -138,10 +139,12 @@ defmodule Dav.Web.Plug do
   defp put(conn, options) do
     {:ok, body, conn} = read_body(conn)
     type = conn |> get_req_header("content-type") |> List.first()
+    path = Store.segments(conn.request_path)
 
     with :ok <- capable(options, :put),
-         {:ok, outcome, resource} <-
-           options.store.put(Store.segments(conn.request_path), body, type, options.context) do
+         :ok <- writable(path, options),
+         :ok <- validate(body, path, options, type),
+         {:ok, outcome, resource} <- options.store.put(path, body, type, options.context) do
       conn
       |> etag(resource)
       |> send_resp(if(outcome == :created, do: 201, else: 204), "")
@@ -149,6 +152,41 @@ defmodule Dav.Web.Plug do
       {:error, :unsupported} -> refuse(conn, options)
       # A missing parent is a conflict, not an invitation to create it.
       {:error, :conflict} -> send_resp(conn, 409, "")
+      {:error, :collection} -> send_resp(conn, 403, "")
+      {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
+    end
+  end
+
+  # A collection is not a document: `PUT` over one would replace a
+  # whole tree with a body, so it is refused rather than obeyed.
+  defp writable(path, %{store: store, context: context}) do
+    case store.resolve(path, context) do
+      {:ok, %Resource{collection?: true}} -> {:error, :collection}
+      _absent_or_document -> :ok
+    end
+  end
+
+  # What a collection may contain is the collection's business, not
+  # this module's: `Dav.Cal.Object` enforces RFC 4791's restrictions on
+  # calendar collections without the base learning what a calendar is.
+  defp validate(body, path, options, content_type) do
+    collection = parent(path, options)
+    options = Map.put(options, :content_type, content_type)
+
+    options.validators
+    |> Enum.filter(& &1.applies?(collection))
+    |> Enum.reduce_while(:ok, fn validator, _outcome ->
+      case validator.validate(body, collection, path, options) do
+        :ok -> {:cont, :ok}
+        failure -> {:halt, failure}
+      end
+    end)
+  end
+
+  defp parent(path, %{store: store, context: context}) do
+    case store.resolve(Enum.drop(path, -1), context) do
+      {:ok, resource} -> resource
+      _absent -> nil
     end
   end
 
@@ -199,30 +237,56 @@ defmodule Dav.Web.Plug do
     {:ok, body, conn} = read_body(conn)
 
     with {:ok, request} <- Xml.parse_propfind(body),
-         {:ok, depth} <- depth(conn),
+         {:ok, depth} <- finite(depth(conn, {:ok, :infinity})),
          {:ok, resource} <- resolve(conn, options),
          {:ok, resources} <- gather(resource, depth, options) do
       respond(conn, resources, request, options)
     else
       {:error, :malformed} -> send_resp(conn, 400, "")
       {:error, :bad_depth} -> send_resp(conn, 400, "")
-      {:error, :depth_infinity} -> send_resp(conn, 403, "")
+      {:error, :depth_infinity} -> precondition(conn, {Xml.dav(), "propfind-finite-depth"})
       {:error, :not_found} -> send_resp(conn, 404, "")
     end
   end
 
-  # `Depth: infinity` is refused rather than served. RFC 4918 allows a
-  # server to refuse it, and answering it over an unbounded tree is a
-  # denial of service with a specification behind it.
-  defp depth(conn) do
+  # `Depth: infinity` is refused rather than served. RFC 4918 section
+  # 9.1 allows a server to refuse it, and answering it over an
+  # unbounded tree is a denial of service with a specification behind
+  # it.
+  #
+  # The default when the header is absent is *not* the same for every
+  # method, and getting it wrong is invisible until a client omits the
+  # header:
+  #
+  # * PROPFIND — "Servers SHOULD treat a request without a Depth
+  #   header as if a `Depth: infinity` header was included" (RFC 4918
+  #   section 9.1), so an absent header is refused exactly as an
+  #   explicit `infinity` is.
+  #
+  # * REPORT — "If no Depth header is included, Depth:0 is assumed"
+  #   (RFC 3253 section 3.6).
+  # * REPORT — "If no Depth header is included, Depth:0 is assumed"
+  #   (RFC 3253 section 3.6), and `infinity` is permitted: RFC 4791
+  #   section 7.8 lets a `calendar-query` search a whole tree, so
+  #   refusing it there would refuse a documented request.
+  defp depth(conn, absent) do
     case get_req_header(conn, "depth") do
-      [] -> {:ok, 1}
+      [] -> absent
       ["0"] -> {:ok, 0}
       ["1"] -> {:ok, 1}
-      ["infinity"] -> {:error, :depth_infinity}
-      _other -> {:error, :bad_depth}
+      [other] -> infinity(other)
+      _repeated -> {:error, :bad_depth}
     end
   end
+
+  defp infinity(value) do
+    if String.downcase(value) == "infinity", do: {:ok, :infinity}, else: {:error, :bad_depth}
+  end
+
+  # PROPFIND is the one place infinity is refused, and it refuses it by
+  # name so a client learns the rule rather than the outcome.
+  defp finite({:ok, :infinity}), do: {:error, :depth_infinity}
+  defp finite(other), do: other
 
   defp resolve(conn, %{store: store, context: context}) do
     store.resolve(Store.segments(conn.request_path), context)
@@ -245,7 +309,7 @@ defmodule Dav.Web.Plug do
     {:ok, body, conn} = read_body(conn)
 
     with {:ok, name} <- Xml.report_name(body),
-         {:ok, depth} <- depth(conn),
+         {:ok, depth} <- depth(conn, {:ok, 0}),
          {:ok, resource} <- resolve(conn, options),
          {:ok, handler} <- handler(name, options),
          {:ok, answer} <- handler.run(resource, body, depth, options) do
@@ -311,6 +375,7 @@ defmodule Dav.Web.Plug do
          :ok <- distinct(source, destination),
          {:ok, replacing?} <- overwritable(conn, destination, options),
          :ok <- parent_of(destination, options),
+         :ok <- validate_transfer(source, destination, options),
          :ok <- carry_out(kind, source, destination, options) do
       send_resp(conn, if(replacing?, do: 204, else: 201), "")
     else
@@ -321,6 +386,28 @@ defmodule Dav.Web.Plug do
       {:error, :would_overwrite} -> send_resp(conn, 412, "")
       {:error, :no_parent} -> send_resp(conn, 409, "")
       {:error, :other_server} -> send_resp(conn, 502, "")
+      {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
+    end
+  end
+
+  # RFC 4791 section 5.3.2 applies its preconditions to "the resource
+  # submitted in the PUT request, **or targeted by a COPY or MOVE**".
+  # Checking only PUT leaves the back door open: anything invalid can
+  # be written to an ordinary collection and then copied in.
+  defp validate_transfer(%Resource{collection?: true}, _destination, _options), do: :ok
+
+  defp validate_transfer(source, destination, options) do
+    case body_of(source, options) do
+      {:ok, body} -> validate(body, destination, options, source.content_type)
+      :error -> :ok
+    end
+  end
+
+  defp body_of(source, %{store: store, context: context}) do
+    if Store.supports?(store, :read) do
+      with {:ok, data} <- store.read(source, context), do: {:ok, IO.iodata_to_binary(data)}
+    else
+      :error
     end
   end
 
@@ -510,12 +597,22 @@ defmodule Dav.Web.Plug do
 
   # Live first: a client cannot shadow the server's own account of a
   # resource by storing a dead property with the same name.
+  # A stored value wins over a computed one for any property a client
+  # is allowed to set: the whole point of setting `displayname` is that
+  # it replaces the default the server would otherwise derive from the
+  # path. Protected properties are the other way round — nothing a
+  # client stored may shadow the server's own answer.
   defp fetch(resource, qname, _reports, dead) do
-    case Properties.fetch(resource, qname) do
-      {:ok, value} -> {:ok, value}
-      :error -> Map.fetch(dead, qname)
+    case Map.fetch(dead, qname) do
+      {:ok, value} ->
+        if Properties.protected?(qname), do: live(resource, qname), else: {:ok, value}
+
+      :error ->
+        live(resource, qname)
     end
   end
+
+  defp live(resource, qname), do: Properties.fetch(resource, qname)
 
   defp report_set(reports) do
     {{Xml.dav(), "supported-report-set"}, Xml.supported_report_set(reports)}

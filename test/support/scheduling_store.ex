@@ -11,9 +11,9 @@ defmodule Dav.Test.SchedulingStore do
 
   alias Dav.Test.WritableStore
 
-  def start(resources, addresses) do
+  def start(resources, addresses, dead \\ %{}) do
     agent = WritableStore.start(resources)
-    Agent.update(agent, &Map.put(&1, :addresses, addresses))
+    Agent.update(agent, &%{Map.put(&1, :addresses, addresses) | dead: dead})
     agent
   end
 

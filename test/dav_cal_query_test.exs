@@ -9,6 +9,7 @@ defmodule Dav.Cal.QueryTest do
   alias Dav.Web.Plug, as: DavPlug
   alias Dav.Web.Resource
   alias Dav.Xml
+  alias Plug.Conn
 
   @query {Xml.caldav(), "calendar-query"}
 
@@ -64,7 +65,11 @@ defmodule Dav.Cal.QueryTest do
     </C:calendar-query>
     """
 
-    DavPlug.call(conn("REPORT", "/home", body), options)
+    # A REPORT without a Depth header means Depth 0, which searches
+    # the collection itself and not its members. Real clients send it.
+    conn("REPORT", "/home", body)
+    |> Conn.put_req_header("depth", "1")
+    |> DavPlug.call(options)
   end
 
   @june ~s(<C:filter><C:comp-filter name="VCALENDAR"><C:comp-filter name="VEVENT"><C:time-range start="20260601T000000Z" end="20260701T000000Z"/></C:comp-filter></C:comp-filter></C:filter>)

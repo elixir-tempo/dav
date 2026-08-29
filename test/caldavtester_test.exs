@@ -18,6 +18,7 @@ defmodule Dav.CalDAVTesterTest do
 
   use ExUnit.Case, async: true
 
+  alias Dav.CalDAVTester.Features
   alias Dav.CalDAVTester.Runner
   alias Dav.CalDAVTester.Scenario
   alias Dav.CalDAVTester.ServerInfo
@@ -65,14 +66,27 @@ defmodule Dav.CalDAVTesterTest do
   end
 
   test "the harness is actually running scenarios", context do
-    # A wildcard that matched nothing, or a runner that skipped
-    # everything, would make both tests above pass while measuring
-    # nothing at all.
+    # A wildcard that matched nothing, a feature list that gated
+    # everything away, or a runner that skipped everything would make
+    # the baseline tests pass while measuring nothing at all.
     assert map_size(context.results) == 162
 
     outcomes = context.results |> Map.values() |> List.flatten()
-    assert length(outcomes) > 5000
-    assert Enum.count(outcomes, &(&1 == :passed)) > 900
+    assert length(outcomes) > 400
+    assert Enum.count(outcomes, &(&1 == :passed)) > 200
+  end
+
+  test "the declared feature set is the one the server implements", context do
+    # The denominator is set by what this server declares, so a feature
+    # added here without the code behind it silently inflates the
+    # conformance figure. `caldav` is the load-bearing claim.
+    declared = Features.declared()
+
+    assert MapSet.member?(declared, "caldav")
+    refute MapSet.member?(declared, "implicit-scheduling")
+    refute MapSet.member?(declared, "sync-report")
+    assert MapSet.size(declared) < 10
+    assert map_size(context.results) == 162
   end
 
   test "an unimplemented check is never counted as a pass", context do

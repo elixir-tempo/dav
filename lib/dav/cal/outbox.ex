@@ -51,6 +51,7 @@ defmodule Dav.Cal.Outbox do
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
   alias Dav.Web.Store
+  alias Dav.Xml
 
   # iTIP request statuses, RFC 5546 section 3.6.
   @success "2.0;Success"
@@ -61,14 +62,39 @@ defmodule Dav.Cal.Outbox do
     with {:ok, resource} <- resolve(path, options),
          :ok <- outbox(resource),
          {:ok, body, conn} <- read_body(conn),
+         :ok <- media_type(conn),
          {:ok, request} <- freebusy(body) do
       respond(conn, request, options)
     else
       {:error, :not_found} -> send_resp(conn, 404, "")
       {:error, :not_outbox} -> send_resp(conn, 403, "")
-      {:error, :malformed} -> send_resp(conn, 400, "")
+      {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
     end
   end
+
+  # RFC 6638 section 5.2 gives this method its own preconditions, and
+  # naming them is the whole value: a bare `400` tells a client its
+  # request was wrong, while `CALDAV:valid-scheduling-message` tells it
+  # the body was not an iTIP message and `CALDAV:valid-organizer` that
+  # the ORGANIZER was not one it may act for.
+  defp precondition(conn, condition) do
+    conn
+    |> put_resp_content_type("application/xml", "utf-8")
+    |> send_resp(403, Xml.error(condition))
+  end
+
+  defp media_type(conn) do
+    type = conn |> get_req_header("content-type") |> List.first() || "text/calendar"
+
+    if calendar_type?(type), do: :ok, else: {:error, caldav("supported-calendar-data")}
+  end
+
+  defp calendar_type?(type) do
+    type |> String.split(";") |> List.first() |> String.trim() |> String.downcase() ==
+      "text/calendar"
+  end
+
+  defp caldav(name), do: {Xml.caldav(), name}
 
   defp resolve(path, %{store: store, context: context}) do
     store.resolve(path, context)
@@ -83,13 +109,31 @@ defmodule Dav.Cal.Outbox do
   # The body must be a VFREEBUSY with METHOD:REQUEST. Anything else is
   # a different scheduling operation and not this one.
   defp freebusy(body) do
-    with {:ok, calendar} <- ICalendar.parse(body),
-         "REQUEST" <- property(calendar, "METHOD"),
-         component when not is_nil(component) <-
-           Enum.find(calendar.components, &(&1.name == "VFREEBUSY")) do
-      {:ok, component}
-    else
-      _not_a_busy_time_request -> {:error, :malformed}
+    case ICalendar.parse(body) do
+      {:ok, %{name: "VCALENDAR"} = calendar} -> scheduling_message(calendar)
+      _unreadable -> {:error, caldav("valid-calendar-data")}
+    end
+  end
+
+  # "The request body MUST contain a VFREEBUSY calendar component with
+  # the METHOD iCalendar property set to REQUEST." A body that is valid
+  # iCalendar but not an iTIP message fails a different precondition
+  # from one that is not iCalendar at all.
+  defp scheduling_message(calendar) do
+    component = Enum.find(calendar.components, &(&1.name == "VFREEBUSY"))
+
+    cond do
+      property(calendar, "METHOD") != "REQUEST" ->
+        {:error, caldav("valid-scheduling-message")}
+
+      is_nil(component) ->
+        {:error, caldav("valid-scheduling-message")}
+
+      is_nil(property(component, "ORGANIZER")) ->
+        {:error, caldav("valid-organizer")}
+
+      true ->
+        {:ok, component}
     end
   end
 
