@@ -105,6 +105,7 @@ defmodule Dav.Cal.Object do
          :ok <- unique_uid(calendar),
          :ok <- attendee_allowed(calendar, collection, path, options),
          :ok <- organizer_allowed(calendar, collection, options),
+         :ok <- agent_unchanged(calendar, collection, path, options),
          :ok <- same_organizer(calendar, path, options) do
       no_uid_conflict(calendar, collection, path, options)
     end
@@ -469,6 +470,48 @@ defmodule Dav.Cal.Object do
     if organizer in addresses and orphaned?(calendar),
       do: {:error, precondition("organizer-allowed")},
       else: :ok
+  end
+
+  # RFC 6638 section 3.2.2: an attendee's copy is theirs to answer in,
+  # not to re-address. `SCHEDULE-AGENT` on the `ORGANIZER` says who
+  # delivers for the whole object, so an attendee able to change it
+  # could switch the organiser's scheduling on or off from the far
+  # side of an invitation they were merely sent.
+  defp agent_unchanged(calendar, collection, path, options) do
+    {organizer, parameters} = organizer_of(calendar)
+
+    with false <- is_nil(organizer),
+         false <- organizer in Scheduling.addresses_of(collection, options),
+         # Only for an organiser this server schedules for. One
+         # somewhere else is nobody's here to police, and the
+         # parameter is then the client's own record of who it
+         # expects to deliver.
+         true <- Scheduling.hosted?(organizer, options),
+         %{} = before <- stored(path, options),
+         {^organizer, held} <- organizer_of(before),
+         # A `SCHEDULE-AGENT` the *server* wrote is not the client's
+         # to be held to: it is stamped alongside a `SCHEDULE-STATUS`
+         # saying why, and a client that never sent it cannot be
+         # accused of changing it.
+         false <- Map.has_key?(held, "SCHEDULE-STATUS"),
+         true <- agent_of(held) != agent_of(parameters) do
+      {:error, precondition("attendee-allowed")}
+    else
+      _theirs_or_unchanged -> :ok
+    end
+  end
+
+  defp agent_of(parameters), do: Map.get(parameters, "SCHEDULE-AGENT", "SERVER")
+
+  defp stored(path, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :read),
+         {:ok, resource} <- store.resolve(path, context),
+         {:ok, data} <- store.read(resource, context),
+         {:ok, calendar} <- ICalendar.parse(IO.iodata_to_binary(data)) do
+      calendar
+    else
+      _no_previous_copy -> nil
+    end
   end
 
   defp orphaned?(calendar) do

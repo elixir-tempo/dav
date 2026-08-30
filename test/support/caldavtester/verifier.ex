@@ -565,6 +565,11 @@ defmodule Dav.CalDAVTester.Verifier do
 
   ## --- xmlElementMatch --------------------------------------------
 
+  # A path predicate quotes its value either way — `[@a='b']` and
+  # `[@a="b"]` both appear in the suite — and a comparison that strips
+  # only one of them never matches the other.
+  defp unquoted(value), do: value |> String.trim("'") |> String.trim("\"")
+
   defp parent(document, []), do: {:ok, document}
 
   defp parent(document, [path]) do
@@ -632,7 +637,7 @@ defmodule Dav.CalDAVTester.Verifier do
   defp test_node(node, "@" <> test) do
     case String.split(test, "=", parts: 2) do
       [attribute] -> Map.has_key?(node.attributes, attribute)
-      [attribute, value] -> Map.get(node.attributes, attribute) == String.trim(value, "'")
+      [attribute, value] -> Map.get(node.attributes, attribute) == unquoted(value)
     end
   end
 
@@ -1004,7 +1009,7 @@ defmodule Dav.CalDAVTester.Verifier do
 
   defp detail(%{resp_body: body}) when is_binary(body) and body != "" do
     " — " <>
-      String.slice(String.replace(body, ~r/<\?xml[^>]*\?>|xmlns:?[A-Za-z]*="[^"]*"/, ""), 0, 120)
+      String.slice(String.replace(body, ~r/<\?xml[^>]*\?>|xmlns:?[A-Za-z]*="[^"]*"/, ""), 0, 3000)
   end
 
   defp detail(_no_body), do: ""

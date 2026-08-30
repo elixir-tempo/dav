@@ -305,24 +305,40 @@ defmodule Dav.Cal.TimeRange do
       {~s(~o"2026Y6M15DT9H0M0SZ"), ~s(~o"2026Y6M15DT10H0M0SZ")}
 
   """
-  @spec periods(ICalendar.component(), {String.t() | nil, String.t() | nil}, String.t() | nil) ::
-          [{Tempo.t(), Tempo.t()}]
-  def periods(component, range, floating \\ nil)
+  @spec periods(
+          ICalendar.component(),
+          {String.t() | nil, String.t() | nil},
+          String.t() | nil,
+          [ICalendar.component()]
+        ) :: [{Tempo.t(), Tempo.t()}]
+  def periods(component, range, floating \\ nil, overridden \\ [])
 
-  def periods(component, {from, to}, floating) do
+  def periods(component, {from, to}, floating, overridden) do
     with {:ok, start} <- moment(from),
          {:ok, finish} <- moment(to),
          {:ok, dtstart} <- property_value(component, "DTSTART", floating) do
       extent = extent(component, dtstart, floating)
+      replaced = instances(overridden, floating)
 
       component
       |> starts(dtstart)
+      |> Enum.reject(&Enum.any?(replaced, fn instance -> same_moment?(&1, instance) end))
       |> Enum.filter(&instance_overlaps?(extent, &1, start, finish))
       |> Enum.map(&clip({&1, ending(extent, &1)}, start, finish))
       |> Enum.filter(fn {began, ended} -> earlier?(began, ended) end)
     else
       _no_dtstart_or_unreadable -> []
     end
+  end
+
+  # The moments a set of overrides stands in for. An occurrence that
+  # has an override of its own is described by that override — the
+  # rule still names the date, but what happens then is the override's
+  # to say, and counting both reports the meeting twice.
+  defp instances(overridden, floating) do
+    for component <- overridden,
+        {:ok, moment} <- [property_value(component, "RECURRENCE-ID", floating)],
+        do: moment
   end
 
   defp ending(:instant, instance), do: instance
@@ -612,6 +628,8 @@ defmodule Dav.Cal.TimeRange do
   defp earlier?(nil, _b), do: true
   defp earlier?(_a, nil), do: true
   defp earlier?(a, b), do: Compare.compare_endpoints(a, b) == :earlier
+
+  defp same_moment?(a, b), do: Compare.compare_endpoints(a, b) == :same
 
   defp not_later?(nil, _b), do: true
   defp not_later?(_a, nil), do: true

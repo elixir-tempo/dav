@@ -207,9 +207,7 @@ defmodule Dav.Cal.FreeBusy do
   defp busy(object, range, floating, options) do
     with {:ok, data} <- read(object, options),
          {:ok, calendar} <- ICalendar.parse(data) do
-      calendar.components
-      |> Enum.filter(&(&1.name in @considered))
-      |> Enum.flat_map(&periods(&1, range, floating))
+      periods_of(calendar, range, floating)
     else
       _unreadable -> []
     end
@@ -244,14 +242,14 @@ defmodule Dav.Cal.FreeBusy do
   # stated by its FREEBUSY properties — it is a report, not an
   # appointment, so its own DTSTART bounds the report rather than
   # marking anyone as occupied.
-  defp periods(%{name: "VEVENT"} = event, range, floating) do
+  defp periods(%{name: "VEVENT"} = event, range, floating, overrides) do
     case type(event) do
       nil -> []
-      type -> Enum.map(TimeRange.periods(event, range, floating), &{type, &1})
+      type -> Enum.map(TimeRange.periods(event, range, floating, overrides), &{type, &1})
     end
   end
 
-  defp periods(%{name: "VFREEBUSY"} = report, range, _floating) do
+  defp periods(%{name: "VFREEBUSY"} = report, range, _floating, _overrides) do
     for property <- report.properties,
         property.name == "FREEBUSY",
         period <- String.split(property.value, ","),
@@ -378,9 +376,10 @@ defmodule Dav.Cal.FreeBusy do
   @spec periods_of(ICalendar.component(), {String.t() | nil, String.t() | nil}, String.t() | nil) ::
           [{String.t(), {Tempo.t(), Tempo.t()}}]
   def periods_of(calendar, range, floating \\ nil) do
-    calendar.components
-    |> Enum.filter(&(&1.name in @considered))
-    |> Enum.flat_map(&periods(&1, range, floating))
+    considered = Enum.filter(calendar.components, &(&1.name in @considered))
+    overrides = Enum.filter(considered, &(not is_nil(value(&1, "RECURRENCE-ID"))))
+
+    Enum.flat_map(considered, &periods(&1, range, floating, overrides))
   end
 
   @doc """

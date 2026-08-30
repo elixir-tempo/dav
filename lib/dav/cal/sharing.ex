@@ -526,15 +526,42 @@ defmodule Dav.Cal.Sharing do
          true <- Store.supports?(store, :put) do
       uid = uid_for(calendar, invitation)
 
-      store.put(
-        collection.path ++ [uid <> ".xml"],
-        invite_notification(calendar, invitation, uid, options),
-        "text/xml",
+      stored =
+        store.put(
+          collection.path ++ [uid <> ".xml"],
+          invite_notification(calendar, invitation, uid, options),
+          "text/xml",
+          context
+        )
+
+      typed(stored, store, context)
+    end
+
+    :ok
+  end
+
+  # A notification says what kind it is in a property, not only in its
+  # body. A client polling the collection reads `CS:notificationtype`
+  # to decide whether a notification is worth fetching at all, and one
+  # that answers nothing has to be downloaded to find out.
+  defp typed({:ok, _outcome, %Resource{} = resource}, store, context) do
+    if Store.supports?(store, :patch) do
+      store.patch(
+        resource,
+        [
+          {:set, {@namespace, "notificationtype"}, {:elements, [@namespace], notification_type()}}
+        ],
         context
       )
     end
 
     :ok
+  end
+
+  defp typed(_refused, _store, _context), do: :ok
+
+  defp notification_type do
+    ~s(<CS:invite-notification xmlns:CS=") <> @namespace <> ~s(" shared-type="calendar"/>)
   end
 
   defp uid_for(calendar, invitation) do
