@@ -220,7 +220,8 @@ defmodule Dav.Web.Hook do
           required(:resource) => Resource.t(),
           required(:body) => binary(),
           required(:previous) => binary() | nil,
-          required(:collection) => Resource.t() | nil
+          required(:collection) => Resource.t() | nil,
+          optional(:properties) => %{optional(term()) => term()}
         }
 
   @callback written(change :: change(), options :: map()) :: :ok

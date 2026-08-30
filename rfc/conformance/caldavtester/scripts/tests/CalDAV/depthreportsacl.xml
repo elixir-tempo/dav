@@ -297,10 +297,10 @@
 					<callback>freeBusy</callback>
 					<arg>
 						<name>busy</name>
-						<value>20060101T060000Z/20060101T070000Z</value>
-						<value>20060101T100000Z/20060101T110000Z</value>
-						<value>20060101T180000Z/20060101T190000Z</value>
-						<value>20060101T220000Z/20060101T230000Z</value>
+						<value>$now.year.1:0101T060000Z/$now.year.1:0101T070000Z</value>
+						<value>$now.year.1:0101T100000Z/$now.year.1:0101T110000Z</value>
+						<value>$now.year.1:0101T180000Z/$now.year.1:0101T190000Z</value>
+						<value>$now.year.1:0101T220000Z/$now.year.1:0101T230000Z</value>
 					</arg>
 				</verify>
 			</request>

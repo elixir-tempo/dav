@@ -247,7 +247,11 @@ defmodule Dav.Cal.Filter do
   # A child filter is satisfied by *any* matching child, or — when it
   # says `is-not-defined` — by there being none.
   defp child_satisfied?(%__MODULE__{kind: :comp} = filter, component, options) do
-    present = Enum.filter(component.components, &(&1.name == filter.name))
+    present =
+      case Enum.filter(component.components, &(&1.name == filter.name)) do
+        [] -> inherited(filter.name, component, options)
+        own -> own
+      end
 
     if filter.undefined? do
       present == []
@@ -273,6 +277,45 @@ defmodule Dav.Cal.Filter do
       {:ok, value} -> matches_text?(filter.text_match, value)
     end
   end
+
+  # An override describes one occurrence of a recurring event rather
+  # than a separate event: what it does not restate, it takes from the
+  # master. An alarm on the master rings for every occurrence,
+  # including one an override moved, so an override carrying no alarm
+  # of its own is not an occurrence without one — and answering
+  # `VALARM is-not-defined` with it says the event has no alarm when
+  # it does.
+  defp inherited(name, component, options) do
+    with %{components: siblings} <- Keyword.get(options, :parent),
+         true <- override?(component),
+         %{components: components} <- master_of(component, siblings) do
+      Enum.filter(components, &(&1.name == name))
+    else
+      _not_an_override -> []
+    end
+  end
+
+  defp override?(component), do: not is_nil(property_named(component, "RECURRENCE-ID"))
+
+  # The master is the component of the same kind, for the same event,
+  # that names no occurrence of its own.
+  defp master_of(component, siblings) do
+    uid = property_named(component, "UID")
+
+    Enum.find(siblings, fn sibling ->
+      sibling.name == component.name and not override?(sibling) and
+        property_named(sibling, "UID") == uid
+    end)
+  end
+
+  defp property_named(%{properties: properties}, name) do
+    case Enum.find(properties, &(&1.name == name)) do
+      nil -> nil
+      property -> property.value
+    end
+  end
+
+  defp property_named(_other, _name), do: nil
 
   defp property_satisfied?(%__MODULE__{} = filter, property, options) do
     matches_text?(filter.text_match, property.value) and

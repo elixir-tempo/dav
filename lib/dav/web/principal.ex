@@ -319,17 +319,21 @@ defmodule Dav.Web.Principal do
 
   * `wanted` is the list of property names.
 
+  * `options` may carry `:store` and `:context`, in which case
+    properties the store holds are read as well as those the resource
+    carries. Without them only the resource's own are visible.
+
   ### Returns
 
   * A `{href, propstats}` pair.
 
   """
-  @spec response(Resource.t(), [Xml.qname()]) ::
+  @spec response(Resource.t(), [Xml.qname()], map()) ::
           {String.t(), [{String.t(), [{Xml.qname(), Xml.value()}]}]}
-  def response(resource, wanted) do
+  def response(resource, wanted, options \\ %{}) do
     {found, missing} =
       Enum.reduce(wanted, {[], []}, fn name, {found, missing} ->
-        case Properties.fetch(resource, name) do
+        case fetch(resource, name, options) do
           {:ok, value} -> {found ++ [{name, value}], missing}
           :error -> {found, missing ++ [{name, nil}]}
         end
@@ -343,6 +347,28 @@ defmodule Dav.Web.Principal do
 
     {Resource.href(resource), propstats}
   end
+
+  # A property PROPFIND can read is a property a report can return.
+  # `DAV:group-member-set` and `DAV:group-membership` are why: they
+  # are the store's to answer rather than the resource struct's, and a
+  # client that can read a group's members but not expand them is back
+  # to the round trips `expand-property` exists to save.
+  defp fetch(resource, name, options) do
+    case Properties.fetch(resource, name) do
+      {:ok, value} -> {:ok, value}
+      :error -> stored(resource, name, options)
+    end
+  end
+
+  defp stored(resource, name, %{store: store, context: context}) do
+    if Store.supports?(store, :properties) do
+      Map.fetch(store.properties(resource, context), name)
+    else
+      :error
+    end
+  end
+
+  defp stored(_resource, _name, _options), do: :error
 
   @doc """
   The principals named in a resource's access control list.
@@ -518,14 +544,36 @@ defmodule Dav.Web.Principal do
       resource
       |> hrefs_of(name, options)
       |> Enum.flat_map(fn href ->
-        case resolve(href, options) do
-          {:ok, referenced} -> [response(referenced, requested_by(element))]
-          _absent -> []
+        with {:ok, referenced} <- resolve(href, options),
+             true <- visible?(referenced, options) do
+          [response(referenced, requested_by(element), options)]
+        else
+          _absent_or_hidden -> []
         end
       end)
       |> then(&Xml.responses/1)
 
     {name, {:elements, [Xml.dav(), Xml.caldav()], inner}}
+  end
+
+  # "The server MUST NOT return properties for a resource the client
+  # does not have access to." Without that, a property naming another
+  # user's calendar turns this report into a way to read it.
+  #
+  # A principal is discoverable by design — `principal-property-search`
+  # exists to find other people — and a resource with no owner belongs
+  # to nobody in particular. Everything else is expanded only for the
+  # principal that owns it.
+  #
+  # This under-discloses rather than over-discloses: a calendar shared
+  # *with* the caller is owned by the sharer, so it is not expanded
+  # even though the caller may read it. Deciding that needs a
+  # readability question the hook behaviour does not yet ask, and a
+  # missing expansion costs a round trip where the other error costs
+  # somebody their calendar.
+  defp visible?(resource, options) do
+    Acl.principal?(resource) or is_nil(resource.owner) or
+      resource.owner == Map.get(options, :principal)
   end
 
   defp requested_by(element) do
@@ -547,8 +595,8 @@ defmodule Dav.Web.Principal do
     [principal]
   end
 
-  defp hrefs_of(resource, name, _options) do
-    case Properties.fetch(resource, name) do
+  defp hrefs_of(resource, name, options) do
+    case fetch(resource, name, options) do
       {:ok, {:hrefs, hrefs}} -> hrefs
       _not_href_valued -> []
     end

@@ -675,7 +675,7 @@ defmodule Dav.CalDAVTester.Verifier do
   # collection href compares equal either way.
   defp responses(conn) do
     case Xml.parse(conn.resp_body) do
-      {:ok, document} -> {:ok, Enum.map(elements(document, "response"), &classify/1)}
+      {:ok, document} -> {:ok, Enum.map(direct(document, "response"), &classify/1)}
       _unparseable -> {:failed, "not valid XML: #{inspect(String.slice(conn.resp_body, 0, 60))}"}
     end
   end
@@ -715,22 +715,38 @@ defmodule Dav.CalDAVTester.Verifier do
     ok = for response <- responses, response.ok?, into: MapSet.new(), do: response.href
     bad = for response <- responses, not response.ok?, into: MapSet.new(), do: response.href
 
+    case tallied(args, ok, bad) do
+      nil -> matched(args, responses, ok, bad, conn)
+      outcome -> outcome
+    end
+  end
+
+  # The three counting forms, which answer without looking at any
+  # href.
+  defp tallied(args, ok, bad) do
     cond do
-      counted = single(args, "count") ->
-        compare(MapSet.size(ok) - 1, counted, "items")
+      counted = single(args, "count") -> compare(MapSet.size(ok) - 1, counted, "items")
+      counted = single(args, "totalcount") -> compare(MapSet.size(ok), counted, "items")
+      counted = single(args, "responsecount") -> responses(ok, bad, counted)
+      true -> nil
+    end
+  end
 
-      counted = single(args, "totalcount") ->
-        compare(MapSet.size(ok), counted, "items")
+  defp responses(ok, bad, counted) do
+    compare(MapSet.size(ok) + MapSet.size(bad), counted, "responses")
+  end
 
-      counted = single(args, "responsecount") ->
-        compare(MapSet.size(ok) + MapSet.size(bad), counted, "responses")
-
+  defp matched(args, responses, ok, bad, conn) do
+    cond do
       href_sets?(args) ->
         hrefs(args, ok, bad, conn)
 
+      coded?(args) ->
+        coded(args, responses, conn)
+
       args == %{} ->
         # "If no hrefs requested, then assume none should come back."
-        compare(MapSet.size(ok) + MapSet.size(bad), 0, "responses")
+        responses(ok, bad, 0)
 
       true ->
         {:skipped, "multistatusItems form not implemented: #{inspect(Map.keys(args))}"}
@@ -738,6 +754,45 @@ defmodule Dav.CalDAVTester.Verifier do
   end
 
   defp href_sets?(args), do: Enum.any?(~w(okhrefs badhrefs nohrefs), &Map.has_key?(args, &1))
+
+  # An argument named by a number is the set of hrefs expected to come
+  # back with that status. `<arg><name>424</name>…` is how a suite
+  # checks that a request which failed for one member was refused for
+  # the rest rather than half-applied.
+  defp coded?(args), do: Enum.any?(Map.keys(args), &numeric?/1)
+
+  defp numeric?(name), do: match?({_code, ""}, Integer.parse(name))
+
+  # Unlike `okhrefs`, these are compared as written: upstream passes
+  # only the href *sets* through its prefixing, never the ones keyed by
+  # a status. It matters here, because what comes back beside a status
+  # is commonly a calendar user address rather than a path.
+  defp coded(args, responses, _conn) do
+    expected =
+      for {name, values} <- args, numeric?(name), into: %{} do
+        {elem(Integer.parse(name), 0), MapSet.new(values, &String.trim_trailing(&1, "/"))}
+      end
+
+    returned =
+      Enum.group_by(responses, & &1.code, & &1.href)
+      |> Map.new(fn {code, hrefs} -> {code, MapSet.new(hrefs)} end)
+
+    differing(expected, returned)
+  end
+
+  defp differing(expected, returned) do
+    codes = Enum.sort(Enum.uniq(Map.keys(expected) ++ Map.keys(returned)))
+
+    problems =
+      for code <- codes,
+          wanted = Map.get(expected, code, MapSet.new()),
+          got = Map.get(returned, code, MapSet.new()),
+          not MapSet.equal?(wanted, got) do
+        "#{code}: expected #{inspect(MapSet.to_list(wanted))}, got #{inspect(MapSet.to_list(got))}"
+      end
+
+    if problems == [], do: :passed, else: {:failed, Enum.join(problems, "; ")}
+  end
 
   defp hrefs(args, ok, bad, conn) do
     prefix = prefix(args, conn)
@@ -989,19 +1044,20 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
-  # A count may be arithmetic — `$homecount:+1` — because a scenario
-  # grabs how many collections a home held before it shared one and
-  # then asserts there is one more. Upstream evaluates the expression;
-  # only sums of integers appear, so only those are read here.
+  # A count may be arithmetic — `$homecount:+1` when a scenario grabs
+  # how many collections a home held before it shared one and asserts
+  # there is now one more, or `$homecount:-1` after an uninvite.
+  # Upstream evaluates the expression with `eval`; only sums and
+  # differences of integers appear, so only those are read here. The
+  # whole string must be consumed, so an unsubstituted variable is
+  # still refused rather than read as the first number in it.
   defp summed(value) do
-    parts = value |> String.replace(" ", "") |> String.split("+")
+    trimmed = String.replace(value, " ", "")
+    terms = ~r/[+-]?\d+/ |> Regex.scan(trimmed) |> List.flatten()
 
-    Enum.reduce_while(parts, {:ok, 0}, fn part, {:ok, total} ->
-      case Integer.parse(part) do
-        {number, ""} -> {:cont, {:ok, total + number}}
-        _unreadable -> {:halt, :error}
-      end
-    end)
+    if terms != [] and Enum.join(terms) == trimmed,
+      do: {:ok, Enum.reduce(terms, 0, &(String.to_integer(&1) + &2))},
+      else: :error
   end
 
   defp single_value(args, name) do
@@ -1013,6 +1069,13 @@ defmodule Dav.CalDAVTester.Verifier do
 
   defp compare(actual, actual, _noun), do: :passed
   defp compare(actual, expected, noun), do: {:failed, "#{actual} #{noun}, expected #{expected}"}
+
+  # Upstream reads `DAV:response` with `tree.findall`, which matches
+  # the multistatus element's own children and stops there. The
+  # difference shows up in `expand-property`, whose expanded property
+  # values *contain* `DAV:response` elements: counting those as
+  # top-level responses turns a correct answer into a surplus.
+  defp direct(element, name), do: Enum.filter(element.children, &local?(&1, name))
 
   defp elements(element, name) do
     matching = Enum.filter(element.children, &local?(&1, name))

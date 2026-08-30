@@ -473,8 +473,8 @@ defmodule Dav.Cal.FreeBusy do
   end
 
   defp elapsed(began, ended) do
-    with {:ok, from} <- native(began),
-         {:ok, to} <- native(ended),
+    with {:ok, from} <- Tempo.to_elixir(began),
+         {:ok, to} <- Tempo.to_elixir(ended),
          from when not is_nil(from) <- seconds(from),
          to when not is_nil(to) <- seconds(to) do
       {:ok, to - from}
@@ -484,6 +484,7 @@ defmodule Dav.Cal.FreeBusy do
   end
 
   defp seconds(%Date{} = date), do: seconds(NaiveDateTime.new!(date, ~T[00:00:00]))
+  defp seconds(%DateTime{} = moment), do: DateTime.to_unix(moment)
   defp seconds(%NaiveDateTime{} = naive), do: NaiveDateTime.diff(naive, ~N[1970-01-01 00:00:00])
   defp seconds(_other), do: nil
 
@@ -512,21 +513,14 @@ defmodule Dav.Cal.FreeBusy do
   # Tempo's own `to_iso8601/1`, whose output is Tempo's notation.
   #
   # `Tempo.to_elixir/1` chooses the native type the value actually is
-  # rather than being told one, so it is asked first. It has no clause
-  # for a value carrying a UTC offset, which is every value here, so
-  # `to_naive_date_time/1` covers that until it does.
+  # rather than being told one, and shifts an offset to UTC on the way
+  # (`09:00+10:00` becomes `23:00Z` the day before), which is exactly
+  # what stamping the result with `Z` then claims.
   defp utc(moment) do
-    case native(moment) do
+    case Tempo.to_elixir(moment) do
       {:ok, %Date{} = date} -> Calendar.strftime(date, "%Y%m%dT000000Z")
       {:ok, native} -> Calendar.strftime(native, "%Y%m%dT%H%M%SZ")
       _unconvertible -> inspect(moment)
-    end
-  end
-
-  defp native(moment) do
-    case Tempo.to_elixir(moment) do
-      {:ok, native} -> {:ok, native}
-      _shifted -> Tempo.to_naive_date_time(moment)
     end
   end
 

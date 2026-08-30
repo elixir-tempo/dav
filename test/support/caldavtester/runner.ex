@@ -42,13 +42,20 @@ defmodule Dav.CalDAVTester.Runner do
 
   @root "rfc/conformance/caldavtester"
 
-  # How many of the suite's users to provision. The scheduling
-  # scenarios name up to five between them.
-  @people 40
+  # Apple's namespace, for the properties its clients ask for.
+  @calendarserver "http://calendarserver.org/ns/"
 
-  # How many accounts `serverinfo.xml` declares. Credentials are
-  # checked against all of them.
-  @accounts 40
+  # How many accounts there are is `serverinfo.xml`'s to say, not this
+  # module's: it declares them in a `<repeat count="40">` block, and
+  # `Dav.CalDAVTester.ServerInfo` gives the named accounts — the `i18n`
+  # login among them — numbered slots beyond that. Counting the
+  # `$useridN:` keys it produced asks the file rather than restating
+  # its answer here, where the two would have to be kept in step by
+  # hand and would not be.
+  defp accounts(substitutions) do
+    Enum.find(Stream.iterate(1, &(&1 + 1)), &(not Map.has_key?(substitutions, "$userid#{&1}:"))) -
+      1
+  end
 
   # The methods this server dispatches. Anything else in a scenario is
   # reported as skipped rather than failed: not answering `POST` is a
@@ -217,6 +224,21 @@ defmodule Dav.CalDAVTester.Runner do
     end)
   end
 
+  # `iterate-data` points a request at a *directory* and runs it once
+  # per file in it, in name order. `vtodos.xml` stores five task
+  # bodies that way, and without this the request is sent once with an
+  # empty body — which the server rightly refuses.
+  defp run_plain(%{iterate_data?: true, data: %{filepath: filepath}} = request, state)
+       when is_binary(filepath) do
+    case iterated(filepath) do
+      [] ->
+        {{:skipped, "no iteration data in #{filepath}"}, state}
+
+      files ->
+        Enum.reduce_while(files, {:passed, state}, &one_of(&1, &2, request))
+    end
+  end
+
   defp run_plain(request, state) do
     if dispatched?(request.method) do
       case send_request(request, state.substitutions, as(request, state)) do
@@ -225,6 +247,18 @@ defmodule Dav.CalDAVTester.Runner do
       end
     else
       {{:skipped, "#{request.method} is not implemented"}, state}
+    end
+  end
+
+  # The whole request fails on the first body that fails, the way
+  # upstream's loop does — a later success would otherwise paper over
+  # an earlier refusal.
+  defp one_of(file, {_outcome, state}, request) do
+    one = %{request | iterate_data?: false, data: %{request.data | filepath: file}}
+
+    case run_plain(one, state) do
+      {:passed, carried} -> {:cont, {:passed, carried}}
+      failure -> {:halt, failure}
     end
   end
 
@@ -268,15 +302,23 @@ defmodule Dav.CalDAVTester.Runner do
   # `dowaitcount` wants *exactly* the number named — `WAITCOUNT 1`
   # fails on two messages, and `counted/3` says so.
   #
-  # `WAITDELETEALL` diverges here deliberately. Upstream empties the
-  # collection only once the count matches, but it re-checks for
-  # thirty seconds first, so against a conformant server the count
-  # always converges and the collection always gets emptied. Ours
-  # answers immediately, so refusing to empty turns one wrong count
-  # into every later suite finding somebody else's leftovers: it
-  # measured 222 further failures, none of them about the thing they
-  # report. The collection is emptied either way and the count is
-  # reported by `WAITCOUNT` where a scenario asks for it.
+  # `WAITDELETEALL n` empties a collection once it holds `n` items.
+  # Upstream refuses to empty until the count matches, having
+  # re-checked for thirty seconds, so against a conformant server the
+  # count converges and the collection always gets emptied. Ours
+  # answers immediately, so refusing turns one wrong count into every
+  # later suite finding somebody else's leftovers: 222 further
+  # failures, none about the thing they report.
+  #
+  # The count is *not* asserted here, and the reason is worth stating
+  # because asserting it looks obviously right. Tried: report a
+  # mismatch and empty anyway, so nothing cascades. It surfaces 102
+  # mismatches. Narrowing to a surplus — reasoning that no amount of
+  # waiting removes a message — still surfaces 60. Both are
+  # unattributable: run a suite alone and its counts are exact, so the
+  # surplus is a *previous* suite's residue, which upstream never sees
+  # because its wait converges and its empty always lands. A count
+  # this harness cannot attribute is worse than no count.
   defp perform({:delete_all, _count}, request, state), do: {:passed, emptied(request, state)}
 
   defp perform({:count, count}, request, state) do
@@ -579,7 +621,9 @@ defmodule Dav.CalDAVTester.Runner do
   defp account(%{user: user}, state) do
     name = ServerInfo.expand(user, state.substitutions)
 
-    Enum.find(1..@accounts, 1, fn index -> state.substitutions["$userid#{index}:"] == name end)
+    Enum.find(1..accounts(state.substitutions), 1, fn index ->
+      state.substitutions["$userid#{index}:"] == name
+    end)
   end
 
   defp dispatched?(method), do: method in @implemented
@@ -632,8 +676,15 @@ defmodule Dav.CalDAVTester.Runner do
 
   # A name may be a path — `{ns}outer/{ns}inner` — naming a nested
   # element rather than a top-level one.
+  # The path is substituted before it is walked. A scenario writes
+  # `{$CS:}invite-notification`, and `$CS:` is a substitution like any
+  # other — left as written it matches no element, so every grab in
+  # Apple's namespace came back empty and the variables they fed
+  # travelled on as their own literal names.
   defp grab({:element, name, variable}, conn, _request, state) do
-    bind(state, variable, first_text(conn, steps(name)))
+    path = name |> ServerInfo.expand(state.substitutions) |> steps()
+
+    bind(state, variable, first_text(conn, path))
   end
 
   defp grab({:calendar_property, name, variable}, conn, _request, state) do
@@ -706,7 +757,9 @@ defmodule Dav.CalDAVTester.Runner do
   ## --- plain requests ---------------------------------------------
 
   defp send_request(request, substitutions, options) do
-    uri = request.uris |> List.first("/") |> ServerInfo.expand(substitutions)
+    uri =
+      request.uris |> List.first("/") |> ServerInfo.expand(substitutions) |> named()
+
     body = body(request, substitutions)
 
     conn =
@@ -727,6 +780,20 @@ defmodule Dav.CalDAVTester.Runner do
     kind, reason -> {:failed, "request #{kind}: #{inspect(reason)}"}
   end
 
+  defp iterated(filepath) do
+    path = Path.join(@root, filepath)
+
+    if File.dir?(path) do
+      path
+      |> File.ls!()
+      |> Enum.reject(&String.starts_with?(&1, "."))
+      |> Enum.sort()
+      |> Enum.map(&Path.join(filepath, &1))
+    else
+      []
+    end
+  end
+
   defp body(%{data: nil}, _substitutions), do: ""
 
   defp body(%{data: %{filepath: nil}}, _substitutions), do: ""
@@ -736,6 +803,15 @@ defmodule Dav.CalDAVTester.Runner do
       {:ok, contents} -> ServerInfo.expand(contents, substitutions)
       _missing -> ""
     end
+  end
+
+  # `**` in a request URI stands for a name the suite does not care
+  # about — upstream fills it with a fresh UUID. Anything unique will
+  # do, so long as two requests in one run never collide.
+  defp named(uri) do
+    if String.contains?(uri, "**"),
+      do: String.replace(uri, "**", Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)),
+      else: uri
   end
 
   defp put_headers(conn, headers, substitutions) do
@@ -804,7 +880,7 @@ defmodule Dav.CalDAVTester.Runner do
   @spec provision(Scenario.t(), map()) :: pid()
   def provision(_scenario, substitutions) do
     people =
-      for index <- 1..@people,
+      for index <- 1..accounts(substitutions),
           home = substitutions["$calendarhome#{index}:"],
           is_binary(home),
           do: {index, segments(home)}
@@ -814,7 +890,7 @@ defmodule Dav.CalDAVTester.Runner do
     # that nobody sits at their keyboard, which is why an invitation
     # to one is answered by the server rather than by them.
     rooms =
-      for index <- 1..@people,
+      for index <- 1..accounts(substitutions),
           home = substitutions["$rcalendarhome#{index}:"],
           is_binary(home),
           do: {index, segments(home)}
@@ -830,10 +906,19 @@ defmodule Dav.CalDAVTester.Runner do
 
     owners = Map.merge(owned(people, substitutions), owned_rooms(rooms, substitutions))
 
+    named = named_homes(people, rooms, substitutions)
+
     resources =
       ([[] | ancestors(homes)] ++ homes)
       |> Enum.uniq()
-      |> Enum.map(&%Resource{path: &1, collection?: true, owner: owner_of(&1, owners)})
+      |> Enum.map(
+        &%Resource{
+          path: &1,
+          collection?: true,
+          owner: owner_of(&1, owners),
+          display_name: Map.get(named, &1)
+        }
+      )
 
     calendars =
       for path <- collections,
@@ -900,11 +985,19 @@ defmodule Dav.CalDAVTester.Runner do
             display_name: substitutions["$username#{index}:"]
           }
 
+    # Ancestors only. `ancestors/1` includes the path it was given, and
+    # a bare collection at a principal's own path sits earlier in the
+    # list than the principal itself — so `resolve/2` found the
+    # placeholder, and the principal answered `displayname` with its
+    # UID and `principal-URL` with 404.
+    named = MapSet.new(principals, & &1.path)
+
     tree =
       principals
       |> Enum.map(& &1.path)
       |> ancestors()
       |> Enum.uniq()
+      |> Enum.reject(&MapSet.member?(named, &1))
       |> Enum.map(&%Resource{path: &1, collection?: true})
 
     SchedulingStore.start(
@@ -915,9 +1008,10 @@ defmodule Dav.CalDAVTester.Runner do
         tree ++
         ancestry(room_principals(rooms, substitutions)) ++
         principals ++
-        room_principals(rooms, substitutions) ++ proxies(principals) ++ receiver,
+        room_principals(rooms, substitutions) ++
+        proxies(principals) ++ receiver ++ group_principals(substitutions),
       addresses,
-      principal_properties(people, substitutions),
+      Map.merge(principal_properties(people, substitutions), group_properties(substitutions)),
       canonical_addresses(people, substitutions),
       aliased_homes(people, substitutions)
     )
@@ -977,6 +1071,28 @@ defmodule Dav.CalDAVTester.Runner do
           owner: path,
           display_name: substitutions["$resourcename#{index}:"]
         }
+  end
+
+  # A home carries its owner's name. `CALDAV:calendar-user-address-set`
+  # resolves an address to a home, and the server states the `CN` on
+  # an `ATTENDEE` from there — a client that invented one gets the
+  # real name back, which is what `nonascii.xml` checks.
+  defp named_homes(people, rooms, substitutions) do
+    people =
+      for {index, home} <- people,
+          name = substitutions["$username#{index}:"],
+          is_binary(name),
+          into: %{},
+          do: {home, name}
+
+    rooms =
+      for {index, home} <- rooms,
+          name = substitutions["$resourcename#{index}:"],
+          is_binary(name),
+          into: %{},
+          do: {home, name}
+
+    Map.merge(people, rooms)
   end
 
   defp ancestry(principals) do
@@ -1044,6 +1160,99 @@ defmodule Dav.CalDAVTester.Runner do
   # RFC 6638 puts a principal's scheduling URLs on the principal
   # resource, which is how a client finds an Inbox at all. A store
   # supplies them; here they are seeded so the suite can ask for them.
+  # Groups are calendar users too. `expandproperty.xml` asks a group
+  # who its members are and a person which groups they belong to, in
+  # both a direct form (`DAV:group-member-set`) and a transitive one
+  # (Apple's `CS:expanded-group-member-set`) — the difference between
+  # them is the whole point of those tests, so the graph has to nest.
+  @groups %{
+    2 => {[], [6, 7]},
+    3 => {[], [8, 9]},
+    4 => {[2, 3], [10]},
+    5 => {[6], []},
+    6 => {[], [21]}
+  }
+
+  defp group_principals(substitutions) do
+    for {index, _members} <- @groups,
+        path = substitutions["$gprincipaluri#{index}:"],
+        is_binary(path),
+        do: %Resource{
+          path: segments(path),
+          collection?: true,
+          types: [Acl.principal()],
+          owner: path,
+          display_name: substitutions["$groupname#{index}:"]
+        }
+  end
+
+  defp group_properties(substitutions) do
+    members =
+      for {index, _} <- @groups,
+          path = substitutions["$gprincipaluri#{index}:"],
+          is_binary(path),
+          into: %{},
+          do:
+            {segments(path),
+             %{
+               {Xml.dav(), "group-member-set"} => {:hrefs, direct(index, substitutions)},
+               {@calendarserver, "expanded-group-member-set"} =>
+                 {:hrefs, expanded(index, substitutions)}
+             }}
+
+    Map.merge(members, memberships(substitutions))
+  end
+
+  defp direct(index, substitutions) do
+    {groups, people} = Map.fetch!(@groups, index)
+
+    for href <-
+          Enum.map(groups, &substitutions["$gprincipaluri#{&1}:"]) ++
+            Enum.map(people, &canonical_principal(&1, substitutions)),
+        is_binary(href),
+        do: href
+  end
+
+  defp expanded(index, substitutions) do
+    {groups, _people} = Map.fetch!(@groups, index)
+
+    Enum.uniq(direct(index, substitutions) ++ Enum.flat_map(groups, &expanded(&1, substitutions)))
+  end
+
+  # Whom each group holds, read the other way round.
+  defp memberships(substitutions) do
+    for person <- 1..accounts(substitutions),
+        path = canonical_principal(person, substitutions),
+        is_binary(path),
+        direct = groups_of(person, substitutions, false),
+        direct != [],
+        into: %{},
+        do:
+          {segments(path),
+           %{
+             {Xml.dav(), "group-membership"} => {:hrefs, direct},
+             {@calendarserver, "expanded-group-membership"} =>
+               {:hrefs, groups_of(person, substitutions, true)}
+           }}
+  end
+
+  defp groups_of(person, substitutions, transitive?) do
+    for {index, _} <- @groups,
+        href = substitutions["$gprincipaluri#{index}:"],
+        is_binary(href),
+        member?(index, person, substitutions, transitive?),
+        do: href
+  end
+
+  defp member?(index, person, substitutions, transitive?) do
+    href = canonical_principal(person, substitutions)
+
+    within =
+      if transitive?, do: expanded(index, substitutions), else: direct(index, substitutions)
+
+    is_binary(href) and href in within
+  end
+
   defp principal_properties(people, substitutions) do
     for {index, home} <- people,
         path = canonical_principal(index, substitutions),
@@ -1095,7 +1304,8 @@ defmodule Dav.CalDAVTester.Runner do
       validators: [Cal.Object],
       hooks: [Cal.Scheduling, Cal.Sharing],
       authentication: :required,
-      compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule),
+      compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
+           calendarserver-sharing calendarserver-sharing-no-scheduling),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness

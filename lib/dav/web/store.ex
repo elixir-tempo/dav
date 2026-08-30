@@ -203,7 +203,10 @@ defmodule Dav.Web.Store do
 
   * `store` is the module.
 
-  * `capability` is `:read`, `:put`, `:delete` or `:mkcol`.
+  * `capability` names one of the behaviour's optional callbacks —
+    `:read`, `:put`, `:delete`, `:mkcol`, `:properties`, `:patch`,
+    `:copy`, `:move`, `:mkcalendar`, `:scope`, `:principal`,
+    `:addresses` or `:canonical_address`.
 
   ### Returns
 
@@ -227,6 +230,10 @@ defmodule Dav.Web.Store do
           | :move
           | :mkcalendar
           | :scope
+          | :principal
+          | :addresses
+          | :canonical_address
+          | :origin
         ) :: boolean()
   def supports?(store, capability) do
     Code.ensure_loaded?(store) and function_exported?(store, capability, arity(capability))
@@ -242,6 +249,10 @@ defmodule Dav.Web.Store do
   defp arity(:move), do: 3
   defp arity(:mkcalendar), do: 2
   defp arity(:scope), do: 2
+  defp arity(:origin), do: 2
+  defp arity(:principal), do: 2
+  defp arity(:addresses), do: 2
+  defp arity(:canonical_address), do: 2
 
   @doc """
   A resource's dead properties.
@@ -388,6 +399,32 @@ defmodule Dav.Web.Store do
               {:ok, Resource.t()} | {:error, :not_found}
 
   @doc """
+  Where the store actually holds a path.
+
+  A store may present one resource at more than one path — a calendar
+  shared with someone appears inside their own home, as a view of the
+  sharer's collection rather than a copy of it. Callers that must
+  reason about the *real* resource, rather than the one the request
+  named, ask for it here: who owns it, and whether two paths name the
+  same collection, are questions the view cannot answer.
+
+  A store with no such aliasing returns the path unchanged, and one
+  that does not implement this callback is treated as having none.
+
+  ### Arguments
+
+  * `path` is the path as the request named it.
+
+  * `context` is the store's own configuration.
+
+  ### Returns
+
+  * The path the store holds the resource at.
+
+  """
+  @callback origin(path :: [String.t()], context :: term()) :: [String.t()]
+
+  @doc """
   Narrow the context to the principal making this request.
 
   Optional. The context is the store's own — a repository handle, a
@@ -476,5 +513,6 @@ defmodule Dav.Web.Store do
                       principal: 2,
                       scope: 2,
                       addresses: 2,
-                      canonical_address: 2
+                      canonical_address: 2,
+                      origin: 2
 end

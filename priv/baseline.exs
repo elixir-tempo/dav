@@ -10,7 +10,9 @@ rows =
     outcomes = Enum.map(Runner.run(sc, subs), fn {_, _, o} -> o end)
     {Path.basename(path), Enum.count(outcomes, &(&1 == :passed))}
   end)
-  |> Enum.filter(fn {_, n} -> n > 0 end)
+  # Every scenario, including those with nothing passing yet: a file
+  # left out because it scored zero is a file whose first success —
+  # and whose later regression back to zero — nobody would see.
   |> Enum.sort()
 
 elapsed = System.monotonic_time(:millisecond) - start
@@ -33,5 +35,5 @@ contents =
 File.write!(path, contents <> "\n")
 
 IO.puts(
-  "#{length(rows)} scenarios with passes, #{Enum.sum(Enum.map(rows, &elem(&1, 1)))} passing tests, #{elapsed}ms"
+  "#{length(rows)} scenarios, #{Enum.sum(Enum.map(rows, &elem(&1, 1)))} passing tests, #{elapsed}ms"
 )

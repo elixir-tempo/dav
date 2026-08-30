@@ -524,6 +524,10 @@
 					<name>{$CS:}invite-notification/{$CS:}uid</name>
 					<variable>$inviteuid2:</variable>
 				</grabelement>
+				<grabelement>
+					<name>{$CS:}invite-notification/{$CS:}hosturl/{DAV:}href</name>
+					<variable>$hosturl2:</variable>
+				</grabelement>
 			</request>
 		</test>
 		<test name='3'>

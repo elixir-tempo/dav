@@ -41,6 +41,7 @@ defmodule Dav.Cal.Sharing do
   import Plug.Conn
 
   alias Dav.Cal
+  alias Dav.Web.Hook
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -157,6 +158,44 @@ defmodule Dav.Cal.Sharing do
   @impl Dav.Web.Hook
   @spec written(map(), map()) :: :ok
   def written(_change, _options), do: :ok
+
+  @doc """
+  Withdraw a deleted calendar's outstanding invitations.
+
+  ### Arguments
+
+  * `change` is the deletion, whose `:resource` is what was removed.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `:ok`.
+
+  """
+  @impl Dav.Web.Hook
+  @spec deleted(Hook.change(), map()) :: :ok
+  def deleted(%{resource: %Resource{} = resource} = change, options) do
+    # An invitation to a calendar that is gone is worse than no
+    # invitation: the sharee's client offers it, and accepting it fails
+    # with nothing to say why. The invitations come from the change
+    # rather than the store — by now the calendar, and the property
+    # they lived on, are gone.
+    if Cal.calendar?(resource) do
+      for invitation <- recorded_on(change), do: withdraw(resource, invitation.href, options)
+    end
+
+    :ok
+  end
+
+  def deleted(_change, _options), do: :ok
+
+  defp recorded_on(change) do
+    case change |> Map.get(:properties, %{}) |> Map.get(invite_property()) do
+      value when is_binary(value) -> decode(value)
+      _unshared -> []
+    end
+  end
 
   @doc """
   The sharing properties of a calendar.
@@ -424,10 +463,62 @@ defmodule Dav.Cal.Sharing do
     invitations = for element <- children(document, "set"), do: invitation(element)
     removals = for element <- children(document, "remove"), do: href_of(element)
 
-    record(calendar, invitations, removals, options)
-    for invitation <- invitations, do: notify(calendar, invitation, options)
+    case Enum.filter(invitations, &refused?(&1, options)) do
+      [] ->
+        existing = current(calendar, options.store, options.context)
+        record(calendar, invitations, removals, options)
+        for invitation <- invitations, do: notify(calendar, invitation, options)
+        for href <- removals, do: uninvite(calendar, href, existing, options)
 
-    send_resp(conn, 200, "")
+        send_resp(conn, 200, "")
+
+      refused ->
+        withheld(conn, invitations, refused)
+    end
+  end
+
+  # An invitation is worth recording only if it can reach somebody. An
+  # address the server cannot resolve names nobody — a typo, most
+  # often — and a sharer inviting themselves would be granted access
+  # they already have and then see their own calendar twice.
+  defp refused?(%{href: href}, options) do
+    not (is_binary(href) and href != "") or mine?(href, options) or
+      not resolvable?(href, options)
+  end
+
+  defp mine?(href, options) do
+    case Map.get(options, :principal) do
+      who when is_binary(who) -> href == who or href in addresses_of(who, options)
+      _anonymous -> false
+    end
+  end
+
+  defp resolvable?(href, %{store: store, context: context}) do
+    Store.supports?(store, :principal) and match?({:ok, _who}, store.principal(href, context))
+  end
+
+  # RFC 4918 section 11.2: where one member of a request fails, the
+  # others are reported `424 Failed Dependency` rather than quietly
+  # applied. Sharing a calendar with three people, one address
+  # mistyped, must not leave two of them invited with nothing to say
+  # which — so the request stands or falls whole and nothing is
+  # recorded here.
+  defp withheld(conn, invitations, refused) do
+    body =
+      invitations
+      |> Enum.map(&{&1.href, {:status, outcome(&1, refused)}})
+      |> Xml.multistatus()
+      |> IO.iodata_to_binary()
+
+    conn
+    |> put_resp_content_type("application/xml", "utf-8")
+    |> send_resp(207, body)
+  end
+
+  defp outcome(invitation, refused) do
+    if invitation in refused,
+      do: "HTTP/1.1 403 Forbidden",
+      else: "HTTP/1.1 424 Failed Dependency"
   end
 
   defp invitation(element) do
@@ -542,6 +633,57 @@ defmodule Dav.Cal.Sharing do
         )
 
       typed(stored, store, context)
+    end
+
+    :ok
+  end
+
+  # A sharee who never answered simply stops being invited: for them
+  # the notification *is* the invitation, and leaving it offers a
+  # calendar they can no longer reach. One who accepted has the
+  # calendar bound into their own home and has already acted on the
+  # notice — deleting it would remove the only record of a share they
+  # can see disappearing.
+  defp uninvite(calendar, href, existing, options) do
+    case Enum.find(existing, &(&1.href == href)) do
+      %{state: "noresponse"} -> withdraw(calendar, href, options)
+      %{} -> unbind(calendar, href, options)
+      _not_invited -> :ok
+    end
+  end
+
+  # An accepted share that is withdrawn stops being visible. What sits
+  # in the sharee's home is a view of the sharer's calendar, not a copy
+  # of it — leaving it there offers them a collection they can no
+  # longer read, and every listing of their home still counts it.
+  defp unbind(calendar, href, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :delete),
+         {:ok, home} <- store.principal(href, context),
+         {:ok, children} <- store.children(home, context),
+         %Resource{} = link <- Enum.find(children, &views?(&1, calendar, options)) do
+      store.delete(link, context)
+    end
+
+    :ok
+  end
+
+  defp views?(%Resource{collection?: true} = resource, calendar, %{store: store, context: context}) do
+    Store.supports?(store, :origin) and store.origin(resource.path, context) == calendar.path
+  end
+
+  defp views?(_resource, _calendar, _options), do: false
+
+  # An uninvited sharee should not be left holding the invitation. The
+  # notification is the invitation as far as their client is
+  # concerned — leaving it there offers them a calendar they can no
+  # longer reach, and accepting it would fail with no explanation.
+  defp withdraw(calendar, href, options) do
+    with %Resource{} = collection <- notifications_of(href, options),
+         %{store: store, context: context} <- options,
+         true <- Store.supports?(store, :delete),
+         path = collection.path ++ [uid_for(calendar, %{href: href}) <> ".xml"],
+         {:ok, notification} <- store.resolve(path, context) do
+      store.delete(notification, context)
     end
 
     :ok
@@ -707,13 +849,87 @@ defmodule Dav.Cal.Sharing do
   # *their* home, which is the whole point of the reply: without a URL
   # they have been granted access to something they cannot address.
   defp reply(conn, document, resource, options) do
-    if Enum.any?(document.children, &named?(&1, "invite-accepted")) do
-      recorded(document, "accepted", options)
-      accepted(conn, document, resource, options)
-    else
-      recorded(document, "declined", options)
-      send_resp(conn, 200, "")
+    accepted? = Enum.any?(document.children, &named?(&1, "invite-accepted"))
+
+    recorded(document, if(accepted?, do: "accepted", else: "declined"), options)
+    answer(document, accepted?, options)
+
+    if accepted?,
+      do: accepted(conn, document, resource, options),
+      else: send_resp(conn, 200, "")
+  end
+
+  # A sharer learns the answer the same way the sharee learned of the
+  # invitation: a notification in their own collection. Without it the
+  # only record of an acceptance is a property on the calendar, which
+  # nothing tells the sharer's client to re-read — so a share they
+  # offered looks unanswered forever.
+  defp answer(document, accepted?, options) do
+    with shared when is_binary(shared) <- hosturl(document),
+         %{store: store, context: context} <- options,
+         {:ok, calendar} <- store.resolve(Store.segments(URI.parse(shared).path || ""), context),
+         %Resource{} = collection <- sibling_notifications(calendar, options),
+         true <- Store.supports?(store, :put) do
+      uid = reply_uid(calendar, document)
+
+      store.put(
+        collection.path ++ [uid <> ".xml"],
+        reply_notification(document, accepted?),
+        "text/xml",
+        context
+      )
+      |> typed(store, context)
     end
+
+    :ok
+  end
+
+  # The sharer's notification collection sits beside the calendar they
+  # shared, both in their own home.
+  defp sibling_notifications(calendar, %{store: store, context: context}) do
+    with {:ok, home} <- store.resolve(Enum.drop(calendar.path, -1), context),
+         {:ok, children} <- store.children(home, context) do
+      Enum.find(children, &(notification() in &1.types))
+    else
+      _unknown -> nil
+    end
+  end
+
+  defp reply_uid(calendar, document) do
+    :crypto.hash(:sha, Resource.href(calendar) <> "reply" <> (href_of(document) || ""))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp reply_notification(document, accepted?) do
+    [
+      ~s(<?xml version="1.0" encoding="utf-8"?>),
+      ~s(<CS:notification xmlns:D="DAV:" xmlns:CS="),
+      @namespace,
+      ~s(">),
+      "<CS:dtstamp>",
+      stamp(),
+      "</CS:dtstamp>",
+      ~s(<CS:invite-reply shared-type="calendar">),
+      "<D:href>",
+      escape(href_of(document) || ""),
+      "</D:href>",
+      if(accepted?, do: "<CS:invite-accepted/>", else: "<CS:invite-declined/>"),
+      "<CS:hosturl><D:href>",
+      escape(hosturl(document) || ""),
+      "</D:href></CS:hosturl>",
+      "<CS:in-reply-to>",
+      escape(text_of(document, "in-reply-to") || ""),
+      "</CS:in-reply-to>",
+      "<CS:summary>",
+      escape(text_of(document, "summary") || ""),
+      "</CS:summary>",
+      "<CS:common-name>",
+      escape(text_of(document, "common-name") || ""),
+      "</CS:common-name>",
+      "</CS:invite-reply>",
+      "</CS:notification>"
+    ]
+    |> IO.iodata_to_binary()
   end
 
   # The answer goes back on the sharer's calendar, where `CS:invite`
@@ -737,13 +953,47 @@ defmodule Dav.Cal.Sharing do
         send_resp(conn, 400, "")
 
       shared ->
-        path = home.path ++ [Path.basename(shared)]
+        path = free(home.path ++ [Path.basename(shared)], shared, options)
         link(path, shared, options)
 
         conn
         |> put_resp_content_type("application/xml", "utf-8")
         |> send_resp(200, shared_as(path))
     end
+  end
+
+  # Two people may both share a calendar named `calendar`. An
+  # invitee's home holds one collection of that name, so the second
+  # share takes a suffix — binding it over the first would leave
+  # somebody who accepted two invitations with one calendar, and no
+  # sign of which they lost.
+  defp free(path, shared, options, attempt \\ 0)
+
+  defp free(_path, _shared, _options, attempt) when attempt > 20, do: nil
+
+  defp free(path, shared, options, attempt) do
+    candidate = numbered(path, attempt)
+
+    cond do
+      not taken?(candidate, options) -> candidate
+      already?(candidate, shared, options) -> candidate
+      true -> free(path, shared, options, attempt + 1)
+    end
+  end
+
+  defp numbered(path, 0), do: path
+  defp numbered(path, attempt), do: List.replace_at(path, -1, "#{List.last(path)}-#{attempt}")
+
+  defp taken?(path, %{store: store, context: context}) do
+    match?({:ok, _resource}, store.resolve(path, context))
+  end
+
+  # Accepting the same invitation twice is not a second share: the
+  # link already there points at the same calendar, and re-binding it
+  # under a new name would give the invitee two views of one thing.
+  defp already?(path, shared, %{store: store, context: context}) do
+    Store.supports?(store, :origin) and
+      store.origin(path, context) == Store.segments(URI.parse(shared).path || "")
   end
 
   defp hosturl(document) do

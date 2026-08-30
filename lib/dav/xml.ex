@@ -53,6 +53,13 @@ defmodule Dav.Xml do
   * `{:elements, namespaces, iodata}` is the escape hatch for content
     this module cannot construct. The namespaces used **must** be
     listed, because that is the only way they get declared.
+
+  * `{:components, names}` is CalDAV's `C:comp` list, as
+    `CALDAV:supported-calendar-component-set` carries it. It has a
+    shape of its own because the component is named by an *attribute*
+    rather than by the element — `{:names, …}` would keep only that
+    every entry was a `comp`, which is the one thing that was never
+    in doubt.
   """
   @type value ::
           String.t()
@@ -60,6 +67,7 @@ defmodule Dav.Xml do
           | {:report_set, [qname()]}
           | {:hrefs, [String.t()]}
           | {:elements, [String.t()], iodata()}
+          | {:components, [String.t()]}
           | nil
 
   @doc """
@@ -338,6 +346,9 @@ defmodule Dav.Xml do
       {:elements, _namespaces, inner} ->
         ["<", tag, ">", inner, "</", tag, ">"]
 
+      {:components, names} ->
+        ["<", tag, ">", Enum.map(names, &component(&1, prefixes)), "</", tag, ">"]
+
       text when is_binary(text) ->
         ["<", tag, ">", escape(text), "</", tag, ">"]
     end
@@ -351,9 +362,14 @@ defmodule Dav.Xml do
   defp within({:report_set, names}), do: for({namespace, _local} <- names, do: namespace)
   defp within({:hrefs, _hrefs}), do: [dav()]
   defp within({:elements, namespaces, _inner}), do: namespaces
+  defp within({:components, _names}), do: [caldav()]
   defp within(_other), do: []
 
   defp empty({namespace, local}, prefixes), do: ["<", prefixes[namespace], ":", local, "/>"]
+
+  defp component(name, prefixes) do
+    ["<", prefixes[caldav()], ~s(:comp name="), escape(name), ~s("/>)]
+  end
 
   defp href(value, prefixes) do
     tag = [prefixes[dav()], ":href"]

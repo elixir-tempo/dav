@@ -74,6 +74,13 @@ defmodule Dav.Cal.Scheduling do
   # agreement between clients, not of the specification — and this is
   # the default for one that says nothing.
   @public ~w(X-APPLE-STRUCTURED-LOCATION)
+
+  # Extensions that describe *this copy* rather than the event. They
+  # stay where they are written — a client sets one and expects it
+  # back — but they are nobody else's news: `X-APPLE-NEEDS-REPLY`
+  # says whether the holder still owes an answer, which is a
+  # different fact for every participant.
+  @per_copy ~w(X-APPLE-NEEDS-REPLY)
   @doc """
   Whether this hook applies — only inside a calendar collection.
 
@@ -1009,11 +1016,14 @@ defmodule Dav.Cal.Scheduling do
   # ORGANIZER, for the reply — which is how an attendee's client shows
   # that their acceptance actually reached the organiser rather than
   # sitting unsent.
-  defp record_reply(resource, calendar, organizer, %{store: store, context: context}) do
+  defp record_reply(resource, calendar, organizer, %{store: store, context: context} = options) do
     if Store.supports?(store, :put) do
       updated = %{
         calendar
-        | components: Enum.map(calendar.components, &answered(&1, organizer))
+        | components:
+            calendar.components
+            |> Enum.map(&answered(&1, organizer))
+            |> Enum.map(&shareable(&1, extensions(options)))
       }
 
       store.put(resource.path, ICalendar.write(updated), @calendar_type, context)
@@ -1021,6 +1031,15 @@ defmodule Dav.Cal.Scheduling do
 
     :ok
   end
+
+  # An attendee's copy carries the extensions that travel between
+  # participants and no others. Whatever else their client hangs on the
+  # event is private to it: keeping it here would make the attendee's
+  # copy differ from the organiser's by data the organiser never sent
+  # and cannot see, which is how two copies of one meeting stop
+  # comparing equal.
+  defp shareable(%{name: "VTIMEZONE"} = zone, _allowed), do: zone
+  defp shareable(component, allowed), do: unextended(component, allowed)
 
   # The record that an earlier reply reached the organiser survives the
   # attendee's own edits. Their client PUTs the event back without a
@@ -1567,9 +1586,11 @@ defmodule Dav.Cal.Scheduling do
     with %Resource{} = object <- object_with(calendar, uid, options),
          {:ok, body} <- read(object, options),
          {:ok, stored} <- ICalendar.parse(body) do
-      answered = Enum.map(stored.components, &accept(&1, matching(&1, replies)))
+      allowed = extensions(options)
 
-      updated = %{stored | components: answered ++ separated(stored, replies)}
+      answered = Enum.map(stored.components, &accept(&1, matching(&1, replies), allowed))
+
+      updated = %{stored | components: answered ++ separated(stored, replies, allowed)}
 
       write(object, ICalendar.write(updated), options)
       refreshed(updated, uid, answering(replies), options)
@@ -1611,10 +1632,13 @@ defmodule Dav.Cal.Scheduling do
   end
 
   defp restated_for(calendar, uid, address, components, options) do
+    allowed = extensions(options)
+
     with %Resource{} = object <- object_with(calendar, uid, options),
          {:ok, body} <- read(object, options),
          {:ok, stored} <- ICalendar.parse(body) do
-      revised = Enum.map(stored.components, &restated_component(&1, components, address))
+      revised =
+        Enum.map(stored.components, &restated_component(&1, components, address, allowed))
 
       write(object, ICalendar.write(%{stored | components: revised}), options)
     else
@@ -1622,30 +1646,36 @@ defmodule Dav.Cal.Scheduling do
     end
   end
 
-  defp restated_component(component, components, address) do
+  defp restated_component(component, components, address, allowed) do
     case Enum.find(components, &(value(&1, "RECURRENCE-ID") == value(component, "RECURRENCE-ID"))) do
       nil -> component
-      known -> retold(component, known, address)
+      known -> component |> retold(known, address, allowed) |> carried([known], allowed)
     end
   end
 
   # Their own line is theirs; every other participant's is the
   # organiser's to state.
-  defp retold(component, known, address) do
+  defp retold(component, known, address, allowed) do
     answers =
       for property <- known.properties,
           property.name == "ATTENDEE",
           property.value != address,
           into: %{},
-          do: {property.value, Map.get(property.parameters, "PARTSTAT")}
+          do: {property.value, property.parameters}
 
     properties =
       Enum.map(component.properties, fn property ->
         with "ATTENDEE" <- property.name,
-             {:ok, answer} when is_binary(answer) <- Map.fetch(answers, property.value) do
+             {:ok, theirs} <- Map.fetch(answers, property.value),
+             answer when is_binary(answer) <- Map.get(theirs, "PARTSTAT") do
           # `RSVP=TRUE` is the question, not the answer. Somebody who
-          # has replied is no longer being asked.
-          parameters = Map.put(property.parameters, "PARTSTAT", answer)
+          # has replied is no longer being asked. An extension that
+          # travels between participants travels here too: this is the
+          # guest list as everyone else sees it.
+          parameters =
+            property.parameters
+            |> Map.put("PARTSTAT", answer)
+            |> Map.merge(travelling(theirs, allowed))
 
           %{
             property
@@ -1668,7 +1698,7 @@ defmodule Dav.Cal.Scheduling do
   # `RECURRENCE-ID`, and the organiser's copy has to gain an override
   # to record the answer — with nowhere to put it, their decision
   # about that one Tuesday is simply lost.
-  defp separated(stored, replies) do
+  defp separated(stored, replies, allowed) do
     held = schedulable(stored)
     known = for component <- held, do: value(component, "RECURRENCE-ID")
 
@@ -1681,7 +1711,7 @@ defmodule Dav.Cal.Scheduling do
             recurrence = recurrence_of(reply),
             not is_nil(recurrence),
             recurrence.value not in known,
-            do: accept(overridden(master, recurrence), [reply])
+            do: accept(overridden(master, recurrence), [reply], allowed)
     end
   end
 
@@ -1714,7 +1744,7 @@ defmodule Dav.Cal.Scheduling do
     Enum.filter(replies, &(value(&1, "RECURRENCE-ID") == instance))
   end
 
-  defp accept(component, replies) do
+  defp accept(component, replies, allowed) do
     answers =
       for reply <- replies,
           property <- reply.properties,
@@ -1722,10 +1752,38 @@ defmodule Dav.Cal.Scheduling do
           into: %{},
           do: {property.value, property.parameters}
 
-    %{component | properties: Enum.map(component.properties, &participation(&1, answers))}
+    %{
+      component
+      | properties: Enum.map(component.properties, &participation(&1, answers, allowed))
+    }
+    |> carried(replies, allowed)
   end
 
-  defp participation(%{name: "ATTENDEE", value: value} = property, replies) do
+  # An extension that travels between participants travels *back*. An
+  # attendee's client may set one when it answers — "I will dial in",
+  # say — and the organiser's copy is the only place the organiser's
+  # client would look for it.
+  defp carried(component, replies, allowed) do
+    told =
+      for reply <- replies,
+          property <- reply.properties,
+          travels?(property.name, allowed),
+          into: %{},
+          do: {property.name, property}
+
+    # Replaced rather than merely added: an extension that travels
+    # carries a *value*, and a copy left holding the previous one is
+    # the stale answer rather than no answer.
+    kept = Enum.reject(component.properties, &Map.has_key?(told, &1.name))
+
+    %{component | properties: kept ++ Map.values(told)}
+  end
+
+  defp travels?(name, allowed) do
+    String.starts_with?(name, "X-") and name not in @per_copy and not private?(name, allowed)
+  end
+
+  defp participation(%{name: "ATTENDEE", value: value} = property, replies, allowed) do
     case Map.fetch(replies, value) do
       {:ok, parameters} ->
         # "2.0" is iTIP's "request succeeded", which is what the
@@ -1735,6 +1793,7 @@ defmodule Dav.Cal.Scheduling do
           | parameters:
               property.parameters
               |> Map.merge(Map.take(parameters, ["PARTSTAT"]))
+              |> Map.merge(travelling(parameters, allowed))
               |> Map.delete("RSVP")
               |> Map.put("SCHEDULE-STATUS", "2.0")
         }
@@ -1744,7 +1803,11 @@ defmodule Dav.Cal.Scheduling do
     end
   end
 
-  defp participation(property, _replies), do: property
+  defp participation(property, _replies, _allowed), do: property
+
+  defp travelling(parameters, allowed) do
+    for {name, value} <- parameters, travels?(name, allowed), into: %{}, do: {name, value}
+  end
 
   # By UID, not by file name. A client names its own resources, and
   # `1.ics` holding an event whose UID is a long opaque string is the
@@ -1856,20 +1919,48 @@ defmodule Dav.Cal.Scheduling do
          {:ok, existing} <- ICalendar.parse(body) do
       held = schedulable(existing)
 
+      # Two questions, not one. If the *series* moved — its `DTSTART`
+      # or its rule — everyone is being asked again, overrides
+      # included, however little each one changed on its own. If it
+      # did not, then only the occurrences that moved re-ask, and a
+      # series that merely gained an exception leaves every other
+      # answer standing.
       kept =
-        if resequenced?(components, held),
+        if reasked?(master_of(components), held),
           do: Enum.map(components, &carry_organizer(&1, held)),
-          else: Enum.map(components, &carry_over(&1, recipient, held))
+          else: Enum.map(components, &answered_before(&1, recipient, held))
 
       kept
       |> Enum.map(&carry_alarms(&1, held))
+      |> Enum.map(&carry_transparency(&1, held))
       |> Enum.map(&carry_exclusions(&1, held))
       |> only_announced(held, announced, Map.get(options, :created, []))
       |> Enum.map(&reinstated(&1, Map.get(options, :created, [])))
       |> unexcluded()
     else
-      _no_previous_copy -> components
+      _no_previous_copy -> invited_to(components, recipient, options)
     end
+  end
+
+  # A first invitation carries only what the recipient was invited to.
+  # Somebody added to one occurrence of a series holds that occurrence:
+  # handing them the master as well puts the whole series in their
+  # calendar, nearly all of which they were never asked about — and
+  # their client then shows a daily meeting where one Tuesday was
+  # meant.
+  defp invited_to(components, recipient, options) do
+    address = canonical_address(recipient, options)
+
+    case Enum.filter(components, &names?(&1, address, options)) do
+      [] -> components
+      invited -> invited
+    end
+  end
+
+  defp names?(component, address, options) do
+    Enum.any?(component.properties, fn property ->
+      property.name == "ATTENDEE" and addressed_as(property, options) == address
+    end)
   end
 
   # An update changes the instances it announces and leaves the rest of
@@ -1922,6 +2013,38 @@ defmodule Dav.Cal.Scheduling do
   end
 
   defp alarms_of(component), do: Enum.filter(component.components, &(&1.name == "VALARM"))
+
+  # `TRANSP` belongs to whoever holds the copy. An attendee who
+  # declined and marked the time free is not made busy again because
+  # the organiser saved an edit — their calendar would show them
+  # booked for a meeting they had said no to.
+  defp carry_transparency(component, held) do
+    with previous when not is_nil(previous) <- counterpart_or_series(component, held),
+         %{} = theirs <- Enum.find(previous.properties, &(&1.name == "TRANSP")) do
+      %{component | properties: restated_transparency(component.properties, theirs)}
+    else
+      _none_of_their_own -> component
+    end
+  end
+
+  # The occurrence they hold, or failing that the series. An override
+  # the organiser has just added is new to the recipient, so there is
+  # nothing of theirs on that occurrence — but they marked the series
+  # free, and an exception to a meeting they are not attending is
+  # still one they are not attending.
+  defp counterpart_or_series(component, held) do
+    recurrence = value(component, "RECURRENCE-ID")
+
+    Enum.find(held, &(value(&1, "RECURRENCE-ID") == recurrence)) ||
+      Enum.find(held, &is_nil(value(&1, "RECURRENCE-ID")))
+  end
+
+  defp restated_transparency(properties, theirs) do
+    case Enum.find_index(properties, &(&1.name == "TRANSP")) do
+      nil -> properties ++ [theirs]
+      index -> List.replace_at(properties, index, theirs)
+    end
+  end
 
   # An occurrence that is excluded has no override: the two say
   # opposite things about the same date, and a copy holding both shows
@@ -2000,7 +2123,42 @@ defmodule Dav.Cal.Scheduling do
   # the test: it also rises for a changed subject, which the attendees
   # need to see but need not re-accept. What re-asks them is a change
   # to when or where the event happens.
-  defp resequenced?(now, before), do: shape(now, @rescheduled) != shape(before, @rescheduled)
+  defp master_of(components), do: Enum.find(components, &is_nil(value(&1, "RECURRENCE-ID")))
+
+  # No master in the message means nothing was said about the series
+  # as a whole.
+  defp reasked?(nil, _held), do: false
+  defp reasked?(master, held), do: asked_again?(master, held)
+
+  # An occurrence the recipient does not hold is not one they have
+  # answered: it is new to them, or one they took out of their own copy
+  # and the organiser has just put back. Either way the organiser's
+  # values stand, and looking for an answer that was never given leaves
+  # the occurrence carrying nothing.
+  defp answered_before(component, recipient, held) do
+    if asked_again?(component, held) or excluded_by?(component, held),
+      do: carry_organizer(component, held),
+      else: carry_over(component, recipient, held)
+  end
+
+  # An occurrence the recipient took out of their own copy, and the
+  # organiser has put back, is one they are being asked about again —
+  # their exclusion *was* their answer, and it has been overruled. An
+  # occurrence that is merely new to them is a different thing: they
+  # answered the series, and the organiser adding an exception does
+  # not withdraw that answer.
+  defp excluded_by?(component, held) do
+    recurrence = value(component, "RECURRENCE-ID")
+
+    is_binary(recurrence) and Enum.any?(held, &excludes?(&1, recurrence))
+  end
+
+  defp excludes?(component, recurrence) do
+    is_nil(value(component, "RECURRENCE-ID")) and
+      Enum.any?(component.properties, fn property ->
+        property.name == "EXDATE" and recurrence in String.split(property.value, ",")
+      end)
+  end
 
   # The recipient's *own* participation, and the ORGANIZER status
   # recording that their reply was delivered — and nothing else. What
@@ -2023,7 +2181,7 @@ defmodule Dav.Cal.Scheduling do
        when name in ~w(ATTENDEE ORGANIZER) do
     case Map.fetch(kept, {name, value}) do
       {:ok, parameters} ->
-        %{property | parameters: Map.merge(property.parameters, taken(parameters))}
+        %{property | parameters: settled(Map.merge(property.parameters, taken(parameters)))}
 
       :error ->
         property
@@ -2031,6 +2189,17 @@ defmodule Dav.Cal.Scheduling do
   end
 
   defp restore(property, _kept), do: property
+
+  # `RSVP=TRUE` is the question, not the answer. Restoring somebody's
+  # participation restores what they said; leaving the request for a
+  # reply beside it has their client go on showing an invitation they
+  # have already answered.
+  defp settled(parameters) do
+    case Map.get(parameters, "PARTSTAT") do
+      answer when answer in [nil, "NEEDS-ACTION"] -> parameters
+      _answered -> Map.delete(parameters, "RSVP")
+    end
+  end
 
   defp taken(parameters), do: Map.take(parameters, ["PARTSTAT", "SCHEDULE-STATUS"])
 

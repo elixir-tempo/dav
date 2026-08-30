@@ -51,9 +51,43 @@ defmodule Dav.CalDAVTester.ServerInfo do
   @spec read(Path.t()) :: {:ok, %{optional(String.t()) => String.t()}} | {:error, :malformed}
   def read(path \\ @path) do
     case Document.read(path) do
-      {:ok, document} -> {:ok, document |> pairs() |> resolve()}
+      {:ok, document} -> {:ok, document |> pairs() |> resolve() |> numbered()}
       error -> error
     end
+  end
+
+  # The suite has named accounts as well as numbered ones — an
+  # internationalised login among them — and every other part of the
+  # harness addresses a person by number: `$calendarhome41:`,
+  # `$principaluri41:`, `$userid41:`. Giving the named ones a number
+  # provisions them, authenticates them and resolves their addresses
+  # through the machinery that already exists, rather than a second
+  # path beside it.
+  @named [{41, "i18n"}]
+
+  defp numbered(substitutions) do
+    Enum.reduce(@named, substitutions, fn {index, name}, found ->
+      case Map.fetch(found, "$#{name}guid:") do
+        {:ok, guid} -> Map.merge(found, slots(found, index, name, guid))
+        :error -> found
+      end
+    end)
+  end
+
+  defp slots(substitutions, index, name, guid) do
+    homes = Map.get(substitutions, "$calendars_uids:", "/calendars/__uids__/")
+    principals = Map.get(substitutions, "$principals_uids:", "/principals/__uids__/")
+
+    %{
+      "$userid#{index}:" => Map.get(substitutions, "$#{name}id:"),
+      "$pswd#{index}:" => Map.get(substitutions, "$#{name}pswd:"),
+      "$username#{index}:" => Map.get(substitutions, "$#{name}name:"),
+      "$email#{index}:" => Map.get(substitutions, "$#{name}email:"),
+      "$cuaddr#{index}:" => Map.get(substitutions, "$#{name}cuaddr:"),
+      "$cuaddrurn#{index}:" => Map.get(substitutions, "$#{name}cuaddrurn:"),
+      "$calendarhome#{index}:" => "#{homes}#{guid}",
+      "$principaluri#{index}:" => "#{principals}#{guid}/"
+    }
   end
 
   @doc """

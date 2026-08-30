@@ -238,6 +238,54 @@ defmodule Dav.Web.Properties do
   end
 
   @doc """
+  Read an HTTP-date.
+
+  The counterpart to `http_date/1`, for the conditional request
+  headers a client sends back — `If-Modified-Since` carries whatever
+  `Last-Modified` gave it, and comparing the two as *text* fails the
+  moment a client reformats by a second.
+
+  ### Arguments
+
+  * `value` is an HTTP-date, as `"Tue, 15 Nov 1994 12:45:26 GMT"`.
+
+  ### Returns
+
+  * `{:ok, datetime}` in UTC, or `:error` when the value is not one.
+
+  ### Examples
+
+      iex> Dav.Web.Properties.from_http_date("Tue, 15 Nov 1994 12:45:26 GMT")
+      {:ok, ~U[1994-11-15 12:45:26Z]}
+
+      iex> Dav.Web.Properties.from_http_date("$last-modified:")
+      :error
+
+  """
+  @spec from_http_date(String.t()) :: {:ok, DateTime.t()} | :error
+  def from_http_date(value) when is_binary(value) do
+    with [_all, day, month, year, hour, minute, second] <-
+           Regex.run(~r/^\w{3}, (\d{2}) (\w{3}) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/, value),
+         index when index != nil <- Enum.find_index(@months, &(&1 == month)),
+         {:ok, naive} <-
+           NaiveDateTime.new(
+             String.to_integer(year),
+             index + 1,
+             String.to_integer(day),
+             String.to_integer(hour),
+             String.to_integer(minute),
+             String.to_integer(second)
+           ),
+         {:ok, at} <- DateTime.from_naive(naive, "Etc/UTC") do
+      {:ok, at}
+    else
+      _not_an_http_date -> :error
+    end
+  end
+
+  def from_http_date(_other), do: :error
+
+  @doc """
   Whether a property is the server's to compute rather than a client's
   to set.
 

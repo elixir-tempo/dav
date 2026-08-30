@@ -583,19 +583,19 @@
 					<callback>freeBusy</callback>
 					<arg>
 						<name>busy</name>
-						<value>20060107T010000Z/20060107T020000Z</value>
-						<value>20060107T150000Z/20060107T163000Z</value>
-						<value>20060108T150000Z/20060108T180000Z</value>
-						<value>20060108T190000Z/20060108T193000Z</value>
+						<value>$now.year.1:0107T010000Z/$now.year.1:0107T020000Z</value>
+						<value>$now.year.1:0107T150000Z/$now.year.1:0107T163000Z</value>
+						<value>$now.year.1:0108T150000Z/$now.year.1:0108T180000Z</value>
+						<value>$now.year.1:0108T190000Z/$now.year.1:0108T193000Z</value>
 					</arg>
 					<arg>
 						<name>unavailable</name>
-						<value>20060108T130000Z/20060108T150000Z</value>
+						<value>$now.year.1:0108T130000Z/$now.year.1:0108T150000Z</value>
 					</arg>
 					<arg>
 						<name>tentative</name>
-						<value>20060108T160000Z/20060108T170000Z</value>
-						<value>20060108T210000Z/20060108T213000Z</value>
+						<value>$now.year.1:0108T160000Z/$now.year.1:0108T170000Z</value>
+						<value>$now.year.1:0108T210000Z/$now.year.1:0108T213000Z</value>
 					</arg>
 				</verify>
 			</request>
@@ -617,19 +617,19 @@
 					<callback>freeBusy</callback>
 					<arg>
 						<name>busy</name>
-						<value>20060107T010000Z/20060107T020000Z</value>
-						<value>20060107T150000Z/20060107T163000Z</value>
-						<value>20060108T150000Z/20060108T180000Z</value>
-						<value>20060108T190000Z/20060108T193000Z</value>
+						<value>$now.year.1:0107T010000Z/$now.year.1:0107T020000Z</value>
+						<value>$now.year.1:0107T150000Z/$now.year.1:0107T163000Z</value>
+						<value>$now.year.1:0108T150000Z/$now.year.1:0108T180000Z</value>
+						<value>$now.year.1:0108T190000Z/$now.year.1:0108T193000Z</value>
 					</arg>
 					<arg>
 						<name>unavailable</name>
-						<value>20060108T130000Z/20060108T150000Z</value>
+						<value>$now.year.1:0108T130000Z/$now.year.1:0108T150000Z</value>
 					</arg>
 					<arg>
 						<name>tentative</name>
-						<value>20060108T160000Z/20060108T170000Z</value>
-						<value>20060108T210000Z/20060108T213000Z</value>
+						<value>$now.year.1:0108T160000Z/$now.year.1:0108T170000Z</value>
+						<value>$now.year.1:0108T210000Z/$now.year.1:0108T213000Z</value>
 					</arg>
 				</verify>
 			</request>
@@ -651,19 +651,19 @@
 					<callback>freeBusy</callback>
 					<arg>
 						<name>busy</name>
-						<value>20060107T010000Z/20060107T020000Z</value>
-						<value>20060107T150000Z/20060107T163000Z</value>
-						<value>20060108T150000Z/20060108T180000Z</value>
-						<value>20060108T190000Z/20060108T193000Z</value>
+						<value>$now.year.1:0107T010000Z/$now.year.1:0107T020000Z</value>
+						<value>$now.year.1:0107T150000Z/$now.year.1:0107T163000Z</value>
+						<value>$now.year.1:0108T150000Z/$now.year.1:0108T180000Z</value>
+						<value>$now.year.1:0108T190000Z/$now.year.1:0108T193000Z</value>
 					</arg>
 					<arg>
 						<name>unavailable</name>
-						<value>20060108T130000Z/20060108T150000Z</value>
+						<value>$now.year.1:0108T130000Z/$now.year.1:0108T150000Z</value>
 					</arg>
 					<arg>
 						<name>tentative</name>
-						<value>20060108T160000Z/20060108T170000Z</value>
-						<value>20060108T210000Z/20060108T213000Z</value>
+						<value>$now.year.1:0108T160000Z/$now.year.1:0108T170000Z</value>
+						<value>$now.year.1:0108T210000Z/$now.year.1:0108T213000Z</value>
 					</arg>
 				</verify>
 			</request>
@@ -685,19 +685,19 @@
 					<callback>freeBusy</callback>
 					<arg>
 						<name>busy</name>
-						<value>20060107T010000Z/20060107T020000Z</value>
-						<value>20060107T150000Z/20060107T163000Z</value>
-						<value>20060108T150000Z/20060108T180000Z</value>
-						<value>20060108T190000Z/20060108T193000Z</value>
+						<value>$now.year.1:0107T010000Z/$now.year.1:0107T020000Z</value>
+						<value>$now.year.1:0107T150000Z/$now.year.1:0107T163000Z</value>
+						<value>$now.year.1:0108T150000Z/$now.year.1:0108T180000Z</value>
+						<value>$now.year.1:0108T190000Z/$now.year.1:0108T193000Z</value>
 					</arg>
 					<arg>
 						<name>unavailable</name>
-						<value>20060108T130000Z/20060108T150000Z</value>
+						<value>$now.year.1:0108T130000Z/$now.year.1:0108T150000Z</value>
 					</arg>
 					<arg>
 						<name>tentative</name>
-						<value>20060108T160000Z/20060108T170000Z</value>
-						<value>20060108T210000Z/20060108T213000Z</value>
+						<value>$now.year.1:0108T160000Z/$now.year.1:0108T170000Z</value>
+						<value>$now.year.1:0108T210000Z/$now.year.1:0108T213000Z</value>
 					</arg>
 				</verify>
 			</request>
@@ -751,20 +751,20 @@
 					<callback>freeBusy</callback>
 					<arg>
 						<name>busy</name>
-						<value>20060107T010000Z/20060107T020000Z</value>
-						<value>20060107T150000Z/20060107T163000Z</value>
-						<value>20060108T150000Z/20060108T180000Z</value>
-						<value>20060108T190000Z/20060108T193000Z</value>
-						<value>20060108T200000Z/20060108T203000Z</value>
+						<value>$now.year.1:0107T010000Z/$now.year.1:0107T020000Z</value>
+						<value>$now.year.1:0107T150000Z/$now.year.1:0107T163000Z</value>
+						<value>$now.year.1:0108T150000Z/$now.year.1:0108T180000Z</value>
+						<value>$now.year.1:0108T190000Z/$now.year.1:0108T193000Z</value>
+						<value>$now.year.1:0108T200000Z/$now.year.1:0108T203000Z</value>
 					</arg>
 					<arg>
 						<name>unavailable</name>
-						<value>20060108T130000Z/20060108T170000Z</value>
+						<value>$now.year.1:0108T130000Z/$now.year.1:0108T170000Z</value>
 					</arg>
 					<arg>
 						<name>tentative</name>
-						<value>20060108T160000Z/20060108T173000Z</value>
-						<value>20060108T210000Z/20060108T213000Z</value>
+						<value>$now.year.1:0108T160000Z/$now.year.1:0108T173000Z</value>
+						<value>$now.year.1:0108T210000Z/$now.year.1:0108T213000Z</value>
 					</arg>
 				</verify>
 			</request>
@@ -786,21 +786,21 @@
 					<callback>freeBusy</callback>
 					<arg>
 						<name>busy</name>
-						<value>20060107T010000Z/20060107T020000Z</value>
-						<value>20060107T150000Z/20060107T163000Z</value>
-						<value>20060108T150000Z/20060108T180000Z</value>
-						<value>20060108T190000Z/20060108T193000Z</value>
-						<value>20060108T200000Z/20060108T210000Z</value>
+						<value>$now.year.1:0107T010000Z/$now.year.1:0107T020000Z</value>
+						<value>$now.year.1:0107T150000Z/$now.year.1:0107T163000Z</value>
+						<value>$now.year.1:0108T150000Z/$now.year.1:0108T180000Z</value>
+						<value>$now.year.1:0108T190000Z/$now.year.1:0108T193000Z</value>
+						<value>$now.year.1:0108T200000Z/$now.year.1:0108T210000Z</value>
 					</arg>
 					<arg>
 						<name>unavailable</name>
-						<value>20060108T130000Z/20060108T170000Z</value>
-						<value>20060108T173000Z/20060108T180000Z</value>
+						<value>$now.year.1:0108T130000Z/$now.year.1:0108T170000Z</value>
+						<value>$now.year.1:0108T173000Z/$now.year.1:0108T180000Z</value>
 					</arg>
 					<arg>
 						<name>tentative</name>
-						<value>20060108T160000Z/20060108T173000Z</value>
-						<value>20060108T210000Z/20060108T220000Z</value>
+						<value>$now.year.1:0108T160000Z/$now.year.1:0108T173000Z</value>
+						<value>$now.year.1:0108T210000Z/$now.year.1:0108T220000Z</value>
 					</arg>
 				</verify>
 			</request>

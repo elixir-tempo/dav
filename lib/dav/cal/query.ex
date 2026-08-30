@@ -42,6 +42,7 @@ defmodule Dav.Cal.Query do
   @behaviour Dav.Web.Report
 
   alias Dav.Cal
+  alias Dav.Cal.Expand
   alias Dav.Cal.Filter
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Selection
@@ -57,11 +58,30 @@ defmodule Dav.Cal.Query do
   # what the conformance suite expects. Refusing it would also make a
   # calendar home unqueryable, since a home is a plain collection.
   def run(%Resource{} = target, body, depth, options) do
-    with {:ok, document} <- Xml.parse(body),
+    with :ok <- addressable(target, options),
+         {:ok, document} <- Xml.parse(body),
          :ok <- Selection.supported(calendar_data(document)),
          :ok <- timezone_of(document),
          {:ok, filter} <- filter_of(document) do
       {:ok, matching(target, filter, depth, document, options)}
+    end
+  end
+
+  # RFC 4791 section 7.8: the report is made against a calendar
+  # collection or a calendar object resource. A file that merely ends
+  # in `.ics`, sitting in an ordinary collection, is neither — and
+  # answering for it would report as calendar data something the
+  # server treats as calendar data nowhere else. A collection is
+  # allowed through: a query against a plain one finds nothing, which
+  # is the right answer to "is there anything here".
+  defp addressable(%Resource{collection?: true}, _options), do: :ok
+
+  defp addressable(%Resource{path: path}, %{store: store, context: context}) do
+    with {:ok, parent} <- store.resolve(Enum.drop(path, -1), context),
+         true <- Cal.calendar?(parent) do
+      :ok
+    else
+      _not_held_in_a_calendar -> {:error, {Xml.caldav(), "supported-calendar-data"}}
     end
   end
 
@@ -74,10 +94,24 @@ defmodule Dav.Cal.Query do
     with element when not is_nil(element) <- Enum.find(document.children, &named?(&1, "filter")),
          {:ok, filter} <- Filter.from_element(element),
          :ok <- rooted(filter),
+         :ok <- bounded(filter),
          :ok <- Filter.valid?(filter) do
       {:ok, filter}
     else
+      {:error, :unbounded} -> {:error, :malformed}
       _not_a_filter -> {:error, {Xml.caldav(), "valid-filter"}}
+    end
+  end
+
+  # RFC 4791 section 9.9: `CALDAV:time-range` carries `start`, `end`,
+  # or both. With neither it states no range at all, which is a
+  # malformed element rather than a filter the server declines to
+  # run — so it is `400`, not `CALDAV:valid-filter`.
+  defp bounded(%Filter{} = filter) do
+    if filter.time_range == {nil, nil} or Enum.any?(filter.children, &(bounded(&1) != :ok)) do
+      {:error, :unbounded}
+    else
+      :ok
     end
   end
 
@@ -125,13 +159,14 @@ defmodule Dav.Cal.Query do
   defp matching(target, filter, depth, document, options) do
     wanted = requested(document)
     selection = Selection.from_element(calendar_data(document))
+    expand = Expand.from_element(calendar_data(document))
     floating = floating_zone(document, target, options)
 
     for object <- scope(target, depth, options),
         {:ok, data} <- [read(object, options)],
         {:ok, calendar} <- [ICalendar.parse(data)],
-        Filter.match?(filter, calendar, time_range: ranged(floating)),
-        do: Cal.report_response(object, wanted, data, selection)
+        Filter.match?(filter, calendar, time_range: ranged(floating), calendar: calendar),
+        do: Cal.report_response(object, wanted, Expand.apply(data, expand, floating), selection)
   end
 
   # A `VALARM` has no time of its own — it fires relative to whatever
@@ -144,12 +179,27 @@ defmodule Dav.Cal.Query do
           false
 
         {%{name: "VALARM"} = alarm, parent} ->
-          TimeRange.alarm_overlaps?(alarm, parent, range, floating)
+          TimeRange.alarm_overlaps?(alarm, parent, range, floating, siblings(parent, context))
 
-        {component, _parent} ->
-          TimeRange.overlaps?(component, range, floating)
+        {component, parent} ->
+          TimeRange.overlaps?(component, range, floating, kin(component, parent))
       end
     end
+  end
+
+  # The other components of the same calendar object describing the
+  # same event. A `RANGE=THISANDFUTURE` override changes where the
+  # master's later occurrences fall, so the master cannot be tested
+  # against a window without them.
+  # An alarm's parent is the component it hangs off, so its siblings
+  # are found from the calendar rather than from the parent — which by
+  # then is the event, not the object.
+  defp siblings(parent, context), do: kin(parent, Keyword.get(context, :calendar))
+
+  defp kin(_component, nil), do: []
+
+  defp kin(component, parent) do
+    Enum.reject(parent.components, &(&1 == component or &1.name != component.name))
   end
 
   # RFC 4791 section 3.1: a floating time is converted using the

@@ -78,16 +78,17 @@ defmodule Dav.Cal.TimeRange do
   @spec overlaps?(
           ICalendar.component() | ICalendar.property(),
           {String.t() | nil, String.t() | nil},
-          String.t() | nil
+          String.t() | nil,
+          [ICalendar.component()]
         ) :: boolean()
   # A `time-range` inside a `prop-filter` tests the property's own
   # value — "a CREATED within this window" — rather than a component's
   # extent. RFC 4791 section 9.9 allows both, and the filter evaluator
   # is handed whichever the filter named, so this must recognise both
   # rather than assuming a component and crashing on a property.
-  def overlaps?(component, range, floating \\ nil)
+  def overlaps?(component, range, floating \\ nil, siblings \\ [])
 
-  def overlaps?(%{value: value, parameters: _parameters} = property, range, _floating)
+  def overlaps?(%{value: value, parameters: _parameters} = property, range, _floating, _siblings)
       when not is_map_key(property, :properties) do
     with {:ok, start} <- moment(elem(range, 0)),
          {:ok, finish} <- moment(elem(range, 1)),
@@ -104,7 +105,7 @@ defmodule Dav.Cal.TimeRange do
   # it a table of its own with seven rows. Running the VEVENT rules
   # over one finds nothing, because the first thing they look for is a
   # DTSTART that is not there.
-  def overlaps?(%{name: "VTODO"} = todo, {from, to}, floating) do
+  def overlaps?(%{name: "VTODO"} = todo, {from, to}, floating, _siblings) do
     with {:ok, start} <- moment(from),
          {:ok, finish} <- moment(to) do
       todo_overlaps?(todo, start, finish, floating)
@@ -113,19 +114,82 @@ defmodule Dav.Cal.TimeRange do
     end
   end
 
-  def overlaps?(component, {from, to}, floating) do
+  def overlaps?(component, {from, to}, floating, siblings) do
     with {:ok, start} <- moment(from),
          {:ok, finish} <- moment(to),
          {:ok, dtstart} <- property_value(component, "DTSTART", floating) do
-      extent = extent(component, dtstart, floating)
-
       component
-      |> starts(dtstart)
-      |> Enum.any?(&instance_overlaps?(extent, &1, start, finish))
+      |> occurrences(dtstart, extent(component, dtstart, floating), siblings, floating)
+      |> Enum.any?(fn {_recurrence, instance, extent} ->
+        instance_overlaps?(extent, instance, start, finish)
+      end)
     else
       _no_dtstart_or_unreadable -> false
     end
   end
+
+  @doc """
+  Every instance of a component that falls inside a window.
+
+  What `CALDAV:expand` needs: the moment the recurrence rule names,
+  where the instance actually falls once overrides are applied, and
+  how long it lasts.
+
+  ### Arguments
+
+  * `component` is the component to expand.
+
+  * `range` is `{start, finish}`, either of which may be `nil`.
+
+  * `floating` is the time zone to read a floating time in.
+
+  * `siblings` are the other components describing the same event,
+    whose overrides decide which instances survive and where.
+
+  ### Returns
+
+  * A list of `{recurrence_id, start, finish}`, in occurrence order.
+    `recurrence_id` is `nil` for the initial instance, which names no
+    occurrence; `finish` is `nil` for an instance with no extent of
+    its own.
+
+  ### Examples
+
+      iex> ics = "BEGIN:VCALENDAR\\r\\nBEGIN:VEVENT\\r\\nDTSTART:20260615T090000Z\\r\\nDURATION:PT1H\\r\\nRRULE:FREQ=DAILY;COUNT=3\\r\\nEND:VEVENT\\r\\nEND:VCALENDAR\\r\\n"
+      iex> {:ok, calendar} = Dav.Cal.ICalendar.parse(ics)
+      iex> [event] = calendar.components
+      iex> instances = Dav.Cal.TimeRange.instances_in(event, {"20260601T000000Z", "20260701T000000Z"})
+      iex> length(instances)
+      3
+
+  """
+  @spec instances_in(
+          ICalendar.component(),
+          {String.t() | nil, String.t() | nil},
+          String.t() | nil,
+          [ICalendar.component()]
+        ) :: [{Tempo.t() | nil, Tempo.t(), Tempo.t() | nil}]
+  def instances_in(component, range, floating \\ nil, siblings \\ [])
+
+  def instances_in(component, {from, to}, floating, siblings) do
+    with {:ok, start} <- moment(from),
+         {:ok, finish} <- moment(to),
+         {:ok, dtstart} <- property_value(component, "DTSTART", floating) do
+      component
+      |> occurrences(dtstart, extent(component, dtstart, floating), siblings, floating)
+      |> Enum.filter(fn {_recurrence, instance, extent} ->
+        instance_overlaps?(extent, instance, start, finish)
+      end)
+      |> Enum.map(fn {recurrence, instance, extent} ->
+        {recurrence, instance, lasts(extent, instance)}
+      end)
+    else
+      _no_dtstart_or_unreadable -> []
+    end
+  end
+
+  defp lasts(:instant, _instance), do: nil
+  defp lasts(extent, instance), do: ending(extent, instance)
 
   @doc """
   Whether an alarm fires inside a window.
@@ -171,15 +235,16 @@ defmodule Dav.Cal.TimeRange do
           ICalendar.component(),
           ICalendar.component(),
           {String.t() | nil, String.t() | nil},
-          String.t() | nil
+          String.t() | nil,
+          [ICalendar.component()]
         ) :: boolean()
-  def alarm_overlaps?(alarm, parent, range, floating \\ nil)
+  def alarm_overlaps?(alarm, parent, range, floating \\ nil, siblings \\ [])
 
-  def alarm_overlaps?(alarm, parent, {from, to}, floating) do
+  def alarm_overlaps?(alarm, parent, {from, to}, floating, siblings) do
     with {:ok, start} <- moment(from),
          {:ok, finish} <- moment(to) do
       alarm
-      |> firings(parent, floating)
+      |> firings(parent, floating, siblings)
       |> Enum.any?(&instance_overlaps?(:instant, &1, start, finish))
     else
       _unreadable -> false
@@ -188,22 +253,22 @@ defmodule Dav.Cal.TimeRange do
 
   # Every instant the alarm goes off: the first, and then one more for
   # each repeat.
-  defp firings(alarm, parent, floating) do
-    for first <- first_firing(alarm, parent, floating),
+  defp firings(alarm, parent, floating, siblings) do
+    for first <- first_firing(alarm, parent, floating, siblings),
         instant <- [first | repeats(alarm, first)],
         do: instant
   end
 
-  defp first_firing(alarm, parent, floating) do
+  defp first_firing(alarm, parent, floating, siblings) do
     case property(alarm, "TRIGGER") do
       nil -> []
-      trigger -> fired(trigger, parent, floating)
+      trigger -> fired(trigger, parent, floating, siblings)
     end
   end
 
   # An absolute trigger names its own instant; a relative one is an
   # offset from the parent, by default from its start.
-  defp fired(%{value: value, parameters: parameters}, parent, floating) do
+  defp fired(%{value: value, parameters: parameters}, parent, floating, siblings) do
     if Map.get(parameters, "VALUE") == "DATE-TIME" do
       case moment(value, zone_of(parameters, value, floating)) do
         {:ok, instant} -> [instant]
@@ -211,7 +276,7 @@ defmodule Dav.Cal.TimeRange do
       end
     else
       parent
-      |> anchors(Map.get(parameters, "RELATED", "START"), floating)
+      |> anchors(Map.get(parameters, "RELATED", "START"), floating, siblings)
       |> Enum.map(&shifted(&1, value))
       |> Enum.reject(&is_nil/1)
     end
@@ -221,22 +286,51 @@ defmodule Dav.Cal.TimeRange do
   # hour before rings every day, not only on the first — computing the
   # trigger from `DTSTART` alone finds the alarm once and misses every
   # later instance.
-  defp anchors(parent, related, floating) do
+  defp anchors(parent, related, floating, siblings) do
     case property_value(parent, "DTSTART", floating) do
-      {:ok, dtstart} -> parent |> starts(dtstart) |> Enum.map(&anchored(&1, parent, related))
-      :error -> []
+      {:ok, dtstart} ->
+        parent
+        |> occurrences(dtstart, extent(parent, dtstart, floating), siblings, floating)
+        |> Enum.map(fn {_recurrence, instance, extent} ->
+          anchored(instance, extent, parent, related)
+        end)
+
+      :error ->
+        undated(parent, related, floating)
     end
     |> Enum.reject(&is_nil/1)
   end
 
-  defp anchored(instance, parent, "END") do
-    case ending(extent(parent, instance, nil), instance) do
+  # A to-do need not have a start. RFC 5545 section 3.8.6.3 relates a
+  # `VTODO` alarm to the start or the *end* of the to-do, and a to-do
+  # with no start still has an end — its `DUE`. Without this an alarm
+  # an hour before a deadline never fires.
+  defp undated(%{name: "VTODO"} = todo, "END", floating) do
+    case property_value(todo, "DUE", floating) do
+      {:ok, due} -> starts(todo, due, floating)
+      :error -> []
+    end
+  end
+
+  defp undated(_parent, _related, _floating), do: []
+
+  defp anchored(instance, extent, %{name: "VTODO"} = todo, "END") do
+    case property_value(todo, "DUE", nil) do
+      {:ok, due} -> due
+      :error -> ended(instance, extent)
+    end
+  end
+
+  defp anchored(instance, extent, _parent, "END"), do: ended(instance, extent)
+
+  defp anchored(instance, _extent, _parent, _start), do: instance
+
+  defp ended(instance, extent) do
+    case ending(extent, instance) do
       %Tempo{} = finish -> finish
       _instant -> instance
     end
   end
-
-  defp anchored(instance, _parent, _start), do: instance
 
   defp repeats(alarm, first) do
     with %{value: count} <- property(alarm, "REPEAT"),
@@ -317,14 +411,14 @@ defmodule Dav.Cal.TimeRange do
     with {:ok, start} <- moment(from),
          {:ok, finish} <- moment(to),
          {:ok, dtstart} <- property_value(component, "DTSTART", floating) do
-      extent = extent(component, dtstart, floating)
-      replaced = instances(overridden, floating)
-
       component
-      |> starts(dtstart)
-      |> Enum.reject(&Enum.any?(replaced, fn instance -> same_moment?(&1, instance) end))
-      |> Enum.filter(&instance_overlaps?(extent, &1, start, finish))
-      |> Enum.map(&clip({&1, ending(extent, &1)}, start, finish))
+      |> occurrences(dtstart, extent(component, dtstart, floating), overridden, floating)
+      |> Enum.filter(fn {_recurrence, instance, extent} ->
+        instance_overlaps?(extent, instance, start, finish)
+      end)
+      |> Enum.map(fn {_recurrence, instance, extent} ->
+        clip({instance, ending(extent, instance)}, start, finish)
+      end)
       |> Enum.filter(fn {began, ended} -> earlier?(began, ended) end)
     else
       _no_dtstart_or_unreadable -> []
@@ -369,8 +463,37 @@ defmodule Dav.Cal.TimeRange do
       duration: property(todo, "DURATION")
     }
 
-    todo_row(state(times), times, start, finish)
+    todo
+    |> todo_instances(times)
+    |> Enum.any?(&todo_row(state(&1), &1, start, finish))
   end
+
+  # A recurring to-do is due on each of its occurrences, not only the
+  # first. The rule is anchored on `DTSTART` when there is one and on
+  # `DUE` otherwise — a to-do commonly has only a deadline — and every
+  # dated property moves with the occurrence.
+  defp todo_instances(todo, times) do
+    case anchor(times) do
+      nil -> [times]
+      first -> todo |> starts(first) |> Enum.map(&moved(times, first, &1))
+    end
+  end
+
+  defp anchor(%{dtstart: nil, due: due}), do: due
+  defp anchor(%{dtstart: dtstart}), do: dtstart
+
+  defp moved(times, first, occurrence) do
+    case gap(first, occurrence) do
+      seconds when is_integer(seconds) and seconds != 0 ->
+        %{times | dtstart: by(times.dtstart, seconds), due: by(times.due, seconds)}
+
+      _same_or_unreadable ->
+        times
+    end
+  end
+
+  defp by(nil, _seconds), do: nil
+  defp by(moment, seconds), do: shift(moment, seconds_iso(seconds))
 
   # Which row of the table applies, decided by presence alone. Written
   # as a match on the shape rather than a chain of conditionals, since
@@ -448,11 +571,36 @@ defmodule Dav.Cal.TimeRange do
   # `Tempo.to_interval_set/1` first turns the repetition into its
   # occurrences, which is what `Tempo.IntervalSet.members/1` then
   # returns.
-  defp starts(component, dtstart) do
-    case property(component, "RRULE") do
-      nil -> [dtstart]
-      rule -> expand(rule.value, dtstart)
-    end
+  defp starts(component, dtstart), do: starts(component, dtstart, nil)
+
+  # `RRULE` is only part of it. RFC 5545 section 3.8.5 builds the set
+  # from the rule, plus every `RDATE`, minus every `EXDATE` — and an
+  # `EXDATE` is how a client cancels one occurrence of a series
+  # without an override, so ignoring it reports a meeting that was
+  # called off.
+  defp starts(component, dtstart, floating) do
+    ruled =
+      case property(component, "RRULE") do
+        nil -> [dtstart]
+        rule -> expand(rule.value, dtstart)
+      end
+
+    dropped = listed(component, "EXDATE", floating)
+
+    (ruled ++ listed(component, "RDATE", floating))
+    |> Enum.reject(fn instant -> Enum.any?(dropped, &same_moment?(instant, &1)) end)
+    |> Enum.sort(&not_later?/2)
+  end
+
+  # `EXDATE` and `RDATE` each hold a comma-separated list, and a
+  # component may carry more than one of either.
+  defp listed(component, name, floating) do
+    for property <- component.properties,
+        property.name == name,
+        part <- String.split(property.value, ","),
+        {:ok, moment} <- [moment(part, zone_of(property.parameters, part, floating))],
+        not is_nil(moment),
+        do: moment
   end
 
   defp expand(rule, dtstart) do
@@ -554,6 +702,90 @@ defmodule Dav.Cal.TimeRange do
       _unreadable -> moment
     end
   end
+
+  # RFC 5545 section 3.8.4.4: `RANGE=THISANDFUTURE` on a
+  # `RECURRENCE-ID` makes the override stand for the occurrence it
+  # names *and every later one*. The later occurrences keep the rule's
+  # spacing but move by the gap between the override's
+  # `RECURRENCE-ID` and its `DTSTART`, and take the override's
+  # duration with them — a meeting shifted two hours later "from now
+  # on" is not still the old meeting at the old time.
+  # Every occurrence the component actually has, as `{instant, extent}`
+  # pairs, with any `RANGE=THISANDFUTURE` override applied. The extent
+  # travels with the instant because an override may change the
+  # duration as well as the time.
+  defp occurrences(component, dtstart, extent, siblings, floating) do
+    forward = forward_overrides(siblings, floating)
+    replaced = instances(siblings, floating)
+
+    for instant <- starts(component, dtstart, floating),
+        not Enum.any?(replaced, &same_moment?(instant, &1)),
+        {at, was} = continued(instant, extent, forward),
+        do: {named(component, instant, dtstart, floating), at, was}
+  end
+
+  # Which occurrence this is. An override says so itself; for everything
+  # else the rule's own moment names it — except the first, which RFC
+  # 4791 section 9.6.5 leaves unnamed: "recurring components, other
+  # than the initial instance, MUST include a RECURRENCE-ID property".
+  defp named(component, instant, dtstart, floating) do
+    case property_value(component, "RECURRENCE-ID", floating) do
+      {:ok, stated} -> stated
+      :error -> if same_moment?(instant, dtstart), do: nil, else: instant
+    end
+  end
+
+  # Later overrides win, so they are applied in order and the last one
+  # covering an occurrence is the one that describes it.
+  defp continued(instant, extent, forward) do
+    Enum.reduce(forward, {instant, extent}, fn {recurrence, gap, moved}, {at, was} ->
+      if is_integer(gap) and later?(instant, recurrence) do
+        {shift(at, seconds_iso(gap)), moved}
+      else
+        {at, was}
+      end
+    end)
+  end
+
+  # An override may move an occurrence earlier as well as later, and
+  # ISO 8601 spells a negative duration with the sign in front of the
+  # whole thing rather than inside it.
+  defp seconds_iso(gap) when gap < 0, do: "-PT#{abs(gap)}S"
+  defp seconds_iso(gap), do: "PT#{gap}S"
+
+  defp forward_overrides(siblings, floating) do
+    for override <- siblings,
+        thisandfuture?(override),
+        {:ok, recurrence} <- [property_value(override, "RECURRENCE-ID", floating)],
+        {:ok, moved} <- [property_value(override, "DTSTART", floating)],
+        do: {recurrence, gap(recurrence, moved), extent(override, moved, floating)}
+  end
+
+  defp thisandfuture?(component) do
+    Enum.any?(component.properties, fn property ->
+      property.name == "RECURRENCE-ID" and
+        Map.get(property.parameters, "RANGE") == "THISANDFUTURE"
+    end)
+  end
+
+  # Seconds between the occurrence the rule names and where the
+  # override put it. `nil` when either will not convert, which leaves
+  # the occurrence where the rule had it rather than moving it by a
+  # guess.
+  defp gap(recurrence, moved) do
+    with {:ok, from} <- Tempo.to_elixir(recurrence),
+         {:ok, to} <- Tempo.to_elixir(moved) do
+      elapsed(to, from)
+    else
+      _unconvertible -> nil
+    end
+  end
+
+  defp elapsed(%DateTime{} = to, %DateTime{} = from), do: DateTime.diff(to, from)
+
+  defp elapsed(%NaiveDateTime{} = to, %NaiveDateTime{} = from), do: NaiveDateTime.diff(to, from)
+
+  defp elapsed(_to, _from), do: nil
 
   defp property(component, name), do: Enum.find(component.properties, &(&1.name == name))
 

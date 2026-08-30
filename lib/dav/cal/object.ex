@@ -103,8 +103,11 @@ defmodule Dav.Cal.Object do
          :ok <- timezones_present(calendar),
          :ok <- within_limits(calendar),
          :ok <- unique_uid(calendar),
+         :ok <- welcomed(calendar, collection, options),
          :ok <- attendee_allowed(calendar, collection, path, options),
          :ok <- organizer_allowed(calendar, collection, options),
+         :ok <- organizer_kept(calendar, path, options),
+         :ok <- attendee_kept(calendar, collection, path, options),
          :ok <- agent_unchanged(calendar, collection, path, options),
          :ok <- same_organizer(calendar, path, options) do
       no_uid_conflict(calendar, collection, path, options)
@@ -247,7 +250,7 @@ defmodule Dav.Cal.Object do
     calendar
     |> every_component()
     |> Enum.flat_map(& &1.properties)
-    |> Enum.filter(&(&1.name in ["RRULE", "RECURRENCE-ID"]))
+    |> Enum.filter(&(&1.name in ["RRULE", "RECURRENCE-ID", "ACKNOWLEDGED"]))
     |> Enum.reduce_while(:ok, fn property, _outcome ->
       if readable?(property),
         do: {:cont, :ok},
@@ -256,6 +259,13 @@ defmodule Dav.Cal.Object do
   end
 
   defp readable?(%{name: "RRULE", value: value}), do: recurrence?(value)
+
+  # RFC 9074 section 5: `ACKNOWLEDGED` records when an alarm was
+  # dismissed and "MUST be specified in the UTC time format". One
+  # written as a local time names no instant, so two clients
+  # disagreeing about the zone disagree about whether the alarm has
+  # been seen.
+  defp readable?(%{name: "ACKNOWLEDGED", value: value}), do: String.ends_with?(value, "Z")
 
   # A RECURRENCE-ID names which instance of a recurrence this component
   # overrides. One that is not a readable date-time overrides nothing,
@@ -347,6 +357,38 @@ defmodule Dav.Cal.Object do
   end
 
   defp method?(calendar), do: Enum.any?(calendar.properties, &(&1.name == "METHOD"))
+
+  # RFC 4791 section 5.2.3: a calendar created with a
+  # `supported-calendar-component-set` holds those components and no
+  # others. Storing a to-do in a calendar the client made for events
+  # is refused rather than accepted, because the client asked for the
+  # restriction and would not look for what it thinks cannot be there.
+  defp welcomed(calendar, collection, options) do
+    kinds = for component <- calendar.components, do: component.name
+
+    case declared(collection, options) do
+      [] -> :ok
+      allowed -> if Enum.all?(kinds, &(&1 in ["VTIMEZONE" | allowed])), do: :ok, else: unwelcome()
+    end
+  end
+
+  defp unwelcome, do: {:error, precondition("supported-calendar-component")}
+
+  defp declared(collection, %{store: store, context: context}) do
+    with %Resource{} = held <- collection,
+         true <- Store.supports?(store, :properties),
+         {:components, names} <-
+           Map.get(
+             store.properties(held, context),
+             {Xml.caldav(), "supported-calendar-component-set"}
+           ) do
+      names
+    else
+      _undeclared -> []
+    end
+  end
+
+  defp declared(_collection, _options), do: []
 
   # "Calendar components in a calendar collection that have different
   # UID property values MUST be stored in separate calendar object
@@ -472,6 +514,49 @@ defmodule Dav.Cal.Object do
       else: :ok
   end
 
+  # RFC 6638 section 3.2.1: the `ORGANIZER` of a scheduling object is
+  # not the client's to remove. An event that keeps its attendees but
+  # loses its organiser is a meeting nobody is running — the server
+  # can no longer say who to reply to, and the attendees' copies go on
+  # naming an organiser this one has forgotten. Dropping the attendees
+  # as well is a different thing: that is an event becoming a private
+  # appointment, which is allowed.
+  defp organizer_kept(calendar, path, options) do
+    with {nil, _parameters} <- organizer_of(calendar),
+         [_ | _] <- attendee_values(calendar),
+         %{} = before <- stored(path, options),
+         {held, _held_parameters} when not is_nil(held) <- organizer_of(before) do
+      {:error, precondition("organizer-allowed")}
+    else
+      _kept_or_no_longer_scheduled -> :ok
+    end
+  end
+
+  # RFC 6638 section 3.2.2: an attendee answers in their copy; they do
+  # not write themselves out of the meeting. Deleting the whole
+  # resource is how somebody declines — the server sends a `REPLY`
+  # saying so — but a `PUT` that quietly drops their own `ATTENDEE`
+  # leaves the organiser still expecting them and no message to say
+  # otherwise.
+  defp attendee_kept(calendar, collection, path, options) do
+    addresses = Scheduling.addresses_of(collection, options)
+    {organizer, _parameters} = organizer_of(calendar)
+
+    with false <- addresses == [],
+         false <- organizer in [nil | addresses],
+         %{} = before <- stored(path, options),
+         true <- attends?(before, addresses),
+         false <- attends?(calendar, addresses) do
+      {:error, precondition("valid-attendee-change")}
+    else
+      _theirs_or_still_attending -> :ok
+    end
+  end
+
+  defp attendee_values(calendar) do
+    for property <- properties_of(calendar), property.name == "ATTENDEE", do: property.value
+  end
+
   # RFC 6638 section 3.2.2: an attendee's copy is theirs to answer in,
   # not to re-address. `SCHEDULE-AGENT` on the `ORGANIZER` says who
   # delivers for the whole object, so an attendee able to change it
@@ -591,12 +676,24 @@ defmodule Dav.Cal.Object do
          {:ok, home} <- store.resolve(Enum.drop(collection.path, -1), context),
          {:ok, children} <- store.children(home, context) do
       children
-      |> Enum.filter(&(&1.collection? and &1.path != collection.path and Cal.calendar?(&1)))
+      |> Enum.filter(
+        &(&1.collection? and &1.path != collection.path and Cal.calendar?(&1) and
+            theirs?(&1, home, options))
+      )
       |> Enum.flat_map(&siblings(&1, path, options))
       |> Enum.any?(&claims?(&1, uid, scheduling?, options))
     else
       _unreadable -> false
     end
+  end
+
+  # A calendar shared *into* a home is not one of that home's
+  # calendars: the objects in it belong to the sharer, and counting
+  # them makes an invitation the sharer sent look like a second copy
+  # of the invitee's own.
+  defp theirs?(calendar, home, %{store: store, context: context}) do
+    not Store.supports?(store, :origin) or
+      Enum.take(store.origin(calendar.path, context), length(home.path)) == home.path
   end
 
   defp claims?(object, uid, scheduling?, options) do

@@ -49,6 +49,7 @@ defmodule Dav.CalDAVTester.Scenario do
     defstruct [
       :method,
       :data,
+      :iterate_data?,
       uris: [],
       headers: [],
       verifiers: [],
@@ -64,6 +65,7 @@ defmodule Dav.CalDAVTester.Scenario do
     @type t :: %__MODULE__{
             method: String.t(),
             data: %{content_type: String.t(), filepath: String.t() | nil} | nil,
+            iterate_data?: boolean(),
             uris: [String.t()],
             headers: [{String.t(), String.t()}],
             verifiers: [Verify.t()],
@@ -267,6 +269,7 @@ defmodule Dav.CalDAVTester.Scenario do
       uris: Enum.map(Document.children(element, "ruri"), &String.trim(&1.text)),
       headers: Enum.map(Document.children(element, "header"), &header/1),
       data: data(Document.child(element, "data")),
+      iterate_data?: yes?(element, "iterate-data"),
       verifiers: Enum.map(Document.children(element, "verify"), &verify/1),
       grabs: grabs(element),
       user: Map.get(element.attributes, "user"),

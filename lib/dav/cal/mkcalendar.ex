@@ -88,7 +88,22 @@ defmodule Dav.Cal.Mkcalendar do
   end
 
   defp value(%{children: [], text: text}), do: String.trim(text)
-  defp value(%{children: children}), do: {:names, Enum.map(children, & &1.name)}
+
+  # `CALDAV:comp` names its component in an attribute, so keeping only
+  # the element names would record "some components, unspecified" — and
+  # a calendar created for events alone would go on accepting to-dos.
+  defp value(%{children: children}) do
+    case Enum.map(children, &Map.get(&1.attributes, "name")) do
+      [_ | _] = named -> componentwise(children, named)
+      [] -> {:names, []}
+    end
+  end
+
+  defp componentwise(children, named) do
+    if Enum.all?(named, &is_binary/1),
+      do: {:components, named},
+      else: {:names, Enum.map(children, & &1.name)}
+  end
 
   defp children(element, name) do
     Enum.filter(element.children, &match?(%{name: {_namespace, ^name}}, &1))

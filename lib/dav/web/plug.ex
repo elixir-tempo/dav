@@ -338,23 +338,40 @@ defmodule Dav.Web.Plug do
     end
   end
 
-  defp removed(resource, body, options) do
-    withdrawn(resource, body, parent(resource.path, options), options)
+  defp removed(resource, body, properties, options) do
+    withdrawn(resource, body, parent(resource.path, options), options, properties)
   end
 
   # The collection is named rather than looked up: by the time a
   # member of a deleted calendar is reported, the calendar it belonged
   # to is gone, and a hook asked whether it applies to `nil` says no.
-  defp withdrawn(resource, body, collection, options) do
-    change = %{resource: resource, body: body, previous: body, collection: collection}
+  defp withdrawn(resource, body, collection, options, properties \\ %{}) do
+    change = %{
+      resource: resource,
+      body: body,
+      previous: body,
+      collection: collection,
+      properties: properties
+    }
 
     for hook <- options.hooks,
-        hook.applies?(collection),
+        concerns?(hook, resource, collection),
         function_exported?(hook, :deleted, 2),
         do: hook.deleted(change, options)
 
     :ok
   end
+
+  # A hook hears about a deletion when it applies to the collection the
+  # resource was in — and, when a collection is itself deleted, when it
+  # applies to *that* collection. Deleting a shared calendar has to
+  # withdraw its invitations, and the calendar's parent is a plain home
+  # that no sharing hook claims.
+  defp concerns?(hook, %Resource{collection?: true} = resource, collection) do
+    hook.applies?(collection) or hook.applies?(resource)
+  end
+
+  defp concerns?(hook, _resource, collection), do: hook.applies?(collection)
 
   # What is there now, read before a write replaces it. A hook that
   # must tell a significant change from a trivial one has no other way
@@ -530,8 +547,12 @@ defmodule Dav.Web.Plug do
          # no way to find out.
          held = contents(resource, options) || "",
          members = held_by(resource, options),
+         # Read for the same reason: a hook acting on what the resource
+         # *was* cannot ask the store once it is gone. Deleting a shared
+         # calendar has to withdraw the invitations recorded on it.
+         properties = stored(resource, options),
          :ok <- options.store.delete(resource, options.context) do
-      removed(resource, held, options)
+      removed(resource, held, properties, options)
 
       # A collection has no body of its own, so deleting one would tell
       # the hooks nothing about what it held. Deleting a calendar full
@@ -613,15 +634,45 @@ defmodule Dav.Web.Plug do
     with {:ok, request} <- Xml.parse_propfind(body),
          {:ok, depth} <- finite(depth(conn, {:ok, :infinity})),
          {:ok, resource} <- resolve(conn, options),
+         :ok <- changed_since(conn, resource),
          {:ok, resources} <- gather(resource, depth, options) do
-      respond(conn, resources, request, options)
+      conn |> stamped(resource) |> respond(resources, request, options)
     else
       {:error, :malformed} -> send_resp(conn, 400, "")
       {:error, :bad_depth} -> send_resp(conn, 400, "")
       {:error, :depth_infinity} -> precondition(conn, {Xml.dav(), "propfind-finite-depth"})
       {:error, :not_found} -> send_resp(conn, 404, "")
+      {:error, :not_modified} -> send_resp(conn, 304, "")
     end
   end
+
+  # RFC 7232 section 3.3: a conditional request for something that has
+  # not changed is answered `304`, not repeated in full. A client
+  # polling a collection for changes asks exactly this way, and
+  # answering with the whole listing each time is the difference
+  # between a poll that costs a header and one that costs the
+  # collection.
+  defp changed_since(conn, %Resource{modified_at: %DateTime{} = modified}) do
+    with [value | _rest] <- get_req_header(conn, "if-modified-since"),
+         {:ok, since} <- Properties.from_http_date(value),
+         :gt <- DateTime.compare(since, DateTime.truncate(modified, :second)) do
+      {:error, :not_modified}
+    else
+      :eq -> {:error, :not_modified}
+      _changed_or_unconditional -> :ok
+    end
+  end
+
+  defp changed_since(_conn, _resource), do: :ok
+
+  # The header the conditional request will send back. Without it a
+  # client has nothing to be conditional *about*, and asks for the
+  # whole collection every time.
+  defp stamped(conn, %Resource{modified_at: %DateTime{} = modified}) do
+    put_resp_header(conn, "last-modified", Properties.http_date(modified))
+  end
+
+  defp stamped(conn, _resource), do: conn
 
   # `Depth: infinity` is refused rather than served. RFC 4918 section
   # 9.1 allows a server to refuse it, and answering it over an
@@ -762,6 +813,7 @@ defmodule Dav.Web.Plug do
          {:ok, replacing?} <- overwritable(conn, destination, options),
          :ok <- parent_of(destination, options),
          :ok <- validate_transfer(kind, source, destination, options),
+         :ok <- relocatable(source, destination, options),
          :ok <- carry_out(kind, source, destination, options) do
       if replacing?,
         do: send_resp(conn, 204, ""),
@@ -777,6 +829,45 @@ defmodule Dav.Web.Plug do
       {:error, :no_parent} -> send_resp(conn, 409, "")
       {:error, :other_server} -> send_resp(conn, 502, "")
       {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
+    end
+  end
+
+  # RFC 6638 section 3: a scheduling object resource belongs to the
+  # calendar of a user who is its organiser or one of its attendees.
+  # Relocating one into a calendar somebody else owns — most often
+  # into or out of a shared calendar — would hand them an organiser's
+  # copy of another person's meeting, which the server would then go
+  # on to schedule from on their behalf. A resource carrying no
+  # `ORGANIZER` is nobody's meeting and moves freely.
+  defp relocatable(source, destination, options) do
+    owners = {owner_of(source.path, options), owner_of(destination, options)}
+
+    with {held, target} when held != target <- owners,
+         {:ok, body} <- body_of(source, options),
+         true <- String.contains?(body, "ORGANIZER") do
+      {:error, {Xml.dav(), "need-privileges"}}
+    else
+      _same_owner_or_unscheduled -> :ok
+    end
+  end
+
+  # Through any link the store keeps: a calendar shared into someone's
+  # home is *owned* by the sharer, however it is addressed.
+  defp owner_of(path, options) do
+    case path |> Enum.drop(-1) |> located(options) |> resolved(options) do
+      %Resource{owner: owner} -> owner
+      _absent -> nil
+    end
+  end
+
+  defp located(path, %{store: store, context: context}) do
+    if Store.supports?(store, :origin), do: store.origin(path, context), else: path
+  end
+
+  defp resolved(path, %{store: store, context: context}) do
+    case store.resolve(path, context) do
+      {:ok, resource} -> resource
+      _absent -> nil
     end
   end
 

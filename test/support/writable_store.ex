@@ -15,6 +15,11 @@ defmodule Dav.Test.WritableStore do
 
   @sharing "http://calendarserver.org/ns/"
 
+  # Where this store's clock starts. Every write advances it a second,
+  # so an object written later is later, and a collection with nothing
+  # in it is still *as of* something.
+  @epoch ~U[2020-01-01 00:00:00Z]
+
   def start(resources) do
     {:ok, agent} = Agent.start_link(fn -> %{resources: resources, bodies: %{}, dead: %{}} end)
     agent
@@ -46,12 +51,37 @@ defmodule Dav.Test.WritableStore do
   defp asking(_agent), do: nil
 
   @impl Dav.Web.Store
+  def origin(path, agent), do: underlying(agent, path)
+
+  @impl Dav.Web.Store
   def resolve(path, agent) do
     case Agent.get(pid(agent), &Enum.find(&1.resources, fn r -> r.path == path end)) do
       nil -> resolve_through(path, agent)
-      resource -> {:ok, resource}
+      resource -> {:ok, dated(resource, agent)}
     end
   end
+
+  # A collection is as new as the newest thing in it. Without this it
+  # has no `Last-Modified` at all, and a client asking "has anything
+  # changed here since?" — which is how a calendar is polled — can only
+  # be told to fetch the lot.
+  defp dated(%Resource{collection?: true} = collection, agent) do
+    under =
+      for %{path: path, modified_at: %DateTime{} = at} <- Agent.get(pid(agent), & &1.resources),
+          path != collection.path,
+          Enum.take(path, length(collection.path)) == collection.path,
+          do: at
+
+    # An empty collection is still *as of* something. Leaving it without
+    # a `Last-Modified` means a client cannot ask whether it has
+    # changed, and has to fetch it to find out that it has not.
+    %{
+      collection
+      | modified_at: Enum.max(under, DateTime, fn -> collection.modified_at || @epoch end)
+    }
+  end
+
+  defp dated(resource, _agent), do: resource
 
   # A shared calendar is a view, not a copy. What sits in the
   # invitee's home is a link recording where the original lives, and a
@@ -166,6 +196,8 @@ defmodule Dav.Test.WritableStore do
   # (`X-CALENDARSERVER-PERUSER-UID`) and merges them back per reader.
   # Writing them into the shared body instead lets one sharee's alarm
   # ring on everyone else's phone.
+  @epoch ~U[2020-01-01 00:00:00Z]
+
   @personal_properties ~w(TRANSP)
   @personal_components ~w(VALARM)
 
@@ -284,7 +316,7 @@ defmodule Dav.Test.WritableStore do
         {Map.get(state, :written, 0) + 1, Map.update(state, :written, 1, &(&1 + 1))}
       end)
 
-    DateTime.add(~U[2020-01-01 00:00:00Z], seconds, :second)
+    DateTime.add(@epoch, seconds, :second)
   end
 
   defp store(agent, path, body, content_type) do
@@ -312,15 +344,23 @@ defmodule Dav.Test.WritableStore do
   @impl Dav.Web.Store
   def delete(%Resource{path: path}, agent) do
     Agent.update(pid(agent), fn state ->
+      # Dead properties die with the resource. A share is recorded as
+      # one — a `CS:shared-url` naming what the link points at — so
+      # leaving them behind means a sharee who deletes a shared
+      # calendar still resolves it through the link that is no longer
+      # there.
       %{
         state
-        | resources: Enum.reject(state.resources, &(Enum.take(&1.path, length(path)) == path)),
-          bodies: Map.reject(state.bodies, fn {p, _b} -> Enum.take(p, length(path)) == path end)
+        | resources: Enum.reject(state.resources, &beneath?(&1.path, path)),
+          bodies: Map.reject(state.bodies, fn {held, _body} -> beneath?(held, path) end),
+          dead: Map.reject(state.dead, fn {held, _properties} -> beneath?(held, path) end)
       }
     end)
 
     :ok
   end
+
+  defp beneath?(held, path), do: Enum.take(held, length(path)) == path
 
   @impl Dav.Web.Store
   def mkcol(path, agent) do
@@ -385,13 +425,22 @@ defmodule Dav.Test.WritableStore do
 
   @impl Dav.Web.Store
   def copy(%Resource{path: from}, to, agent) do
-    Agent.update(pid(agent), fn state -> transplant(state, from, to, :keep) end)
+    {held, target} = {underlying(agent, from), underlying(agent, to)}
+
+    Agent.update(pid(agent), fn state -> transplant(state, held, target, :keep) end)
     :ok
   end
 
+  # Both ends go through the link. A sharee moving an event into a
+  # calendar shared with them is writing to the sharer's collection —
+  # the path in their own home is a view of it — and a move that
+  # landed at the view's path would put the event somewhere neither
+  # party can read.
   @impl Dav.Web.Store
   def move(%Resource{path: from}, to, agent) do
-    Agent.update(pid(agent), fn state -> transplant(state, from, to, :drop) end)
+    {held, target} = {underlying(agent, from), underlying(agent, to)}
+
+    Agent.update(pid(agent), fn state -> transplant(state, held, target, :drop) end)
     :ok
   end
 

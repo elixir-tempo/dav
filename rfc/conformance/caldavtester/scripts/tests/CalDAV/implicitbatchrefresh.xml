@@ -254,7 +254,7 @@
 		</test>
 	</test-suite>
 
-	<test-suite name='Invite and two quick replies'>
+	<test-suite name='Invite and two quick replies' change-uid='yes'>
 		<test name='1'>
 			<description>Organizer invites Attendees</description>
 			<request>
@@ -508,7 +508,7 @@
 		</test>
 	</test-suite>
 
-	<test-suite name='Invite and two interleaved replies'>
+	<test-suite name='Invite and two interleaved replies' change-uid='yes'>
 		<test name='1'>
 			<description>Organizer invites Attendees</description>
 			<request>
