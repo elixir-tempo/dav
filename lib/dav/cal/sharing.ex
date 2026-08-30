@@ -47,6 +47,13 @@ defmodule Dav.Cal.Sharing do
 
   @namespace "http://calendarserver.org/ns/"
 
+  # `DAV:all` is not among them. A sharee may read and write the
+  # calendar's contents; administering it — its access control, its
+  # very existence — stays with the person who shared it, and a client
+  # told it holds every privilege discovers otherwise by having a
+  # request refused.
+  @shared_write ~w(read write write-properties write-content bind unbind)
+
   @doc """
   The `calendarserver.org` namespace.
 
@@ -276,14 +283,14 @@ defmodule Dav.Cal.Sharing do
   defp privileges(resource, options) do
     case granted_to(resource, options) do
       nil -> []
-      "read" -> [{{"DAV:", "current-user-privilege-set"}, readable()}]
-      _read_write -> []
+      "read" -> [{{"DAV:", "current-user-privilege-set"}, granted(~w(read read-acl))}]
+      _read_write -> [{{"DAV:", "current-user-privilege-set"}, granted(@shared_write)}]
     end
   end
 
-  defp readable do
+  defp granted(names) do
     {:elements, [Xml.dav()],
-     Enum.map(~w(read read-acl read-current-user-privilege-set), fn name ->
+     Enum.map(names ++ ["read-current-user-privilege-set"], fn name ->
        ["<D:privilege><D:", name, "/></D:privilege>"]
      end)}
   end

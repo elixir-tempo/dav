@@ -72,8 +72,60 @@ defmodule Dav.CalDAVTester.Calendars do
 
     with {:ok, left} <- read(actual),
          {:ok, right} <- read(expected) do
+      {left, right} = reconciled(left, right)
+
       difference(normalise(left, rules), normalise(right, rules))
     end
+  end
+
+  # Upstream derives the missing overrides on both sides before
+  # comparing, so an occurrence one copy states explicitly and the
+  # other leaves to its recurrence rule is the same occurrence rather
+  # than a difference. Without it, every comparison of a series
+  # against a copy that overrode one of its occurrences fails on the
+  # component count alone.
+  defp reconciled(left, right) do
+    {derived(left, missing_from(left, right)), derived(right, missing_from(right, left))}
+  end
+
+  defp missing_from(calendar, other) do
+    known = for property <- overrides(calendar), into: MapSet.new(), do: property.value
+
+    for property <- overrides(other), property.value not in known, do: property
+  end
+
+  defp overrides(calendar) do
+    for component <- calendar.components,
+        property = Enum.find(component.properties, &(&1.name == "RECURRENCE-ID")),
+        do: property
+  end
+
+  defp derived(calendar, []), do: calendar
+
+  defp derived(calendar, missing) do
+    case Enum.find(calendar.components, &master?/1) do
+      nil ->
+        calendar
+
+      master ->
+        %{calendar | components: calendar.components ++ Enum.map(missing, &instance(master, &1))}
+    end
+  end
+
+  defp master?(component) do
+    component.name != "VTIMEZONE" and
+      not Enum.any?(component.properties, &(&1.name == "RECURRENCE-ID"))
+  end
+
+  # The master with the rule taken off and the occurrence named: what
+  # the recurrence says happens on that date, written out.
+  defp instance(master, recurrence) do
+    kept =
+      master.properties
+      |> Enum.reject(&(&1.name in ~w(RRULE RDATE EXDATE DTSTART)))
+      |> Kernel.++([%{recurrence | name: "DTSTART"}, recurrence])
+
+    %{master | properties: kept}
   end
 
   # A response often carries the calendar inside a multistatus rather

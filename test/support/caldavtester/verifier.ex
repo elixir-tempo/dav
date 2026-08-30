@@ -982,11 +982,26 @@ defmodule Dav.CalDAVTester.Verifier do
         nil
 
       value ->
-        case Integer.parse(value) do
-          {number, ""} -> number
-          _unreadable -> nil
+        case summed(value) do
+          {:ok, number} -> number
+          :error -> nil
         end
     end
+  end
+
+  # A count may be arithmetic — `$homecount:+1` — because a scenario
+  # grabs how many collections a home held before it shared one and
+  # then asserts there is one more. Upstream evaluates the expression;
+  # only sums of integers appear, so only those are read here.
+  defp summed(value) do
+    parts = value |> String.replace(" ", "") |> String.split("+")
+
+    Enum.reduce_while(parts, {:ok, 0}, fn part, {:ok, total} ->
+      case Integer.parse(part) do
+        {number, ""} -> {:cont, {:ok, total + number}}
+        _unreadable -> {:halt, :error}
+      end
+    end)
   end
 
   defp single_value(args, name) do

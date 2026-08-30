@@ -501,8 +501,15 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp grab({:count, _argument, variable}, conn, _request, state) do
     case Xml.parse(conn.resp_body) do
-      {:ok, document} -> bind(state, variable, "#{length(descendants(document, "response"))}")
-      _unreadable -> state
+      # The collection answers for itself as well as its members, and
+      # `multistatusItems` counts *items* — one fewer than the
+      # responses. A grabbed count is compared against that, so it
+      # counts the same way.
+      {:ok, document} ->
+        bind(state, variable, "#{length(descendants(document, "response")) - 1}")
+
+      _unreadable ->
+        state
     end
   end
 
