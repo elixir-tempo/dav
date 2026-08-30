@@ -19,6 +19,14 @@ and why the pinned commit above will not move.
 
 * `verifiers/` — the response checks the scenarios refer to.
 
+* `src/` — the harness itself: `caldavtest.py` runs a scenario,
+  `request.py` models one request and its grabs, `serverinfo.py` the
+  substitutions. Vendored because our own runner has to answer the
+  same questions — when `end-delete` fires, what `change-uid` scopes,
+  what `WAITCOUNT` waits for — and deriving those from the scenarios
+  is guesswork where the reference implementation is simply the
+  answer.
+
 **The harness itself is not vendored** — `caldavtester.py` and its
 `src/` are not here, only the data it reads. Running the suite would
 also need a populated `serverinfo.xml`, authentication and provisioned

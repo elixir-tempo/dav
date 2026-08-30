@@ -57,7 +57,11 @@ defmodule Dav.CalDAVTester.Runner do
                   COPY MOVE REPORT POST)
 
   # Listing a collection's members, for the compound methods.
-  @allprop ~s(<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>)
+  # `dofindall` asks for one property, not for all of them. A listing
+  # is after member URLs, and every extra property it fetches carries
+  # hrefs of its own — `owner`, `calendar-home-set` — for the reader
+  # to tell apart from the members it came for.
+  @listing ~s(<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>)
 
   @typedoc "What became of one test."
   @type outcome :: :passed | {:failed, String.t()} | {:skipped, String.t()}
@@ -172,7 +176,11 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp dispatch(request, state) do
     case compound(request.method) do
-      {:ok, directive} -> perform(directive, request, state)
+      # `dofindall`, `dofindnew` and `dodeleteall` all act as the user
+      # the request names, not as the harness. Emptying somebody's
+      # Inbox as the wrong person is refused, and the messages stay
+      # there to be counted by the next suite that looks.
+      {:ok, directive} -> perform(directive, request, %{state | options: as(request, state)})
       :no -> plain(request, state)
     end
   end
@@ -243,8 +251,8 @@ defmodule Dav.CalDAVTester.Runner do
   # wait for, and nothing can arrive between two calls. That is a real
   # difference from upstream, where the wait covers a server doing work
   # in the background.
-  defp compound("DELETEALL"), do: {:ok, :delete_all}
-  defp compound("WAITDELETEALL" <> _count), do: {:ok, :delete_all}
+  defp compound("DELETEALL"), do: {:ok, {:delete_all, nil}}
+  defp compound("WAITDELETEALL" <> count), do: {:ok, {:delete_all, String.trim(count)}}
   defp compound("DELAY" <> _seconds), do: {:ok, :delay}
   defp compound("GETNEW"), do: {:ok, {:get, :newest}}
   defp compound("FINDNEW"), do: {:ok, {:find, :newest}}
@@ -257,27 +265,25 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp perform(:delay, _request, state), do: {:passed, state}
 
-  defp perform(:delete_all, request, state) do
-    # A `<ruri>` that still holds an unbound variable is not a
-    # collection this can empty, and asking for its members crashes
-    # rather than returning nothing.
-    for uri <- uris(request, state),
-        String.starts_with?(uri, "/"),
-        not String.contains?(uri, "$"),
-        child <- members(uri, state) do
-      send_plain("DELETE", child, state)
-    end
-
-    {:passed, state}
-  end
+  # `dowaitcount` wants *exactly* the number named — `WAITCOUNT 1`
+  # fails on two messages, and `counted/3` says so.
+  #
+  # `WAITDELETEALL` diverges here deliberately. Upstream empties the
+  # collection only once the count matches, but it re-checks for
+  # thirty seconds first, so against a conformant server the count
+  # always converges and the collection always gets emptied. Ours
+  # answers immediately, so refusing to empty turns one wrong count
+  # into every later suite finding somebody else's leftovers: it
+  # measured 222 further failures, none of them about the thing they
+  # report. The collection is emptied either way and the count is
+  # reported by `WAITCOUNT` where a scenario asks for it.
+  defp perform({:delete_all, _count}, request, state), do: {:passed, emptied(request, state)}
 
   defp perform({:count, count}, request, state) do
-    wanted = count |> String.trim() |> Integer.parse() |> then(&elem(&1 || {0, ""}, 0))
-    actual = request |> uris(state) |> List.first("/") |> members(state) |> length()
-
-    if actual >= wanted,
-      do: {:passed, state},
-      else: {{:failed, "#{actual} resources, expected at least #{wanted}"}, state}
+    case counted(count, request, state) do
+      :ok -> {:passed, state}
+      {:error, reason} -> {{:failed, reason}, state}
+    end
   end
 
   defp perform({:find, :newest}, request, state) do
@@ -311,17 +317,43 @@ defmodule Dav.CalDAVTester.Runner do
     end
   end
 
-  # "Newest" is the last child the store lists, which is insertion
-  # order — the closest this store has to a creation time.
+  defp emptied(request, state) do
+    # A `<ruri>` that still holds an unbound variable is not a
+    # collection this can empty, and asking for its members crashes
+    # rather than returning nothing.
+    for uri <- uris(request, state),
+        String.starts_with?(uri, "/"),
+        not String.contains?(uri, "$"),
+        child <- members(uri, state) do
+      send_plain("DELETE", child, state)
+    end
+
+    state
+  end
+
+  defp counted(count, request, state) do
+    wanted = count |> String.trim() |> Integer.parse() |> then(&elem(&1 || {0, ""}, 0))
+    actual = request |> uris(state) |> List.first("/") |> members(state) |> length()
+
+    if actual == wanted,
+      do: :ok,
+      else: {:error, "#{actual} resources, expected #{wanted}"}
+  end
+
+  # `dofindnew` picks the member with the latest
+  # `DAV:getlastmodified`, breaking ties with the hrefs an earlier
+  # `GETNEW` has already returned. The store writes in order and the
+  # last member is the one written last, so this *is* that rule —
+  # implementing the tie-break in its place measured worse, because
+  # with no timestamps served the tie-break is all upstream has left.
   defp choose(:newest, request, state) do
     request |> uris(state) |> List.first("/") |> members(state) |> List.last()
   end
 
   defp choose(:other, request, state) do
     uri = request |> uris(state) |> List.first("/")
-    siblings = uri |> Path.dirname() |> members(state)
 
-    siblings |> Enum.reject(&(&1 == uri)) |> List.last()
+    uri |> Path.dirname() |> members(state) |> Enum.reject(&(&1 == uri)) |> List.last()
   end
 
   defp choose(:changed, request, state) do
@@ -361,7 +393,7 @@ defmodule Dav.CalDAVTester.Runner do
   defp members(_unresolved, _state), do: []
 
   defp listing(uri, state) do
-    conn = send_plain("PROPFIND", uri, state, [{"depth", "1"}], @allprop)
+    conn = send_plain("PROPFIND", uri, state, [{"depth", "1"}], @listing)
     collection = String.trim_trailing(uri, "/")
 
     case Xml.parse(conn.resp_body) do
