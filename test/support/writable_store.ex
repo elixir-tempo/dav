@@ -272,6 +272,21 @@ defmodule Dav.Test.WritableStore do
       end)
   end
 
+  # A store says when each resource was last written, and a client
+  # reading a collection uses it to find what has just arrived —
+  # CalDAVTester's `GETNEW` is exactly that. Wall-clock time cannot
+  # serve here: a scenario writes many resources inside one second and
+  # they would all claim the same instant, so the clock advances a
+  # second per write and the order of writing is the order reported.
+  defp written(agent) do
+    seconds =
+      Agent.get_and_update(pid(agent), fn state ->
+        {Map.get(state, :written, 0) + 1, Map.update(state, :written, 1, &(&1 + 1))}
+      end)
+
+    DateTime.add(~U[2020-01-01 00:00:00Z], seconds, :second)
+  end
+
   defp store(agent, path, body, content_type) do
     existed? = exists?(agent, path)
 
@@ -279,7 +294,8 @@ defmodule Dav.Test.WritableStore do
       path: path,
       content_type: content_type,
       content_length: byte_size(body),
-      etag: ~s("#{:erlang.phash2(body)}")
+      etag: ~s("#{:erlang.phash2(body)}"),
+      modified_at: written(agent)
     }
 
     Agent.update(pid(agent), fn state ->

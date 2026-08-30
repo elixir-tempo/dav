@@ -340,20 +340,18 @@ defmodule Dav.CalDAVTester.Runner do
       else: {:error, "#{actual} resources, expected #{wanted}"}
   end
 
-  # `dofindnew` picks the member with the latest
-  # `DAV:getlastmodified`, breaking ties with the hrefs an earlier
-  # `GETNEW` has already returned. The store writes in order and the
-  # last member is the one written last, so this *is* that rule —
-  # implementing the tie-break in its place measured worse, because
-  # with no timestamps served the tie-break is all upstream has left.
+  # `dofindnew`: the member written most recently, and where several
+  # share that instant the one no earlier `GETNEW` has returned. An
+  # ambiguous choice is no choice — upstream answers nothing rather
+  # than guessing, and so does this.
   defp choose(:newest, request, state) do
-    request |> uris(state) |> List.first("/") |> members(state) |> List.last()
+    request |> uris(state) |> List.first("/") |> latest(state) |> unseen(state)
   end
 
   defp choose(:other, request, state) do
     uri = request |> uris(state) |> List.first("/")
 
-    uri |> Path.dirname() |> members(state) |> Enum.reject(&(&1 == uri)) |> List.last()
+    uri |> Path.dirname() |> latest(state) |> Enum.reject(&(&1 == uri)) |> unseen(state)
   end
 
   defp choose(:changed, request, state) do
@@ -368,12 +366,55 @@ defmodule Dav.CalDAVTester.Runner do
     |> Enum.find(fn uri -> String.contains?(send_plain("GET", uri, state).resp_body, text) end)
   end
 
+  defp unseen([], _state), do: nil
+  defp unseen([single], _state), do: single
+
+  defp unseen(tied, state) do
+    case Enum.reject(tied, &(&1 in Map.get(state, :found, []))) do
+      [one] -> one
+      _none_or_several -> nil
+    end
+  end
+
+  # The members sharing the most recent `DAV:getlastmodified`. A
+  # member without one sorts oldest: it is a collection or a resource
+  # the store does not timestamp, never the thing that just arrived.
+  defp latest(uri, state) do
+    stamped = for {href, at} <- timestamped(uri, state), do: {href, instant(at)}
+
+    case stamped do
+      [] ->
+        []
+
+      stamped ->
+        for {href, at} <- stamped, at == Enum.max(Enum.map(stamped, &elem(&1, 1))), do: href
+    end
+  end
+
+  @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+  # An HTTP-date sorts by its parts, never as text: `Feb` precedes
+  # `Jan` alphabetically, and the weekday it starts with orders
+  # nothing at all.
+  defp instant(text) do
+    case Regex.run(~r/(\d{2}) (\w{3}) (\d{4}) (\d{2}):(\d{2}):(\d{2})/, text) do
+      [_all, day, month, year, hour, minute, second] ->
+        {String.to_integer(year), Enum.find_index(@months, &(&1 == month)) || 0,
+         String.to_integer(day), String.to_integer(hour), String.to_integer(minute),
+         String.to_integer(second)}
+
+      _unreadable ->
+        {0, 0, 0, 0, 0, 0}
+    end
+  end
+
   # `GETNEW` exists to name a resource for later requests. The URI it
   # chose goes into whatever `graburi` asks for *and* into the bare
   # `$`, which the suite uses as "the resource the last GETNEW found"
   # — 131 requests address it that way, and without the binding each
   # is an unresolvable URI rather than a test.
   defp remember(request, uri, state) do
+    state = Map.update(state, :found, [uri], &[uri | &1])
     state = bind(state, "$", uri)
 
     Enum.reduce(request.grabs, state, fn
@@ -391,6 +432,39 @@ defmodule Dav.CalDAVTester.Runner do
   end
 
   defp members(_unresolved, _state), do: []
+
+  @modified ~s(<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:getlastmodified/></D:prop></D:propfind>)
+
+  defp timestamped(uri, state) do
+    if String.starts_with?(uri, "/") and not String.contains?(uri, "$"),
+      do: stamps(uri, state),
+      else: []
+  end
+
+  defp stamps(uri, state) do
+    conn = send_plain("PROPFIND", uri, state, [{"depth", "1"}], @modified)
+    collection = String.trim_trailing(uri, "/")
+
+    case Xml.parse(conn.resp_body) do
+      {:ok, document} ->
+        for element <- responses(document),
+            href = String.trim_trailing(text_of(element, "href"), "/"),
+            href != collection,
+            do: {href, text_of(element, "getlastmodified")}
+
+      _unreadable ->
+        []
+    end
+  end
+
+  defp responses(document), do: descendants(document, "response")
+
+  defp text_of(element, name) do
+    case Enum.find(descendants(element, name), & &1) do
+      nil -> ""
+      found -> String.trim(found.text)
+    end
+  end
 
   defp listing(uri, state) do
     conn = send_plain("PROPFIND", uri, state, [{"depth", "1"}], @listing)
