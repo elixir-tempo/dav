@@ -22,6 +22,7 @@ defmodule Dav.Cal.Post do
 
   alias Dav.Cal.Outbox
   alias Dav.Cal.Sharing
+  alias Dav.Xml
 
   @impl Dav.Web.Method
   def call(conn, path, options) do
@@ -34,7 +35,22 @@ defmodule Dav.Cal.Post do
     handler(body).call(conn, path, Map.put(options, :body, body))
   end
 
+  # A `POST` is a sharing request when its body is one, and scheduling
+  # otherwise. Routing on the body's first character instead sends
+  # every XML body to the sharing handler — including a client's
+  # mis-typed scheduling `POST`, which then hears "not a sharing
+  # document" rather than the scheduling precondition that says what
+  # it actually got wrong.
+  @namespace "http://calendarserver.org/ns/"
+  @sharing ~w(share invite-reply)
+
   defp handler(body) do
-    if String.starts_with?(String.trim_leading(body), "<"), do: Sharing, else: Outbox
+    with true <- String.starts_with?(String.trim_leading(body), "<"),
+         {:ok, %{name: {@namespace, local}}} <- Xml.parse(body),
+         true <- local in @sharing do
+      Sharing
+    else
+      _not_a_sharing_document -> Outbox
+    end
   end
 end

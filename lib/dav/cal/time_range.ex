@@ -128,6 +128,150 @@ defmodule Dav.Cal.TimeRange do
   end
 
   @doc """
+  Whether an alarm fires inside a window.
+
+  RFC 4791 section 9.9: a `time-range` on a `VALARM` is tested against
+  when the alarm *goes off*, which the alarm does not state. It says
+  how long before or after its parent it fires, so the instant is
+  computed from the parent's start — or end, when the trigger says so
+  — and an alarm that repeats fires more than once.
+
+  ### Arguments
+
+  * `alarm` is the `VALARM` component.
+
+  * `parent` is the `VEVENT` or `VTODO` holding it.
+
+  * `range` is `{start, finish}`, either of which may be `nil`.
+
+  * `floating` is the time zone to read a floating parent time in.
+
+  ### Returns
+
+  * `true` when any firing falls inside the window.
+
+  ### Examples
+
+      iex> ics = "BEGIN:VCALENDAR\\r\\nBEGIN:VEVENT\\r\\nDTSTART:20260615T090000Z\\r\\nBEGIN:VALARM\\r\\nTRIGGER:-PT30M\\r\\nEND:VALARM\\r\\nEND:VEVENT\\r\\nEND:VCALENDAR\\r\\n"
+      iex> {:ok, calendar} = Dav.Cal.ICalendar.parse(ics)
+      iex> [event] = calendar.components
+      iex> [alarm] = event.components
+      iex> Dav.Cal.TimeRange.alarm_overlaps?(alarm, event, {"20260615T082000Z", "20260615T084000Z"})
+      true
+
+      iex> ics = "BEGIN:VCALENDAR\\r\\nBEGIN:VEVENT\\r\\nDTSTART:20260615T090000Z\\r\\nBEGIN:VALARM\\r\\nTRIGGER:-PT30M\\r\\nEND:VALARM\\r\\nEND:VEVENT\\r\\nEND:VCALENDAR\\r\\n"
+      iex> {:ok, calendar} = Dav.Cal.ICalendar.parse(ics)
+      iex> [event] = calendar.components
+      iex> [alarm] = event.components
+      iex> Dav.Cal.TimeRange.alarm_overlaps?(alarm, event, {"20260615T100000Z", "20260615T110000Z"})
+      false
+
+  """
+  @spec alarm_overlaps?(
+          ICalendar.component(),
+          ICalendar.component(),
+          {String.t() | nil, String.t() | nil},
+          String.t() | nil
+        ) :: boolean()
+  def alarm_overlaps?(alarm, parent, range, floating \\ nil)
+
+  def alarm_overlaps?(alarm, parent, {from, to}, floating) do
+    with {:ok, start} <- moment(from),
+         {:ok, finish} <- moment(to) do
+      alarm
+      |> firings(parent, floating)
+      |> Enum.any?(&instance_overlaps?(:instant, &1, start, finish))
+    else
+      _unreadable -> false
+    end
+  end
+
+  # Every instant the alarm goes off: the first, and then one more for
+  # each repeat.
+  defp firings(alarm, parent, floating) do
+    for first <- first_firing(alarm, parent, floating),
+        instant <- [first | repeats(alarm, first)],
+        do: instant
+  end
+
+  defp first_firing(alarm, parent, floating) do
+    case property(alarm, "TRIGGER") do
+      nil -> []
+      trigger -> fired(trigger, parent, floating)
+    end
+  end
+
+  # An absolute trigger names its own instant; a relative one is an
+  # offset from the parent, by default from its start.
+  defp fired(%{value: value, parameters: parameters}, parent, floating) do
+    if Map.get(parameters, "VALUE") == "DATE-TIME" do
+      case moment(value, zone_of(parameters, value, floating)) do
+        {:ok, instant} -> [instant]
+        _unreadable -> []
+      end
+    else
+      parent
+      |> anchors(Map.get(parameters, "RELATED", "START"), floating)
+      |> Enum.map(&shifted(&1, value))
+      |> Enum.reject(&is_nil/1)
+    end
+  end
+
+  # One anchor per occurrence. A daily meeting with a warning half an
+  # hour before rings every day, not only on the first — computing the
+  # trigger from `DTSTART` alone finds the alarm once and misses every
+  # later instance.
+  defp anchors(parent, related, floating) do
+    case property_value(parent, "DTSTART", floating) do
+      {:ok, dtstart} -> parent |> starts(dtstart) |> Enum.map(&anchored(&1, parent, related))
+      :error -> []
+    end
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp anchored(instance, parent, "END") do
+    case ending(extent(parent, instance, nil), instance) do
+      %Tempo{} = finish -> finish
+      _instant -> instance
+    end
+  end
+
+  defp anchored(instance, _parent, _start), do: instance
+
+  defp repeats(alarm, first) do
+    with %{value: count} <- property(alarm, "REPEAT"),
+         {times, _rest} when times > 0 <- Integer.parse(count),
+         %{value: gap} <- property(alarm, "DURATION") do
+      1..times
+      |> Enum.reduce({[], first}, fn _each, seen -> again(seen, gap) end)
+      |> elem(0)
+    else
+      _once_only -> []
+    end
+  end
+
+  defp again({seen, previous}, gap) do
+    case shifted(previous, gap) do
+      nil -> {seen, previous}
+      next -> {seen ++ [next], next}
+    end
+  end
+
+  # The duration is read before it is applied: `Tempo.shift/2` wants a
+  # parsed value, and an alarm's trigger is commonly negative — it
+  # fires *before* the thing it warns about.
+  defp shifted(instant, duration) do
+    with {:ok, parsed} <- Tempo.from_iso8601(duration),
+         %Tempo{} = moved <- Tempo.shift(instant, parsed) do
+      moved
+    else
+      _unshiftable -> nil
+    end
+  rescue
+    _bad_duration -> nil
+  end
+
+  @doc """
   The periods a component is busy for, clipped to the range.
 
   `overlaps?/2` answers whether a component is in the window;
@@ -296,7 +440,7 @@ defmodule Dav.Cal.TimeRange do
   end
 
   defp expand(rule, dtstart) do
-    with {:ok, recurrence} <- RRule.parse(rule, from: dtstart),
+    with {:ok, recurrence} <- RRule.parse(bounded(rule), from: dtstart),
          {:ok, set} <- Tempo.to_interval_set(recurrence) do
       set
       |> IntervalSet.members()
@@ -309,6 +453,15 @@ defmodule Dav.Cal.TimeRange do
     end
   rescue
     _unreadable -> [dtstart]
+  end
+
+  # A rule with neither `COUNT` nor `UNTIL` runs for ever, and an
+  # unbounded recurrence cannot be turned into a set of intervals at
+  # all — which left a monthly meeting looking like a single event on
+  # one day. The horizon is applied as a count so that the rule can be
+  # expanded; it is the same bound the expansion is truncated to.
+  defp bounded(rule) do
+    if rule =~ ~r/(^|;)\s*(COUNT|UNTIL)=/i, do: rule, else: rule <> ";COUNT=#{@horizon}"
   end
 
   defp instance_overlaps?(extent, instance, start, finish) do

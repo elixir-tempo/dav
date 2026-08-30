@@ -165,9 +165,20 @@ defmodule Dav.Web.Principal do
     def run(%Resource{}, _body, depth, _options) when depth != 0, do: {:error, :malformed}
 
     def run(%Resource{} = resource, body, _depth, options) do
-      with {:ok, document} <- Xml.parse(body) do
+      with {:ok, document} <- Xml.parse(body),
+           :ok <- shallow(document) do
         {:ok, [Principal.expand(resource, document, options)]}
       end
+    end
+
+    # One level of expansion, not a tree. Each `DAV:property` inside a
+    # `DAV:property` names what to read from the resources the outer
+    # one points at; a third level asks the server to follow hrefs
+    # found in *those* properties, which this report does not do —
+    # and saying so is more use to a client than an answer quietly
+    # missing the part it asked for.
+    defp shallow(document) do
+      if Principal.nested?(document), do: {:error, :not_implemented}, else: :ok
     end
   end
 
@@ -420,6 +431,39 @@ defmodule Dav.Web.Principal do
       "</D:description>",
       "</D:principal-search-property>"
     ]
+  end
+
+  @doc """
+  Whether an `expand-property` body asks for more than one level.
+
+  ### Arguments
+
+  * `document` is the parsed `DAV:expand-property` body.
+
+  ### Returns
+
+  * `true` when a `DAV:property` three deep asks the server to follow
+    hrefs found in an already-expanded property, and `false`
+    otherwise.
+
+  ### Examples
+
+      iex> body = ~s(<?xml version="1.0"?><D:expand-property xmlns:D="DAV:"><D:property name="a"><D:property name="b"/></D:property></D:expand-property>)
+      iex> {:ok, document} = Dav.Xml.parse(body)
+      iex> Dav.Web.Principal.nested?(document)
+      false
+
+      iex> body = ~s(<?xml version="1.0"?><D:expand-property xmlns:D="DAV:"><D:property name="a"><D:property name="b"><D:property name="c"/></D:property></D:property></D:expand-property>)
+      iex> {:ok, document} = Dav.Xml.parse(body)
+      iex> Dav.Web.Principal.nested?(document)
+      true
+
+  """
+  @spec nested?(Xml.element()) :: boolean()
+  def nested?(document) do
+    Enum.any?(children(document, "property"), fn outer ->
+      Enum.any?(children(outer, "property"), &(children(&1, "property") != []))
+    end)
   end
 
   @doc """

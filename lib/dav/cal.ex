@@ -21,6 +21,7 @@ defmodule Dav.Cal do
 
   """
 
+  alias Dav.Cal.ICalendar
   alias Dav.Cal.Selection
   alias Dav.Web.Properties
   alias Dav.Web.Resource
@@ -50,6 +51,45 @@ defmodule Dav.Cal do
   """
   @spec calendar() :: Xml.qname()
   def calendar, do: {Xml.caldav(), "calendar"}
+
+  @doc """
+  Whether a value is a usable `CALDAV:calendar-timezone`.
+
+  RFC 4791 section 5.2.2: the property "MUST contain a single
+  VTIMEZONE component". A calendar carrying events as well is not a
+  time zone definition, and a server that stored one would have to
+  decide later which parts of it to ignore.
+
+  ### Arguments
+
+  * `value` is the property value as the client sent it.
+
+  ### Returns
+
+  * `true` when the value parses as iCalendar holding nothing but
+    `VTIMEZONE` components, and `false` otherwise.
+
+  ### Examples
+
+      iex> Dav.Cal.timezone?("BEGIN:VCALENDAR\r\nBEGIN:VTIMEZONE\r\nTZID:UTC\r\nEND:VTIMEZONE\r\nEND:VCALENDAR\r\n")
+      true
+
+      iex> Dav.Cal.timezone?("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+      false
+
+  """
+  @spec timezone?(term()) :: boolean()
+  def timezone?(value) when is_binary(value) do
+    case ICalendar.parse(value) do
+      {:ok, %{components: [_ | _] = components}} ->
+        Enum.all?(components, &(&1.name == "VTIMEZONE"))
+
+      _unreadable ->
+        false
+    end
+  end
+
+  def timezone?(_other), do: false
 
   @doc """
   Whether a resource is a calendar collection.

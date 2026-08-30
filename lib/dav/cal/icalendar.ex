@@ -101,7 +101,7 @@ defmodule Dav.Cal.ICalendar do
   defp content_line(property) do
     parameters =
       Enum.map_join(property.parameters, "", fn {name, value} ->
-        ";" <> name <> "=" <> value
+        ";" <> name <> "=" <> encode_parameter(value)
       end)
 
     property.name <> parameters <> ":" <> encode(property)
@@ -288,9 +288,31 @@ defmodule Dav.Cal.ICalendar do
 
   defp parameter(text) do
     case String.split(text, "=", parts: 2) do
-      [name, value] -> {String.upcase(name), unquote_value(value)}
+      [name, value] -> {String.upcase(name), value |> unquote_value() |> decode_parameter()}
       [name] -> {String.upcase(name), ""}
     end
+  end
+
+  # RFC 6868. A parameter value cannot hold a newline, a double quote
+  # or a colon, so those are written as `^n`, `^'` and — for a literal
+  # circumflex — `^^`. Anything else after a `^` is not an escape and
+  # stands as written, which is what lets a value containing one stray
+  # `^` survive being read and written again.
+  defp decode_parameter(value), do: decode_parameter(value, "")
+
+  defp decode_parameter("", seen), do: seen
+  defp decode_parameter("^n" <> rest, seen), do: decode_parameter(rest, seen <> "\n")
+  defp decode_parameter("^'" <> rest, seen), do: decode_parameter(rest, seen <> "\"")
+  defp decode_parameter("^^" <> rest, seen), do: decode_parameter(rest, seen <> "^")
+
+  defp decode_parameter(<<character::utf8, rest::binary>>, seen),
+    do: decode_parameter(rest, seen <> <<character::utf8>>)
+
+  defp encode_parameter(value) do
+    value
+    |> String.replace("^", "^^")
+    |> String.replace("\n", "^n")
+    |> String.replace("\"", "^'")
   end
 
   defp unquote_value(<<?", rest::binary>>) do

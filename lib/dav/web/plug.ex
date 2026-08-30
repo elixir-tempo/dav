@@ -54,6 +54,10 @@ defmodule Dav.Web.Plug do
     so an anonymous client is told to authenticate rather than that
     the resource is forbidden to it.
 
+  * `:compliance` lists the compliance classes to advertise in the
+    `DAV` header beyond `1` — `calendar-access` and the rest. A class
+    is a promise about behaviour, so the deployment states it.
+
   * `:extensions` names the `X-` properties and parameters that
     travel with a scheduling message. Which extensions are shared
     rather than private is a matter of local agreement between
@@ -89,9 +93,19 @@ defmodule Dav.Web.Plug do
       principal: Keyword.get(options, :principal),
       authentication: Keyword.get(options, :authentication, :optional),
       extensions: Keyword.get(options, :extensions),
+      compliance: Keyword.get(options, :compliance, []),
       methods: Map.new(Keyword.get(options, :methods, []))
     }
   end
+
+  # What the `DAV` header advertises. `1` is this server; anything
+  # further is the deployment's to state, because a compliance class
+  # is a promise about behaviour the base cannot check — advertising
+  # `calendar-access` without the CalDAV extension installed tells a
+  # client to send requests nothing will answer.
+  defp compliance(%{compliance: []}), do: "1"
+
+  defp compliance(%{compliance: classes}), do: Enum.join(["1" | classes], ", ")
 
   # The `Allow` header is built from what the store can actually do.
   # A read-only store gets a read-only server, and never advertises a
@@ -118,7 +132,22 @@ defmodule Dav.Web.Plug do
 
   @impl Plug
   def call(%Plug.Conn{} = conn, %{} = options) do
-    if authenticated?(options), do: dispatch(conn.method, conn, options), else: challenge(conn)
+    if authenticated?(options),
+      do: dispatch(conn.method, conn, scoped(options)),
+      else: challenge(conn)
+  end
+
+  # Asked once, at the edge, so every callback below sees the same
+  # context. A store that holds shared data needs to know who is
+  # asking — a calendar shared between two people has a part they both
+  # see and a part each sees alone — and only the store knows how to
+  # say "the same store, as seen by this person".
+  defp scoped(%{store: store, context: context} = options) do
+    if Store.supports?(store, :scope) do
+      %{options | context: store.scope(context, Map.get(options, :principal))}
+    else
+      options
+    end
   end
 
   # A deployment that requires authentication answers `401` with a
@@ -137,7 +166,7 @@ defmodule Dav.Web.Plug do
 
   defp dispatch("OPTIONS", conn, options) do
     conn
-    |> put_resp_header("dav", "1")
+    |> put_resp_header("dav", compliance(options))
     |> put_resp_header("allow", allowed(options))
     |> put_resp_header("ms-author-via", "DAV")
     |> send_resp(200, "")
@@ -219,7 +248,7 @@ defmodule Dav.Web.Plug do
 
   defp put(conn, options) do
     {:ok, body, conn} = read_body(conn)
-    type = conn |> get_req_header("content-type") |> List.first()
+    type = conn |> get_req_header("content-type") |> List.first() |> media_type()
     path = Store.segments(conn.request_path)
 
     with :ok <- capable(options, :put),
@@ -262,6 +291,20 @@ defmodule Dav.Web.Plug do
     end
   end
 
+  # The media type as the server states it. RFC 9110 allows optional
+  # whitespace before a parameter, so `text/calendar; charset=utf-8`
+  # and `text/calendar;charset=utf-8` are the same type written two
+  # ways — and a client that stored one and read back the other has no
+  # way to tell whether the server changed it.
+  defp media_type(nil), do: nil
+
+  defp media_type(type) do
+    case String.split(type, ";") do
+      [only] -> String.trim(only)
+      [base | parameters] -> Enum.map_join([base | parameters], ";", &String.trim/1)
+    end
+  end
+
   # A collection is not a document: `PUT` over one would replace a
   # whole tree with a body, so it is refused rather than obeyed.
   defp writable(path, %{store: store, context: context}) do
@@ -271,8 +314,38 @@ defmodule Dav.Web.Plug do
     end
   end
 
+  defp held_by(%Resource{collection?: false}, _options), do: []
+
+  # All the way down. A calendar home may hold calendars inside
+  # collections, and deleting the outer one takes every invitation
+  # under it with it — the attendees have to hear about all of them,
+  # not only those that happened to sit at the top.
+  defp held_by(%Resource{} = collection, %{store: store, context: context} = options) do
+    case store.children(collection, context) do
+      {:ok, children} ->
+        {nested, objects} = Enum.split_with(children, & &1.collection?)
+
+        held =
+          for child <- objects,
+              body = contents(child, options),
+              is_binary(body),
+              do: {child, body, collection}
+
+        held ++ Enum.flat_map(nested, &held_by(&1, options))
+
+      _nothing ->
+        []
+    end
+  end
+
   defp removed(resource, body, options) do
-    collection = parent(resource.path, options)
+    withdrawn(resource, body, parent(resource.path, options), options)
+  end
+
+  # The collection is named rather than looked up: by the time a
+  # member of a deleted calendar is reported, the calendar it belonged
+  # to is gone, and a hook asked whether it applies to `nil` says no.
+  defp withdrawn(resource, body, collection, options) do
     change = %{resource: resource, body: body, previous: body, collection: collection}
 
     for hook <- options.hooks,
@@ -456,8 +529,20 @@ defmodule Dav.Web.Plug do
          # read, and a hook that must know what the resource held has
          # no way to find out.
          held = contents(resource, options) || "",
+         members = held_by(resource, options),
          :ok <- options.store.delete(resource, options.context) do
       removed(resource, held, options)
+
+      # A collection has no body of its own, so deleting one would tell
+      # the hooks nothing about what it held. Deleting a calendar full
+      # of invitations has to withdraw every one of them, and the
+      # attendees only learn of it through the objects that were in
+      # there.
+      # Each member is reported against the calendar it was actually
+      # in, not the collection the request named: a hook asked about
+      # the folder above a calendar says it does not apply, and the
+      # invitations inside would go unwithdrawn.
+      for {member, body, holder} <- members, do: withdrawn(member, body, holder, options)
       send_resp(conn, 204, "")
     else
       {:error, :unsupported} -> refuse(conn, options)
@@ -622,6 +707,13 @@ defmodule Dav.Web.Plug do
       {:error, :forbidden} ->
         send_resp(conn, 403, "")
 
+      # A report this server understands but cannot carry out in the
+      # form asked for. "Not implemented" says so; refusing it as
+      # malformed would have the client correcting a body that is
+      # perfectly well formed.
+      {:error, :not_implemented} ->
+        send_resp(conn, 501, "")
+
       {:error, {_namespace, _local} = failed} ->
         precondition(conn, failed)
     end
@@ -738,7 +830,13 @@ defmodule Dav.Web.Plug do
   end
 
   defp elsewhere(%URI{path: nil}, _conn), do: {:error, :no_destination}
-  defp elsewhere(%URI{path: path}, _conn), do: {:ok, Store.segments(path)}
+
+  # A header value is escaped once as a header and once as a URI, so
+  # the path arrives with one more layer than a request line carries:
+  # `3%2520a.ics` in a `Destination` names the same resource a request
+  # for `3%20a.ics` does.
+  defp elsewhere(%URI{path: path}, _conn),
+    do: {:ok, Enum.map(Store.segments(path), &URI.decode/1)}
 
   # The new resource's URI, taken from the `Destination` the client
   # sent rather than rebuilt from the parsed path: the client wrote it,
@@ -859,8 +957,23 @@ defmodule Dav.Web.Plug do
 
     multistatus(
       conn,
-      Enum.map(resources, &response(&1, request, reports, dead(&1, options)))
+      Enum.map(resources, &response(typed(&1, options), request, reports, dead(&1, options)))
     )
+  end
+
+  # What a resource *is*, once the extensions have had their say. A
+  # store knows it holds a calendar; only the extension that
+  # implemented sharing knows that this particular calendar is one
+  # shared from somebody else's home.
+  defp typed(resource, options) do
+    collection = parent(resource.path, options)
+
+    extra =
+      options.hooks
+      |> Enum.filter(&function_exported?(&1, :types, 3))
+      |> Enum.flat_map(& &1.types(resource, collection, options))
+
+    %{resource | types: Enum.uniq(resource.types ++ extra)}
   end
 
   # Dead properties are whatever a client stored here, and the server
@@ -870,8 +983,15 @@ defmodule Dav.Web.Plug do
   # depends on the object's *content*, which only the extension that
   # understands calendars can read, and computing it here would put
   # knowledge of CalDAV back into the base.
+  # Kept apart on purpose. A *stored* value is whatever a client
+  # PROPPATCHed, and must never shadow the server's own account of a
+  # protected property. A *contributed* one comes from an extension —
+  # part of this server — and is exactly the server's own account: it
+  # is the only thing that knows what a calendar's free-busy set is.
+  # Merging the two would force a choice between letting clients
+  # forge protected properties and letting extensions state none.
   defp dead(resource, options) do
-    stored(resource, options) |> Map.merge(contributed(resource, options))
+    {stored(resource, options), contributed(resource, options)}
   end
 
   defp stored(resource, %{store: store, context: context}) do
@@ -914,7 +1034,7 @@ defmodule Dav.Web.Plug do
   end
 
   defp response(%Resource{} = resource, :allprop, reports, dead) do
-    everything = Properties.all(resource) ++ [report_set(reports)] ++ Map.to_list(dead)
+    everything = Properties.all(resource) ++ [report_set(reports)] ++ listed(dead)
 
     {Resource.href(resource), [{"HTTP/1.1 200 OK", everything}]}
   end
@@ -923,8 +1043,7 @@ defmodule Dav.Web.Plug do
   # is empty by design rather than by omission.
   defp response(%Resource{} = resource, :propname, reports, dead) do
     names =
-      for {qname, _value} <-
-            Properties.all(resource) ++ [report_set(reports)] ++ Map.to_list(dead),
+      for {qname, _value} <- Properties.all(resource) ++ [report_set(reports)] ++ listed(dead),
           do: {qname, nil}
 
     {Resource.href(resource), [{"HTTP/1.1 200 OK", names}]}
@@ -961,8 +1080,15 @@ defmodule Dav.Web.Plug do
   # it replaces the default the server would otherwise derive from the
   # path. Protected properties are the other way round — nothing a
   # client stored may shadow the server's own answer.
-  defp fetch(resource, qname, _reports, dead) do
-    case Map.fetch(dead, qname) do
+  defp fetch(resource, qname, _reports, {stored, contributed}) do
+    case Map.fetch(contributed, qname) do
+      {:ok, value} -> {:ok, value}
+      :error -> from_store(resource, qname, stored)
+    end
+  end
+
+  defp from_store(resource, qname, stored) do
+    case Map.fetch(stored, qname) do
       {:ok, value} ->
         if Properties.protected?(qname), do: live(resource, qname), else: {:ok, value}
 
@@ -970,6 +1096,8 @@ defmodule Dav.Web.Plug do
         live(resource, qname)
     end
   end
+
+  defp listed({stored, contributed}), do: Map.to_list(Map.merge(stored, contributed))
 
   defp live(resource, qname), do: Properties.fetch(resource, qname)
 

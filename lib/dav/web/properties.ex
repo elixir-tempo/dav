@@ -272,6 +272,11 @@ defmodule Dav.Web.Properties do
 
   # RFC 6638 deprecated `calendar-free-busy-set`; a server that still
   # reports it must not let it be written.
-  def protected?({"urn:ietf:params:xml:ns:caldav", "calendar-free-busy-set"}), do: true
+  # `calendar-free-busy-set` is the client's own statement of which
+  # calendars count towards its busy time — RFC 4791 section 6.2.1
+  # makes it settable, and RFC 6638 deprecated it rather than
+  # protecting it. A server that reports a default still has to let
+  # the value be replaced.
+  def protected?({"urn:ietf:params:xml:ns:caldav", "calendar-free-busy-set"}), do: false
   def protected?({_namespace, _local}), do: false
 end

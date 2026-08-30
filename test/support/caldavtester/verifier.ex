@@ -139,7 +139,9 @@ defmodule Dav.CalDAVTester.Verifier do
       if same?(strip(actual, filters), strip(wanted, filters)) do
         :passed
       else
-        {:failed, "XML differs from #{args |> Map.get("filepath", []) |> List.first()}"}
+        {:failed,
+         "XML differs from #{args |> Map.get("filepath", []) |> List.first()}: " <>
+           difference(strip(actual, filters), strip(wanted, filters))}
       end
     end
   end
@@ -353,9 +355,52 @@ defmodule Dav.CalDAVTester.Verifier do
     shape(left) == shape(right)
   end
 
-  defp shape(%{name: name, attributes: attributes, text: text, children: children}) do
-    {name, declared(attributes), String.trim(text), children |> Enum.map(&shape/1) |> Enum.sort()}
+  # Which part differs, not merely that something does. A sharing
+  # notification is thirty elements deep and naming the first mismatch
+  # is the difference between a fix and a guess.
+  defp difference(left, right) do
+    got = flattened(left, "")
+    wanted = flattened(right, "")
+
+    missing = wanted -- got
+    unexpected = got -- wanted
+
+    "missing #{inspect(Enum.take(missing, 3))}, unexpected #{inspect(Enum.take(unexpected, 3))}"
   end
+
+  defp flattened(%{name: name, text: text, children: children} = element, prefix) do
+    attributes =
+      element.attributes
+      |> declared()
+      |> Enum.sort()
+      |> Enum.map_join(",", fn {key, value} -> "#{key}=#{value}" end)
+
+    here =
+      prefix <>
+        "/" <>
+        elem(name, 0) <>
+        ":" <> elem(name, 1) <> if(attributes == "", do: "", else: "[#{attributes}]")
+
+    leaf =
+      case located(name, text) do
+        "" -> [here]
+        value -> [here <> "=" <> value]
+      end
+
+    leaf ++ Enum.flat_map(children, &flattened(&1, here))
+  end
+
+  defp shape(%{name: name, attributes: attributes, text: text, children: children}) do
+    {name, declared(attributes), located(name, text),
+     children |> Enum.map(&shape/1) |> Enum.sort()}
+  end
+
+  # A collection is named with or without its trailing slash, and both
+  # spellings address it. Comparing them as different text makes a
+  # server fail for a punctuation choice the specification leaves open.
+  defp located({"DAV:", "href"}, text), do: text |> String.trim() |> String.trim_trailing("/")
+
+  defp located(_name, text), do: String.trim(text)
 
   # Namespace declarations are not content. `<D:href>` and
   # `<href xmlns="DAV:">` are the same element written two ways, and
@@ -439,10 +484,57 @@ defmodule Dav.CalDAVTester.Verifier do
         property.name == "FREEBUSY",
         type = Map.get(property.parameters, "FBTYPE", "BUSY"),
         period <- String.split(property.value, ","),
+        instants = spanned(period),
         reduce: %{} do
-      found -> Map.update(found, type, [period], &[period | &1])
+      found -> Map.update(found, type, [instants], &[instants | &1])
     end
   end
+
+  # RFC 5545 section 3.3.9 writes a period either as two instants or
+  # as a start and a duration, and both name the same span. Compared
+  # as text they never match, so both are read into the same form
+  # before the sets are compared.
+  defp spanned(period) do
+    case String.split(period, "/", parts: 2) do
+      [start, "P" <> _rest = duration] -> start <> "/" <> shifted(start, duration)
+      _two_instants -> period
+    end
+  end
+
+  defp shifted(start, duration) do
+    with {:ok, from} <- instant(start),
+         {:ok, seconds} <- lasting(duration) do
+      from |> DateTime.add(seconds, :second) |> Calendar.strftime("%Y%m%dT%H%M%SZ")
+    else
+      _unreadable -> duration
+    end
+  end
+
+  defp instant(<<y::binary-4, m::binary-2, d::binary-2, "T", rest::binary>>) do
+    with <<hh::binary-2, mm::binary-2, ss::binary-2, _zone::binary>> <- rest,
+         {:ok, date} <- Date.from_iso8601("#{y}-#{m}-#{d}"),
+         {:ok, time} <- Time.from_iso8601("#{hh}:#{mm}:#{ss}") do
+      DateTime.new(date, time, "Etc/UTC")
+    else
+      _unreadable -> :error
+    end
+  end
+
+  defp instant(_other), do: :error
+
+  @units %{"D" => 86_400, "W" => 604_800, "H" => 3600, "M" => 60, "S" => 1}
+
+  defp lasting("P" <> rest) do
+    case Regex.scan(~r/(\d+)([DWHMS])/, rest) do
+      [] ->
+        :error
+
+      matched ->
+        {:ok, Enum.sum(for [_all, n, u] <- matched, do: String.to_integer(n) * @units[u])}
+    end
+  end
+
+  defp lasting(_other), do: :error
 
   @prefixes %{
     "DAV:" => "D",
@@ -511,13 +603,20 @@ defmodule Dav.CalDAVTester.Verifier do
   defp split_path(path) do
     [names | tests] = String.split(path, "[")
 
-    steps =
-      names
-      |> String.trim_leading("/")
-      |> String.split("/")
-      |> Enum.reject(&(&1 == ""))
+    steps = names |> String.trim_leading("/") |> segments() |> Enum.reject(&(&1 == ""))
 
     {steps, Enum.map(tests, &String.trim_trailing(&1, "]"))}
+  end
+
+  # A step is Clark notation, and a namespace URI has `/` in it. Only
+  # the slashes *between* steps separate anything — splitting on all
+  # of them turns `{http://calendarserver.org/ns/}invite` into pieces
+  # that name no element.
+  defp segments(names) do
+    case Regex.scan(~r/\{[^}]*\}[^\/]*/, names) do
+      [] -> String.split(names, "/")
+      matched -> List.flatten(matched)
+    end
   end
 
   # The first step names the node already in hand rather than one of
@@ -679,6 +778,7 @@ defmodule Dav.CalDAVTester.Verifier do
     for href <- Map.get(args, name, []), into: MapSet.new() do
       href
       |> then(&if String.starts_with?(&1, "/"), do: &1, else: Path.join(prefix, &1))
+      |> URI.decode()
       |> String.trim_trailing("/")
     end
   end
@@ -691,11 +791,22 @@ defmodule Dav.CalDAVTester.Verifier do
   defp propfind_items(args, responses) do
     ok_specs = specifications(args, "okprops")
     bad_specs = specifications(args, "badprops")
+    responses = Enum.reject(responses, &ignored?(&1, args))
 
     case single(args, "count") do
       nil -> each(responses, &properties_match(&1, ok_specs, bad_specs))
       counted -> compare(length(responses), counted, "responses")
     end
+  end
+
+  # A test names the hrefs it is not asking about. The collection a
+  # `Depth: 1` PROPFIND was made against is the usual one: it answers
+  # for itself as well as its members, and it has none of the
+  # properties the members are being checked for.
+  defp ignored?(%{href: href}, args) do
+    args
+    |> Map.get("ignore", [])
+    |> Enum.any?(&(String.trim_trailing(&1, "/") == href))
   end
 
   # Stops at the first response that does not match, the way upstream

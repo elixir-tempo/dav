@@ -67,7 +67,7 @@ defmodule Dav.Cal.FreeBusyTest do
     assert conn.status == 200
     assert {"content-type", "text/calendar; charset=utf-8"} in conn.resp_headers
     assert conn.resp_body =~ "BEGIN:VFREEBUSY"
-    assert conn.resp_body =~ "FREEBUSY;FBTYPE=BUSY:20260615T090000Z/20260615T100000Z"
+    assert conn.resp_body =~ "FREEBUSY;FBTYPE=BUSY:20260615T090000Z/PT1H"
   end
 
   test "reports when, and never what", context do
@@ -86,7 +86,7 @@ defmodule Dav.Cal.FreeBusyTest do
     refute body =~ "Divorce"
     refute body =~ "bank statements"
     refute body =~ "Chancery"
-    assert body =~ "20260615T090000Z/20260615T100000Z"
+    assert body =~ "20260615T090000Z/PT1H"
   end
 
   test "an empty window still returns a VFREEBUSY, with no FREEBUSY property", context do
@@ -136,7 +136,7 @@ defmodule Dav.Cal.FreeBusyTest do
     body = query(context.options).resp_body
 
     # Two back-to-back meetings are one stretch of being busy.
-    assert body =~ "FREEBUSY;FBTYPE=BUSY:20260615T090000Z/20260615T110000Z"
+    assert body =~ "FREEBUSY;FBTYPE=BUSY:20260615T090000Z/PT2H"
   end
 
   test "periods of different types are kept apart", context do
@@ -150,8 +150,8 @@ defmodule Dav.Cal.FreeBusyTest do
 
     body = query(context.options).resp_body
 
-    assert body =~ "FBTYPE=BUSY:20260615T090000Z/20260615T120000Z"
-    assert body =~ "FBTYPE=BUSY-TENTATIVE:20260615T100000Z/20260615T110000Z"
+    assert body =~ "FBTYPE=BUSY:20260615T090000Z/PT3H"
+    assert body =~ "FBTYPE=BUSY-TENTATIVE:20260615T100000Z/PT1H"
   end
 
   test "a period is clipped to the window asked about", context do
@@ -159,7 +159,7 @@ defmodule Dav.Cal.FreeBusyTest do
 
     body = query(context.options).resp_body
 
-    assert body =~ "FREEBUSY;FBTYPE=BUSY:20260601T000000Z/20260701T000000Z"
+    assert body =~ "FREEBUSY;FBTYPE=BUSY:20260601T000000Z/P30D"
   end
 
   test "a recurrence contributes each of its instances", context do
@@ -171,9 +171,9 @@ defmodule Dav.Cal.FreeBusyTest do
 
     body = unfolded(query(context.options))
 
-    assert body =~ "20260601T090000Z/20260601T100000Z"
-    assert body =~ "20260608T090000Z/20260608T100000Z"
-    assert body =~ "20260615T090000Z/20260615T100000Z"
+    assert body =~ "20260601T090000Z/PT1H"
+    assert body =~ "20260608T090000Z/PT1H"
+    assert body =~ "20260615T090000Z/PT1H"
   end
 
   test "run against a calendar object, not a collection, is forbidden", context do

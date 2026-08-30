@@ -59,6 +59,7 @@ defmodule Dav.Cal.Query do
   def run(%Resource{} = target, body, depth, options) do
     with {:ok, document} <- Xml.parse(body),
          :ok <- Selection.supported(calendar_data(document)),
+         :ok <- timezone_of(document),
          {:ok, filter} <- filter_of(document) do
       {:ok, matching(target, filter, depth, document, options)}
     end
@@ -78,6 +79,22 @@ defmodule Dav.Cal.Query do
     else
       _not_a_filter -> {:error, {Xml.caldav(), "valid-filter"}}
     end
+  end
+
+  # RFC 4791 section 9.1: `CALDAV:timezone` "MUST contain a single
+  # VTIMEZONE component". A calendar carrying events as well is not a
+  # time zone definition — the server would have to decide which parts
+  # to ignore, and a client that meant to send a whole calendar needs
+  # to hear that rather than have most of it dropped.
+  defp timezone_of(document) do
+    case Enum.find(document.children, &named?(&1, "timezone")) do
+      nil -> :ok
+      element -> only_zones(element.text)
+    end
+  end
+
+  defp only_zones(text) do
+    if Cal.timezone?(text), do: :ok, else: {:error, {Xml.caldav(), "valid-calendar-data"}}
   end
 
   # "The CALDAV:filter element... MUST contain a single CALDAV:comp-
@@ -113,8 +130,26 @@ defmodule Dav.Cal.Query do
     for object <- scope(target, depth, options),
         {:ok, data} <- [read(object, options)],
         {:ok, calendar} <- [ICalendar.parse(data)],
-        Filter.match?(filter, calendar, time_range: &TimeRange.overlaps?(&1, &2, floating)),
+        Filter.match?(filter, calendar, time_range: ranged(floating)),
         do: Cal.report_response(object, wanted, data, selection)
+  end
+
+  # A `VALARM` has no time of its own — it fires relative to whatever
+  # holds it — so the parent is needed to answer a `time-range` about
+  # it. Every other component answers for itself.
+  defp ranged(floating) do
+    fn target, range, context ->
+      case {target, Keyword.get(context, :parent)} do
+        {%{name: "VALARM"}, nil} ->
+          false
+
+        {%{name: "VALARM"} = alarm, parent} ->
+          TimeRange.alarm_overlaps?(alarm, parent, range, floating)
+
+        {component, _parent} ->
+          TimeRange.overlaps?(component, range, floating)
+      end
+    end
   end
 
   # RFC 4791 section 3.1: a floating time is converted using the
@@ -177,18 +212,30 @@ defmodule Dav.Cal.Query do
   # `1` adds the objects of the immediate child collections, which is
   # what makes a query against a calendar *home* useful.
   defp scope(collection, 1, options) do
-    {collections, objects} = split(collection, options)
+    {collections, _objects} = split(collection, options)
 
-    objects ++ Enum.flat_map(collections, &objects(&1, options))
+    objects(collection, options) ++ Enum.flat_map(collections, &objects(&1, options))
   end
 
   defp scope(collection, :infinity, options) do
-    {collections, objects} = split(collection, options)
+    {collections, _objects} = split(collection, options)
 
-    objects ++ Enum.flat_map(collections, &scope(&1, :infinity, options))
+    objects(collection, options) ++ Enum.flat_map(collections, &scope(&1, :infinity, options))
   end
 
-  defp objects(collection, options), do: collection |> split(options) |> elem(1)
+  # Only a calendar collection holds calendar object resources. A
+  # plain collection may have `.ics` files in it, but they are files —
+  # reporting them would answer a calendar query with resources the
+  # server does not treat as calendar data anywhere else. A scheduling
+  # Inbox counts: RFC 6638 section 2.2 makes it a calendar collection
+  # of its own kind, and a client reads it with the same reports.
+  defp objects(collection, options) do
+    if calendared?(collection), do: collection |> split(options) |> elem(1), else: []
+  end
+
+  defp calendared?(%Resource{types: types}) do
+    Enum.any?(types, &match?({unquote(Xml.caldav()), _local}, &1))
+  end
 
   defp split(collection, %{store: store, context: context}) do
     case store.children(collection, context) do

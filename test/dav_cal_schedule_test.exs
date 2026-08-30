@@ -94,7 +94,7 @@ defmodule Dav.Cal.ScheduleTest do
     assert conn.resp_body =~ "schedule-response"
     assert conn.resp_body =~ "mailto:bob@example.com"
     assert conn.resp_body =~ "2.0;Success"
-    assert conn.resp_body =~ "20260615T090000Z/20260615T100000Z"
+    assert conn.resp_body =~ "20260615T090000Z/PT1H"
   end
 
   test "an unknown recipient is named, not omitted", context do
@@ -578,9 +578,11 @@ defmodule Dav.Cal.ScheduleTest do
           "UID:parts",
           "SUMMARY:#{summary}",
           "ORGANIZER:mailto:alice@example.com",
-          # An organiser's client sends NEEDS-ACTION for everyone,
-          # because that is what it was given.
-          "ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com",
+          # `DECLINED` from the organiser is a claim about what Bob
+          # decided, which is not theirs to make. `NEEDS-ACTION` would
+          # be a different thing — the question being put again — and
+          # is tested separately.
+          "ATTENDEE;PARTSTAT=DECLINED:mailto:bob@example.com",
           "DTSTART:20260615T090000Z"
         ] ++ sequence ++ ["END:VEVENT", "END:VCALENDAR"],
         "\r\n"
@@ -588,10 +590,28 @@ defmodule Dav.Cal.ScheduleTest do
     end
 
     defp accepted do
-      String.replace(meeting("One"), "PARTSTAT=NEEDS-ACTION", "PARTSTAT=ACCEPTED")
+      String.replace(meeting("One"), "PARTSTAT=DECLINED", "PARTSTAT=ACCEPTED")
     end
 
-    test "an organiser's edit does not un-accept an attendee", context do
+    test "an organiser may put the question again", context do
+      asked = String.replace(meeting("One"), "PARTSTAT=DECLINED", "PARTSTAT=NEEDS-ACTION")
+
+      DavPlug.call(conn("PUT", "/alice/calendar/q.ics", meeting("One")), context.options)
+      DavPlug.call(conn("PUT", "/bob/calendar/parts.ics", accepted()), context.options)
+
+      DavPlug.call(conn("PUT", "/alice/calendar/q.ics", asked), context.options)
+
+      stored = DavPlug.call(conn("GET", "/alice/calendar/q.ics", ""), context.options).resp_body
+
+      # Not an organiser overwriting somebody's answer: `NEEDS-ACTION`
+      # is the one value that says "I am asking again", and the
+      # attendee is put back to being asked — with `RSVP` to say a
+      # reply is wanted.
+      assert stored =~ "PARTSTAT=NEEDS-ACTION"
+      assert stored =~ "RSVP=TRUE"
+    end
+
+    test "an organiser does not answer for an attendee", context do
       DavPlug.call(conn("PUT", "/alice/calendar/p.ics", meeting("One")), context.options)
       DavPlug.call(conn("PUT", "/bob/calendar/parts.ics", accepted()), context.options)
 
@@ -608,7 +628,7 @@ defmodule Dav.Cal.ScheduleTest do
       assert stored =~ "SCHEDULE-STATUS=1.2"
     end
 
-    test "a significant change does ask everyone again", context do
+    test "a change of timing asks the attendees again", context do
       DavPlug.call(conn("PUT", "/alice/calendar/p.ics", meeting("One")), context.options)
       DavPlug.call(conn("PUT", "/bob/calendar/parts.ics", accepted()), context.options)
 
@@ -620,9 +640,15 @@ defmodule Dav.Cal.ScheduleTest do
 
       stored = DavPlug.call(conn("GET", "/alice/calendar/p.ics", ""), context.options).resp_body
 
-      # Moving the event changes what was agreed to, so the earlier
-      # acceptance no longer stands.
+      # RFC 6638 section 3.2.8: when the meeting moves, the attendees
+      # are being asked about a different meeting, so their last
+      # answer is withdrawn and the question put again. Only *timing*
+      # counts — an event called off, or moved down the corridor, is
+      # news they need without having to answer for it a second time,
+      # and treating those as re-asks lost more of the conformance
+      # suite than it won.
       assert stored =~ "PARTSTAT=NEEDS-ACTION"
+      assert stored =~ "RSVP=TRUE"
     end
   end
 

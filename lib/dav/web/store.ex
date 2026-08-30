@@ -217,7 +217,16 @@ defmodule Dav.Web.Store do
   """
   @spec supports?(
           module(),
-          :read | :put | :delete | :mkcol | :properties | :patch | :copy | :move | :mkcalendar
+          :read
+          | :put
+          | :delete
+          | :mkcol
+          | :properties
+          | :patch
+          | :copy
+          | :move
+          | :mkcalendar
+          | :scope
         ) :: boolean()
   def supports?(store, capability) do
     Code.ensure_loaded?(store) and function_exported?(store, capability, arity(capability))
@@ -232,6 +241,7 @@ defmodule Dav.Web.Store do
   defp arity(:copy), do: 3
   defp arity(:move), do: 3
   defp arity(:mkcalendar), do: 2
+  defp arity(:scope), do: 2
 
   @doc """
   A resource's dead properties.
@@ -378,6 +388,33 @@ defmodule Dav.Web.Store do
               {:ok, Resource.t()} | {:error, :not_found}
 
   @doc """
+  Narrow the context to the principal making this request.
+
+  Optional. The context is the store's own — a repository handle, a
+  tenant, a connection — and only the store knows how to say "the same
+  store, as seen by this person". It is asked once per request, and
+  the result is what every other callback is then given.
+
+  A store that answers the same for everyone need not implement this.
+  One that holds shared data does: a calendar shared between two
+  people has a part they both see and a part each of them sees alone,
+  and it cannot serve the second without knowing who is asking.
+
+  ### Arguments
+
+  * `context` is the context the plug was configured with.
+
+  * `principal` is the principal URL of whoever is making the request,
+    or `nil` when nobody is authenticated.
+
+  ### Returns
+
+  * The context to use for this request.
+
+  """
+  @callback scope(context(), principal :: String.t() | nil) :: context()
+
+  @doc """
   The calendar user addresses of a principal.
 
   Optional, and the reverse of `c:principal/2`. Implicit scheduling
@@ -437,6 +474,7 @@ defmodule Dav.Web.Store do
                       move: 3,
                       mkcalendar: 2,
                       principal: 2,
+                      scope: 2,
                       addresses: 2,
                       canonical_address: 2
 end

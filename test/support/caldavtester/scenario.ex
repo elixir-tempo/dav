@@ -93,12 +93,13 @@ defmodule Dav.CalDAVTester.Scenario do
 
   defmodule Suite do
     @moduledoc "A named group of tests within a scenario."
-    defstruct [:name, tests: [], ignore?: false, features: [], excluded: []]
+    defstruct [:name, tests: [], ignore?: false, change_uid?: false, features: [], excluded: []]
 
     @type t :: %__MODULE__{
             name: String.t(),
             tests: [Test.t()],
             ignore?: boolean(),
+            change_uid?: boolean(),
             features: [String.t()],
             excluded: [String.t()]
           }
@@ -239,6 +240,7 @@ defmodule Dav.CalDAVTester.Scenario do
     %Suite{
       name: Map.get(element.attributes, "name", ""),
       ignore?: yes?(element, "ignore"),
+      change_uid?: yes?(element, "change-uid"),
       features: features(element, "require-feature"),
       excluded: features(element, "exclude-feature"),
       tests: Enum.map(Document.children(element, "test"), &test/1)

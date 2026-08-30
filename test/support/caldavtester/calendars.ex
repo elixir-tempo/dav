@@ -182,9 +182,25 @@ defmodule Dav.CalDAVTester.Calendars do
       pair = mismatched(left_children, right_children) ->
         describe(elem(pair, 0), elem(pair, 1))
 
-      true ->
+      length(left_children) != length(right_children) ->
         "#{name} has #{length(left_children)} components, expected #{length(right_children)}"
+
+      # Equal counts and no pair matched: the two sides describe
+      # different instances of the same thing — an override for one
+      # date against an override for another — and saying "3
+      # components, expected 3" describes nothing at all.
+      pair = positioned(left_children, right_children) ->
+        describe(elem(pair, 0), elem(pair, 1))
+
+      true ->
+        "#{name} components differ"
     end
+  end
+
+  defp positioned(left_children, right_children) do
+    left_children
+    |> Enum.zip(right_children)
+    |> Enum.find(fn {left, right} -> left != right end)
   end
 
   # Pairs children by component name *and* the instance they describe,

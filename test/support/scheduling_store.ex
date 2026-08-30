@@ -13,21 +13,25 @@ defmodule Dav.Test.SchedulingStore do
   alias Dav.Test.WritableStore
   alias Dav.Web.Store
 
-  def start(resources, addresses, dead \\ %{}, canonical \\ %{}) do
+  def start(resources, addresses, dead \\ %{}, canonical \\ %{}, aliases \\ %{}) do
     agent = WritableStore.start(resources)
 
     Agent.update(agent, fn state ->
       %{state | dead: dead}
       |> Map.put(:addresses, addresses)
       |> Map.put(:canonical, canonical)
+      |> Map.put(:aliases, aliases)
     end)
 
     agent
   end
 
   @impl Dav.Web.Store
+  defdelegate scope(context, principal), to: WritableStore
+
+  @impl Dav.Web.Store
   def canonical_address(address, agent) do
-    canonical = Agent.get(agent, &Map.get(&1, :canonical, %{}))
+    canonical = Agent.get(WritableStore.pid(agent), &Map.get(&1, :canonical, %{}))
 
     case Map.fetch(canonical, String.downcase(address)) do
       {:ok, found} -> {:ok, found}
@@ -37,8 +41,8 @@ defmodule Dav.Test.SchedulingStore do
 
   @impl Dav.Web.Store
   def addresses(principal, agent) do
-    known = Agent.get(agent, &Map.get(&1, :addresses, %{}))
-    homes = Agent.get(agent, & &1.resources)
+    known = Agent.get(WritableStore.pid(agent), &Map.get(&1, :addresses, %{}))
+    homes = Agent.get(WritableStore.pid(agent), & &1.resources)
 
     owned =
       for %{path: path, owner: ^principal} <- homes, into: MapSet.new(), do: path
@@ -51,7 +55,7 @@ defmodule Dav.Test.SchedulingStore do
 
   @impl Dav.Web.Store
   def principal(address, agent) do
-    known = Agent.get(agent, &Map.get(&1, :addresses, %{}))
+    known = Agent.get(WritableStore.pid(agent), &Map.get(&1, :addresses, %{}))
     folded = for {spelling, home} <- known, into: %{}, do: {String.downcase(spelling), home}
 
     # `mailto:` and `MAILTO:` name the same person, and the suite uses
@@ -98,7 +102,10 @@ defmodule Dav.Test.SchedulingStore do
 
   @default_calendar {"urn:ietf:params:xml:ns:caldav", "schedule-default-calendar-URL"}
 
+  @calendar_timezone {"urn:ietf:params:xml:ns:caldav", "calendar-timezone"}
+
   defp acceptable?({:set, @default_calendar, value}, agent), do: calendar?(value, agent)
+  defp acceptable?({:set, @calendar_timezone, value}, _agent), do: Cal.timezone?(value)
   defp acceptable?(_change, _agent), do: true
 
   defp calendar?({:hrefs, [href]}, agent), do: calendar?(href, agent)

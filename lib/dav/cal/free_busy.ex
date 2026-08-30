@@ -86,12 +86,10 @@ defmodule Dav.Cal.FreeBusy do
   def run(%Resource{} = collection, body, depth, options) do
     with {:ok, document} <- Xml.parse(body),
          {:ok, range} <- range_of(document) do
-      floating = collection_zone(collection, options)
-
       periods =
         collection
         |> objects(depth, options)
-        |> Enum.flat_map(&busy(&1, range, floating, options))
+        |> Enum.flat_map(fn {object, floating} -> busy(object, range, floating, options) end)
         |> coalesce()
 
       {:ok, {:body, "text/calendar", write(periods, range, [])}}
@@ -107,27 +105,102 @@ defmodule Dav.Cal.FreeBusy do
         {:error, :malformed}
 
       element ->
-        {:ok, {Map.get(element.attributes, "start"), Map.get(element.attributes, "end")}}
+        bounds = {Map.get(element.attributes, "start"), Map.get(element.attributes, "end")}
+
+        # RFC 4791 section 9.9: each bound is "a date with UTC time".
+        # A plain date or a floating date-time names no instant, and
+        # answering one would mean picking a zone for the client.
+        if Enum.all?(Tuple.to_list(bounds), &utc_bound?/1),
+          do: {:ok, bounds},
+          else: {:error, :malformed}
     end
   end
+
+  defp utc_bound?(nil), do: true
+  defp utc_bound?(value) when is_binary(value), do: Regex.match?(~r/^\d{8}T\d{6}Z$/, value)
+  defp utc_bound?(_other), do: false
 
   # Depth bounds how far the collection is searched, not what is
   # described: `0` is the collection's own calendar objects and `1`
   # adds those of its child collections. A calendar home holding a
   # calendar each for work and for home is the case this exists for.
+  # Each object paired with the zone its own calendar reads floating
+  # times in. A report over a whole home spans collections that may
+  # disagree — one states a time zone, the next does not — and reading
+  # them all in the target's zone moves half the events by an hour or
+  # more.
   defp objects(collection, depth, options) do
     {collections, objects} = split(collection, options)
 
+    within = fn holder, held ->
+      for object <- held, do: {object, collection_zone(holder, options)}
+    end
+
     case depth do
-      0 -> objects
-      1 -> objects ++ Enum.flat_map(collections, &elem(split(&1, options), 1))
+      0 ->
+        within.(collection, objects)
+
+      1 ->
+        within.(collection, objects) ++
+          Enum.flat_map(collections, &within.(&1, elem(split(&1, options), 1)))
+
+      # A home may hold calendars inside collections inside
+      # collections, and `Depth: infinity` asks about all of them. A
+      # bounded walk would answer for part of somebody's time and
+      # report the rest as free.
+      :infinity ->
+        within.(collection, objects) ++
+          Enum.flat_map(collections, &objects(&1, :infinity, options))
     end
   end
 
-  defp split(collection, %{store: store, context: context}) do
+  defp split(collection, %{store: store, context: context} = options) do
     case store.children(collection, context) do
-      {:ok, children} -> Enum.split_with(children, & &1.collection?)
-      _nothing -> {[], []}
+      {:ok, children} ->
+        {collections, objects} = Enum.split_with(children, & &1.collection?)
+
+        {Enum.reject(collections, &transparent?(&1, options)), objects}
+
+      _nothing ->
+        {[], []}
+    end
+  end
+
+  @doc """
+  Whether a calendar collection is excluded from its owner's busy time.
+
+  RFC 6638 section 9.1: a calendar marked `transparent` does not
+  contribute. A calendar shared to someone is the usual case — the
+  sharer's commitments are not theirs, and counting them reports them
+  busy for meetings they were merely shown.
+
+  ### Arguments
+
+  * `collection` is the calendar collection.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `true` when the collection declares `CALDAV:schedule-calendar-transp`
+    as `transparent`, and `false` otherwise — including when the store
+    holds no properties at all, since the default is opaque.
+
+  ### Examples
+
+      iex> Dav.Cal.FreeBusy.transparent?(%Dav.Web.Resource{}, %{store: Dav.Web.Store, context: nil})
+      false
+
+  """
+  @spec transparent?(Resource.t(), map()) :: boolean()
+  def transparent?(collection, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :properties),
+         %{} = properties <- store.properties(collection, context),
+         {:elements, _namespaces, markup} <-
+           Map.get(properties, {Xml.caldav(), "schedule-calendar-transp"}) do
+      String.contains?(markup, "transparent")
+    else
+      _opaque -> false
     end
   end
 
@@ -326,6 +399,10 @@ defmodule Dav.Cal.FreeBusy do
 
   * `:organizer` names the calendar user who asked.
 
+  * `:method` names the iTIP method the object carries. A scheduling
+    response is a `REPLY`; the free-busy *report* of RFC 4791 section
+    7.10 is not a scheduling message and carries none.
+
   ### Returns
 
   * The iCalendar object, as a binary.
@@ -351,7 +428,9 @@ defmodule Dav.Cal.FreeBusy do
 
   defp write(periods, {from, to}, options) do
     lines =
-      ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Dav//CalDAV//EN", "BEGIN:VFREEBUSY"] ++
+      ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Dav//CalDAV//EN"] ++
+        bound("METHOD", Keyword.get(options, :method)) ++
+        ["BEGIN:VFREEBUSY"] ++
         bound("DTSTART", from) ++
         bound("DTEND", to) ++
         bound("ORGANIZER", Keyword.get(options, :organizer)) ++
@@ -366,13 +445,66 @@ defmodule Dav.Cal.FreeBusy do
   end
 
   defp bound(_name, nil), do: []
+
+  # A calendar user is named the same way the request named them. The
+  # `CN` a client sent is what it will look for in the answer, and
+  # dropping it leaves the client with an address and no name to show.
+  defp bound(name, {value, parameters}) when is_map(parameters) do
+    written =
+      Enum.map_join(parameters, fn {parameter, setting} -> ";#{parameter}=#{setting}" end)
+
+    [name <> written <> ":" <> value]
+  end
+
   defp bound(name, value), do: [name <> ":" <> value]
 
   defp freebusy({type, bounds}) do
     "FREEBUSY;FBTYPE=" <> type <> ":" <> Enum.map_join(bounds, ",", &period/1)
   end
 
-  defp period({began, ended}), do: utc(began) <> "/" <> utc(ended)
+  # RFC 5545 section 3.3.9 allows a period to be written as two
+  # instants or as a start and a duration, and RFC 5546 section 3.3.2
+  # uses the second form for free/busy. It says the same thing in
+  # fewer characters, and a busy list for a month is mostly periods.
+  defp period({began, ended}) do
+    case elapsed(began, ended) do
+      {:ok, total} -> utc(began) <> "/" <> lasting(total)
+      :error -> utc(began) <> "/" <> utc(ended)
+    end
+  end
+
+  defp elapsed(began, ended) do
+    with {:ok, from} <- native(began),
+         {:ok, to} <- native(ended),
+         from when not is_nil(from) <- seconds(from),
+         to when not is_nil(to) <- seconds(to) do
+      {:ok, to - from}
+    else
+      _unconvertible -> :error
+    end
+  end
+
+  defp seconds(%Date{} = date), do: seconds(NaiveDateTime.new!(date, ~T[00:00:00]))
+  defp seconds(%NaiveDateTime{} = naive), do: NaiveDateTime.diff(naive, ~N[1970-01-01 00:00:00])
+  defp seconds(_other), do: nil
+
+  defp lasting(total) when total <= 0, do: "PT0S"
+
+  defp lasting(total) do
+    days = div(total, 86_400)
+    hours = div(rem(total, 86_400), 3600)
+    minutes = div(rem(total, 3600), 60)
+    seconds = rem(total, 60)
+
+    date = if days > 0, do: "#{days}D", else: ""
+
+    time =
+      [{hours, "H"}, {minutes, "M"}, {seconds, "S"}]
+      |> Enum.reject(fn {amount, _unit} -> amount == 0 end)
+      |> Enum.map_join(fn {amount, unit} -> "#{amount}#{unit}" end)
+
+    if time == "", do: "P" <> date, else: "P" <> date <> "T" <> time
+  end
 
   defp stamp, do: Calendar.strftime(DateTime.utc_now(), "%Y%m%dT%H%M%SZ")
 

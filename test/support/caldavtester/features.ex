@@ -65,7 +65,11 @@ defmodule Dav.CalDAVTester.Features do
                 # invitations, notifications, and the shared-calendar
                 # properties. Not an RFC, and the most widely deployed
                 # CalDAV extension there is.
-                "shared-calendars"
+                "shared-calendars",
+                # `Dav.Cal.Object` refuses a second resource carrying a
+                # `UID` already used in the collection, so the suites
+                # that assume duplicates are allowed do not apply.
+                "no-duplicate-uids"
               ]
 
   @doc """

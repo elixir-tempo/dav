@@ -35,6 +35,7 @@ defmodule Dav.Cal.Object do
   alias Dav.Cal
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Scheduling
+  alias Dav.Cal.Sharing
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -92,18 +93,44 @@ defmodule Dav.Cal.Object do
   @spec validate(binary(), Resource.t() | nil, [String.t()], map()) ::
           :ok | {:error, violation()}
   def validate(body, collection, path, options) do
-    with :ok <- media_type(options),
+    with :ok <- permitted(collection, options),
+         :ok <- media_type(options),
          :ok <- printable(body),
          {:ok, calendar} <- parse(body),
+         :ok <- unreserved(calendar),
          :ok <- structure(calendar),
          :ok <- readable_values(calendar),
          :ok <- timezones_present(calendar),
          :ok <- within_limits(calendar),
          :ok <- unique_uid(calendar),
          :ok <- attendee_allowed(calendar, collection, path, options),
-         :ok <- organizer_allowed(calendar, collection, options) do
+         :ok <- organizer_allowed(calendar, collection, options),
+         :ok <- same_organizer(calendar, path, options) do
       no_uid_conflict(calendar, collection, path, options)
     end
+  end
+
+  # A calendar shared read-only may be read. Writing to it is refused
+  # here rather than accepted and quietly dropped, because a client
+  # that believes its write succeeded shows the user an event nobody
+  # else can see.
+  defp permitted(collection, options) do
+    if Sharing.writable?(collection, options),
+      do: :ok,
+      else: {:error, precondition("need-privileges")}
+  end
+
+  # A server that keeps one person's alarms and transparency apart
+  # from everyone else's stores them in components of its own. Those
+  # are its private bookkeeping, and a client that sends them is
+  # writing another user's data into an event — so the body is
+  # refused rather than stored and silently believed.
+  @reserved ~w(X-CALENDARSERVER-PERUSER X-CALENDARSERVER-PERINSTANCE)
+
+  defp unreserved(calendar) do
+    if Enum.any?(calendar.components, &(&1.name in @reserved)),
+      do: {:error, precondition("valid-calendar-data")},
+      else: :ok
   end
 
   # A body that is not iCalendar at all fails a different precondition
@@ -339,6 +366,59 @@ defmodule Dav.Cal.Object do
         do: property.value
   end
 
+  # RFC 6638 section 3.2.2: the organiser of an event does not change.
+  # Whoever is named holds the master copy and every reply is directed
+  # at them, so rewriting the name on one copy would send this
+  # attendee's answers to somebody who never invited them — and let
+  # anyone who was invited take the meeting over.
+  defp same_organizer(calendar, path, options) do
+    {organizer, _parameters} = organizer_of(calendar)
+
+    cond do
+      # Naming nobody is not naming somebody else. A body with no
+      # organiser is a different kind of mistake, and the rule about
+      # unique scheduling objects has the better name for it.
+      is_nil(organizer) -> :ok
+      stored_organizer(path, options) == nil -> :ok
+      same_person?(stored_organizer(path, options), organizer, options) -> :ok
+      true -> {:error, precondition("valid-organizer")}
+    end
+  end
+
+  # Compared as people, not as strings. The server rewrites an address
+  # into the form it considers canonical, so the copy it stored spells
+  # the organiser differently from the copy a client sends back — and
+  # comparing the spellings makes every ordinary write look like a
+  # takeover.
+  defp same_person?(one, other, options) do
+    one == other or
+      (not is_nil(one) and not is_nil(other) and home_of(one, options) == home_of(other, options) and
+         home_of(one, options) != nil)
+  end
+
+  defp home_of(address, %{store: store, context: context}) do
+    with true <- function_exported?(store, :principal, 2),
+         {:ok, %Resource{path: path}} <- store.principal(address, context) do
+      path
+    else
+      _unknown -> nil
+    end
+  end
+
+  defp stored_organizer(path, options) do
+    case read_calendar_at(path, options) do
+      {:ok, stored} -> stored |> organizer_of() |> elem(0)
+      _absent -> nil
+    end
+  end
+
+  defp read_calendar_at(path, %{store: store, context: context} = options) do
+    case store.resolve(path, context) do
+      {:ok, existing} -> read_calendar(existing, options)
+      _absent -> :error
+    end
+  end
+
   # RFC 6638 section 3.2.2: only the organiser creates a scheduling
   # object, or the server does on their behalf when it delivers the
   # invitation. An attendee writing a *new* one into their own
@@ -352,6 +432,11 @@ defmodule Dav.Cal.Object do
     cond do
       addresses == [] -> :ok
       exists?(path, options) -> :ok
+      # A move is not a creation. The invitation already exists — it
+      # is being carried from one of the attendee's calendars to
+      # another — and refusing it here would trap every delivered
+      # event in the calendar it happened to arrive in.
+      Map.has_key?(options, :ignoring) -> :ok
       organizer in [nil | addresses] -> :ok
       # The server only owns the scheduling it performs. An organiser
       # this server does not host is somebody else's to police, and a
@@ -431,7 +516,7 @@ defmodule Dav.Cal.Object do
       collection |> siblings(path, options) |> Enum.any?(&(uid in uids_of(&1, options))) ->
         {:error, precondition("no-uid-conflict")}
 
-      scheduling?(calendar) and elsewhere?(uid, collection, path, options) ->
+      elsewhere?(uid, collection, path, scheduling?(calendar), options) ->
         {:error, precondition("unique-scheduling-object-resource")}
 
       true ->
@@ -453,16 +538,37 @@ defmodule Dav.Cal.Object do
   # excluded by asking for calendars only: their whole purpose is to
   # hold a copy of a message that already lives in one, so counting
   # them would refuse every invitation the server itself delivered.
-  defp elsewhere?(uid, collection, path, %{store: store, context: context} = options) do
+  # Either side makes the UID reserved. The rule is about the meeting,
+  # not about the document being written: an event carrying no
+  # organiser still cannot take a UID that an invitation elsewhere in
+  # the home is already using, or a reply would have two resources to
+  # choose between.
+  defp elsewhere?(uid, collection, path, scheduling?, %{store: store, context: context} = options) do
     with true <- Store.supports?(store, :read),
          {:ok, home} <- store.resolve(Enum.drop(collection.path, -1), context),
          {:ok, children} <- store.children(home, context) do
       children
       |> Enum.filter(&(&1.collection? and &1.path != collection.path and Cal.calendar?(&1)))
       |> Enum.flat_map(&siblings(&1, path, options))
-      |> Enum.any?(&(uid in uids_of(&1, options)))
+      |> Enum.any?(&claims?(&1, uid, scheduling?, options))
     else
       _unreadable -> false
+    end
+  end
+
+  defp claims?(object, uid, scheduling?, options) do
+    case read_calendar(object, options) do
+      {:ok, calendar} -> uid in uids(calendar) and (scheduling? or scheduling?(calendar))
+      _unreadable -> false
+    end
+  end
+
+  defp read_calendar(object, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :read),
+         {:ok, data} <- store.read(object, context) do
+      ICalendar.parse(IO.iodata_to_binary(data))
+    else
+      _unreadable -> :error
     end
   end
 

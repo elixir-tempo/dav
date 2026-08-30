@@ -252,7 +252,7 @@ defmodule Dav.Cal.Filter do
     if filter.undefined? do
       present == []
     else
-      Enum.any?(present, &satisfied?(filter, &1, options))
+      Enum.any?(present, &satisfied?(filter, &1, within(options, component)))
     end
   end
 
@@ -295,6 +295,11 @@ defmodule Dav.Cal.Filter do
     if negate?, do: not found?, else: found?
   end
 
+  # A nested component is tested against a range in terms of its
+  # parent: an alarm says how long before its event it fires, not when.
+  # The parent travels down so the evaluator can work that out.
+  defp within(options, parent), do: Keyword.put(options, :parent, parent)
+
   defp in_range?(%__MODULE__{time_range: nil}, _target, _options), do: true
 
   defp in_range?(%__MODULE__{time_range: range}, target, options) do
@@ -303,6 +308,9 @@ defmodule Dav.Cal.Filter do
         raise ArgumentError,
               "this filter uses a CALDAV:time-range, which needs calendar semantics to " <>
                 "answer. Pass a :time_range function — see Dav.Cal.Filter.match?/3."
+
+      evaluate when is_function(evaluate, 3) ->
+        evaluate.(target, range, options)
 
       evaluate ->
         evaluate.(target, range)
@@ -343,6 +351,7 @@ defmodule Dav.Cal.Filter do
     allowed = Map.get(@nesting, name)
 
     cond do
+      not utc?(filter.time_range) -> false
       is_nil(allowed) -> nested_ok?(filter, :unknown)
       not is_nil(filter.time_range) and name not in @timed -> false
       true -> nested_ok?(filter, allowed)
@@ -350,10 +359,25 @@ defmodule Dav.Cal.Filter do
   end
 
   defp permitted?(%__MODULE__{kind: :prop, name: name} = filter) do
-    is_nil(filter.time_range) or name in @dated
+    utc?(filter.time_range) and (is_nil(filter.time_range) or name in @dated)
   end
 
   defp permitted?(%__MODULE__{}), do: true
+
+  # RFC 4791 section 9.9: a `time-range` bound is "a date with UTC
+  # time". A plain date or a floating date-time names no instant — the
+  # server would have to pick a zone on the client's behalf, and two
+  # servers picking differently would answer the same query with
+  # different events.
+  defp utc?(nil), do: true
+  defp utc?({start, finish}), do: utc_bound?(start) and utc_bound?(finish)
+
+  defp utc_bound?(nil), do: true
+
+  defp utc_bound?(value) when is_binary(value),
+    do: Regex.match?(~r/^\d{8}T\d{6}Z$/, value)
+
+  defp utc_bound?(_other), do: false
 
   # A component the grammar does not name — an `X-` extension — may
   # hold anything, but it is still not a moment in time.

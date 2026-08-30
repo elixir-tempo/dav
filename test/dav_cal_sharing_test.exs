@@ -76,10 +76,13 @@ defmodule Dav.Cal.SharingTest do
 
       listing = propfind("/alice/shared", "<CS:invite/>", context.options)
 
-      # This is what an owner's client reads to show its sharing panel.
+      # This is what an owner's client reads to show its sharing panel:
+      # who was invited, what they were granted, and whether they have
+      # answered. The summary is the invitee's copy of the invitation,
+      # not part of the owner's record of it.
       assert listing.resp_body =~ "mailto:bob@example.com"
       assert listing.resp_body =~ "read-write"
-      assert listing.resp_body =~ "Team"
+      assert listing.resp_body =~ "invite-noresponse"
     end
 
     test "the invitee is notified, since they cannot see the calendar yet", context do

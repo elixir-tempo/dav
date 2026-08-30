@@ -38,6 +38,7 @@ defmodule Dav.Cal.Scheduling do
   @behaviour Dav.Web.Hook
 
   alias Dav.Cal
+  alias Dav.Cal.FreeBusy
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
   alias Dav.Web.Resource
@@ -56,13 +57,10 @@ defmodule Dav.Cal.Scheduling do
 
   @significant ~w(DTSTART DTEND DURATION DUE RRULE RDATE EXDATE LOCATION STATUS)
 
-  # A wider list, and a different question. `@significant` asks
-  # whether everyone must be asked again, which un-accepts them; this
-  # asks whether the invitation the attendees hold is now out of date,
-  # which raises `SEQUENCE`. A changed subject is the case that
-  # separates them: the attendees need the new one, but nobody has to
-  # answer for it a second time.
-  @resequencing @significant ++ ~w(SUMMARY DESCRIPTION)
+  # When the meeting itself moves. A narrower list than `@significant`:
+  # an event being called off, or moving down the corridor, is news the
+  # attendees need without being asked to answer for it again.
+  @rescheduled ~w(DTSTART DTEND DURATION DUE RRULE RDATE)
 
   # Properties every save rewrites, and parameters the server owns.
   # Neither is news to an attendee, so neither counts as a reason to
@@ -167,6 +165,17 @@ defmodule Dav.Cal.Scheduling do
   # touched anything, which is the problem this second validator
   # exists to solve. So it is stored, and recomputed only when the
   # organiser, the attendees or the timing actually differ.
+  defp restated_body(resource, body, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :put),
+         {:ok, calendar} <- ICalendar.parse(body),
+         canonical = ICalendar.write(calendar),
+         true <- canonical != body do
+      store.put(resource.path, canonical, @calendar_type, context)
+    end
+
+    :ok
+  end
+
   defp stamp_schedule_tag(%{resource: resource, body: body, previous: previous}, options) do
     with %{store: store, context: context} <- options,
          true <- Store.supports?(store, :patch) do
@@ -274,9 +283,75 @@ defmodule Dav.Cal.Scheduling do
   @impl Dav.Web.Hook
   @spec properties(Resource.t(), Resource.t() | nil, map()) :: [{Xml.qname(), Xml.value()}]
   def properties(resource, collection, options) do
-    for {"schedule-tag", value} <- headers(resource, collection, options),
-        do: {{Xml.caldav(), "schedule-tag"}, value}
+    tag =
+      for {"schedule-tag", value} <- headers(resource, collection, options),
+          do: {{Xml.caldav(), "schedule-tag"}, value}
+
+    tag ++ default_calendar(resource, options) ++ free_busy_set(resource, options)
   end
+
+  # RFC 4791 section 6.2.1, deprecated by RFC 6638 but still asked
+  # for: which of the owner's calendars are consulted when somebody
+  # asks whether they are free. It is the calendars that are not
+  # marked transparent — the same set the free-busy report walks.
+  defp free_busy_set(resource, options) do
+    if Schedule.inbox?(resource) and is_nil(stated_free_busy_set(resource, options)) do
+      hrefs =
+        resource
+        |> home_calendars(options)
+        |> Enum.reject(&FreeBusy.transparent?(&1, options))
+        |> Enum.map(&Resource.href/1)
+
+      [{{Xml.caldav(), "calendar-free-busy-set"}, {:hrefs, hrefs}}]
+    else
+      []
+    end
+  end
+
+  defp stated_free_busy_set(resource, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :properties),
+         %{} = properties <- store.properties(resource, context) do
+      Map.get(properties, {Xml.caldav(), "calendar-free-busy-set"})
+    else
+      _none -> nil
+    end
+  end
+
+  defp home_calendars(inbox, %{store: store, context: context}) do
+    with home when is_list(home) <- Enum.drop(inbox.path, -1),
+         {:ok, parent} <- store.resolve(home, context),
+         {:ok, children} <- store.children(parent, context) do
+      Enum.filter(children, &Cal.calendar?/1)
+    else
+      _nowhere -> []
+    end
+  end
+
+  # RFC 6638 section 9.2. An invitation has to land somewhere, and
+  # `CALDAV:schedule-default-calendar-URL` on the Inbox is where a
+  # client asks which calendar that is. A deployment may state it; a
+  # deployment that has not is answered with the first calendar in the
+  # home, which is where the delivery would go anyway.
+  defp default_calendar(resource, options) do
+    with true <- Schedule.inbox?(resource),
+         nil <- stored_default(resource, options),
+         %Resource{} = calendar <- first_calendar(resource, options) do
+      [{{Xml.caldav(), "schedule-default-calendar-URL"}, {:hrefs, [Resource.href(calendar)]}}]
+    else
+      _stated_or_absent -> []
+    end
+  end
+
+  defp stored_default(resource, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :properties),
+         %{} = properties <- store.properties(resource, context) do
+      Map.get(properties, {Xml.caldav(), "schedule-default-calendar-URL"})
+    else
+      _none -> nil
+    end
+  end
+
+  defp first_calendar(inbox, options), do: inbox |> home_calendars(options) |> List.first()
 
   @doc """
   Deliver the scheduling messages a stored event implies.
@@ -315,8 +390,11 @@ defmodule Dav.Cal.Scheduling do
       )
     else
       # Not a scheduling object: an event with no organiser is one
-      # person's private appointment, and nobody needs telling.
-      _nothing_to_schedule -> :ok
+      # person's private appointment, and nobody needs telling — but
+      # what was stored is still rewritten in the server's own
+      # spelling, so a client reads back what the server understood
+      # rather than what it happened to send.
+      _nothing_to_schedule -> restated_body(resource, body, options)
     end
   end
 
@@ -431,23 +509,21 @@ defmodule Dav.Cal.Scheduling do
   defp sequenced(components, %{previous: previous}) do
     case ICalendar.parse(previous) do
       {:ok, before} ->
-        held = schedulable(before)
-
-        if changed?(components, held), do: bumped(components, held), else: components
+        # Raised whenever a message goes out, which is the caller's
+        # decision: `SEQUENCE` numbers the revisions the attendees
+        # were told about, so a second test of what changed here would
+        # leave one of them holding an update numbered as the last.
+        bumped(components, schedulable(before))
 
       _unreadable ->
         components
     end
   end
 
-  defp changed?(now, before) do
-    shape(now, @resequencing) != shape(before, @resequencing)
-  end
-
   defp shape(components, names) do
     for component <- components,
         property <- component.properties,
-        property.name in names,
+        property.name in names or String.starts_with?(property.name, "X-"),
         into: MapSet.new(),
         do: {property.name, property.value}
   end
@@ -524,8 +600,81 @@ defmodule Dav.Cal.Scheduling do
 
   defp promoted(property), do: property
 
+  # One line per attendee. A client that names somebody twice has said
+  # nothing twice over, and keeping both would send them two
+  # invitations and count them twice in every reply the organiser
+  # reads back.
+  defp once_each(component) do
+    {properties, _seen} =
+      Enum.flat_map_reduce(component.properties, MapSet.new(), fn property, seen ->
+        cond do
+          property.name != "ATTENDEE" -> {[property], seen}
+          property.value in seen -> {[], seen}
+          true -> {[property], MapSet.put(seen, property.value)}
+        end
+      end)
+
+    %{component | properties: properties}
+  end
+
   defp server_delivers?(property) do
     Map.get(property.parameters, "SCHEDULE-AGENT", "SERVER") == "SERVER"
+  end
+
+  # A reply says what *this* attendee decided. Anything else they do
+  # to their copy — excluding an instance they had already declined,
+  # moving an alarm, colouring it — is not news for the organiser, and
+  # replying anyway puts a message in their Inbox that says nothing
+  # changed.
+  defp answered?(%{previous: nil}, _addresses), do: true
+
+  defp answered?(%{body: body, previous: previous}, addresses) do
+    now = answers(body, addresses)
+
+    now != still_asked(answers(previous, addresses), now)
+  end
+
+  # An attendee who drops an instance they had already declined has
+  # told the organiser nothing new. The decline is on record, and the
+  # `EXDATE` that follows it is only their own copy catching up with
+  # an answer the organiser has had all along.
+  defp still_asked(nil, _now), do: nil
+  defp still_asked(before, nil), do: before
+
+  defp still_asked(before, now) do
+    for {instance, answer} <- before,
+        Map.has_key?(now, instance) or answer != "DECLINED",
+        into: %{},
+        do: {instance, answer}
+  end
+
+  defp answers(body, addresses) do
+    with {:ok, calendar} <- ICalendar.parse(body),
+         [_ | _] = components <- schedulable(calendar) do
+      for component <- components,
+          property <- component.properties,
+          property.name == "ATTENDEE",
+          property.value in addresses,
+          into: %{},
+          do: {value(component, "RECURRENCE-ID"), Map.get(property.parameters, "PARTSTAT")}
+    else
+      _unreadable -> nil
+    end
+  end
+
+  defp departed(_components, %{previous: nil}, _addresses), do: []
+
+  defp departed(components, %{previous: previous}, addresses) do
+    case ICalendar.parse(previous) do
+      {:ok, before} ->
+        Enum.reject(
+          attendees_of(schedulable(before)) -- attendees_of(components),
+          &(&1 in addresses)
+        )
+
+      _unreadable ->
+        []
+    end
   end
 
   # An organiser marked `SCHEDULE-AGENT=CLIENT` is one whose replies
@@ -570,6 +719,7 @@ defmodule Dav.Cal.Scheduling do
         |> Enum.map(fn component ->
           %{component | properties: Enum.map(component.properties, &promoted/1)}
         end)
+        |> Enum.map(&once_each/1)
 
       recipients =
         if organizer_delivers?(components) do
@@ -584,7 +734,7 @@ defmodule Dav.Cal.Scheduling do
       # An organiser adjusting their own alarm would otherwise put a
       # fresh invitation in every attendee's Inbox, asking them to
       # look at an event that is exactly as they left it.
-      told = notified(recipients, change)
+      told = notified(recipients, change, options)
 
       # And the version rises exactly when somebody is told. Raised
       # here and not before, because `SEQUENCE` is the organiser's own
@@ -592,6 +742,12 @@ defmodule Dav.Cal.Scheduling do
       # `EXDATE`, which looks like a change to the timing and had them
       # advancing it on the organiser's behalf.
       components = if told == [], do: components, else: sequenced(components, change)
+
+      # RFC 5546 section 3.2.5: a withdrawn instance travels as a
+      # `CANCEL`, not as a `REQUEST` carrying `STATUS:CANCELLED`. An
+      # attendee's client acts on the method, so a cancellation dressed
+      # as an invitation leaves the meeting sitting in their calendar.
+      withdrawn = Enum.filter(components, &cancelled?/1)
 
       send_to(
         told,
@@ -601,6 +757,17 @@ defmodule Dav.Cal.Scheduling do
         options,
         announced(components, change)
       )
+
+      send_to(told, "CANCEL", withdrawn, zones(calendar), options, every(withdrawn))
+
+      # Anyone dropped from the invitation is told it is off. They are
+      # no longer in the attendee list, so nothing else would reach
+      # them — and an event they were invited to would sit in their
+      # calendar for ever, with no way to learn it had moved on
+      # without them.
+      dropped = departed(components, change, addresses)
+
+      send_to(dropped, "CANCEL", components, zones(calendar), options, every(components))
 
       record(resource, restated(calendar, components), recipients, options)
     else
@@ -623,6 +790,11 @@ defmodule Dav.Cal.Scheduling do
   # An invitation nobody has accepted should not block the attendee's
   # time. Apple's clients rely on this, and a calendar that shows every
   # unanswered invitation as busy is unusable after a week.
+  # RFC 5545 section 3.8.2.7 defines `TRANSP` for `VEVENT` alone. A
+  # to-do does not occupy time — it is due, not scheduled — so there
+  # is nothing for it to be transparent about.
+  defp untaken(%{name: name} = component) when name != "VEVENT", do: component
+
   defp untaken(component) do
     if needs_action?(component) do
       %{component | properties: transparent(component.properties)}
@@ -643,14 +815,75 @@ defmodule Dav.Cal.Scheduling do
   end
 
   defp reply(resource, calendar, components, organizer, addresses, change, options) do
-    if organizer_delivers?(components) and notified([organizer], change) != [] do
-      replies = for component <- components, do: only(component, addresses)
+    cond do
+      # RFC 6638 section 3.2.9: "5.3" is "no scheduling support for
+      # user". An organiser this server cannot reach, or a copy whose
+      # attendee list does not name the person storing it, is one no
+      # reply can be sent for — and the owner's client is told so on
+      # the `ORGANIZER` rather than left waiting for a delivery that
+      # will never happen.
+      not answerable?(components, organizer, addresses, options) ->
+        record_unschedulable(resource, calendar, organizer, options)
 
-      send_to([organizer], "REPLY", replies, zones(calendar), options, every(replies))
-      record_reply(resource, calendar, organizer, options)
+      organizer_delivers?(components) and answered?(change, addresses) ->
+        replies = for component <- components, do: only(component, addresses)
+
+        send_to([organizer], "REPLY", replies, zones(calendar), options, every(replies))
+        record_reply(resource, calendar, organizer, options)
+
+      true ->
+        carry_reply(resource, calendar, organizer, change, options)
     end
 
     :ok
+  end
+
+  defp answerable?(components, organizer, addresses, options) do
+    invited? =
+      Enum.any?(components, fn component ->
+        Enum.any?(
+          component.properties,
+          &(&1.name == "ATTENDEE" and &1.value in addresses)
+        )
+      end)
+
+    invited? and not is_nil(home_of(organizer, options))
+  end
+
+  defp record_unschedulable(resource, calendar, organizer, %{store: store, context: context}) do
+    if Store.supports?(store, :put) do
+      updated = %{
+        calendar
+        | components: Enum.map(calendar.components, &unschedulable(&1, organizer))
+      }
+
+      store.put(resource.path, ICalendar.write(updated), @calendar_type, context)
+    end
+
+    :ok
+  end
+
+  defp unschedulable(%{name: "VTIMEZONE"} = zone, _organizer), do: zone
+
+  defp unschedulable(component, organizer) do
+    properties =
+      Enum.map(component.properties, fn property ->
+        # A client that named a `SCHEDULE-AGENT` has already said who
+        # delivers, and is not waiting to be told the server will not.
+        if property.name == "ORGANIZER" and property.value == organizer and
+             not Map.has_key?(property.parameters, "SCHEDULE-AGENT") do
+          parameters =
+            property.parameters
+            |> Map.put("SCHEDULE-AGENT", "NONE")
+            |> Map.put("SCHEDULE-STATUS", "5.3")
+
+          %{property | parameters: parameters}
+        else
+          property
+        end
+      end)
+
+    %{component | properties: properties}
   end
 
   # `SCHEDULE-STATUS` records what became of the message *you* sent.
@@ -670,6 +903,33 @@ defmodule Dav.Cal.Scheduling do
     end
 
     :ok
+  end
+
+  # The record that an earlier reply reached the organiser survives the
+  # attendee's own edits. Their client PUTs the event back without a
+  # `SCHEDULE-STATUS` — it never had one to send — and taking the
+  # client's word would make every later edit look like an event they
+  # had never answered.
+  defp carry_reply(resource, calendar, organizer, %{previous: previous}, options)
+       when is_binary(previous) do
+    with {:ok, before} <- ICalendar.parse(previous),
+         true <- stamped?(schedulable(before), organizer),
+         false <- stamped?(schedulable(calendar), organizer) do
+      record_reply(resource, calendar, organizer, options)
+    else
+      _nothing_to_carry -> :ok
+    end
+  end
+
+  defp carry_reply(_resource, _calendar, _organizer, _change, _options), do: :ok
+
+  defp stamped?(components, organizer) do
+    Enum.any?(components, fn component ->
+      Enum.any?(component.properties, fn property ->
+        property.name == "ORGANIZER" and property.value == organizer and
+          Map.has_key?(property.parameters, "SCHEDULE-STATUS")
+      end)
+    end)
   end
 
   defp answered(%{name: "VTIMEZONE"} = zone, _organizer), do: zone
@@ -721,19 +981,31 @@ defmodule Dav.Cal.Scheduling do
   # right answer rather than a client's ignorance.
   defp remembered(component, %{previous: nil}), do: restore_participation(component, [])
 
-  defp remembered(component, %{body: body, previous: previous}) do
-    with {:ok, before} <- ICalendar.parse(previous),
-         false <- resequenced?(schedulable_of(body), schedulable(before)) do
-      restore_participation(component, schedulable(before))
-    else
-      _resequenced_or_unreadable -> component
+  defp remembered(component, %{previous: previous}) do
+    case ICalendar.parse(previous) do
+      {:ok, before} ->
+        held = schedulable(before)
+
+        # An answer is the attendee's own and the stored one stands —
+        # an organiser's client does not know what anyone said and
+        # must not overwrite it in passing. A *significant* change is
+        # different: when the timing moves, everyone is being asked
+        # again, and their last answer was to a different meeting.
+        if asked_again?(component, held),
+          do: restore_participation(component, []),
+          else: restore_participation(component, held)
+
+      _unreadable ->
+        component
     end
   end
 
-  defp schedulable_of(body) do
-    case ICalendar.parse(body) do
-      {:ok, calendar} -> schedulable(calendar)
-      _unreadable -> []
+  defp asked_again?(component, held) do
+    recurrence = value(component, "RECURRENCE-ID")
+
+    case Enum.find(held, &(value(&1, "RECURRENCE-ID") == recurrence)) do
+      nil -> false
+      before -> shape([component], @rescheduled) != shape([before], @rescheduled)
     end
   end
 
@@ -752,7 +1024,9 @@ defmodule Dav.Cal.Scheduling do
 
     %{
       component
-      | properties: Enum.map(component.properties, &participating(&1, known, organizer))
+      | properties:
+          component.properties
+          |> Enum.map(&participating(&1, known, organizer))
     }
   end
 
@@ -770,9 +1044,20 @@ defmodule Dav.Cal.Scheduling do
   # is reporting its own ignorance, and storing it shows a meeting the
   # whole room agreed to before anyone heard of it.
   defp participating(%{name: "ATTENDEE", value: value} = property, known, organizer) do
-    if value == organizer,
-      do: property,
-      else: %{property | parameters: answered_or_asked(property.parameters, known, value)}
+    cond do
+      value == organizer ->
+        property
+
+      # `NEEDS-ACTION` is the one answer an organiser may give for
+      # somebody else: it is not a claim about what they decided, it
+      # is the question being put again. Every other value is theirs
+      # alone and the stored one stands.
+      Map.get(property.parameters, "PARTSTAT") == "NEEDS-ACTION" ->
+        %{property | parameters: awaiting(property.parameters)}
+
+      true ->
+        %{property | parameters: answered_or_asked(property.parameters, known, value)}
+    end
   end
 
   defp participating(property, _known, _organizer), do: property
@@ -781,11 +1066,30 @@ defmodule Dav.Cal.Scheduling do
   # carries `RSVP=TRUE` — the attendee's client uses it to know a
   # reply is wanted rather than that the event simply appeared.
   defp answered_or_asked(parameters, known, value) do
-    case Map.fetch(known, value) do
-      {:ok, answer} -> Map.put(parameters, "PARTSTAT", answer)
-      :error -> parameters |> Map.put("PARTSTAT", "NEEDS-ACTION") |> Map.put("RSVP", "TRUE")
+    # A room does not deliberate. Nobody sits at its keyboard to
+    # accept, so the server answers for it the moment it is invited —
+    # and records that answer as one it processed itself.
+    if unattended?(parameters) do
+      parameters |> Map.put("PARTSTAT", "ACCEPTED") |> Map.put("SCHEDULE-STATUS", "2.0")
+    else
+      case Map.fetch(known, value) do
+        {:ok, answer} -> awaiting(Map.put(parameters, "PARTSTAT", answer))
+        :error -> awaiting(Map.put(parameters, "PARTSTAT", "NEEDS-ACTION"))
+      end
     end
   end
+
+  # Still to answer is still being asked. `RSVP=TRUE` is not a
+  # separate fact from `PARTSTAT=NEEDS-ACTION` — it is what tells the
+  # attendee's client that a reply is wanted — so the two travel
+  # together, and once somebody has answered the asking stops.
+  defp awaiting(parameters) do
+    if Map.get(parameters, "PARTSTAT") == "NEEDS-ACTION",
+      do: Map.put(parameters, "RSVP", "TRUE"),
+      else: Map.delete(parameters, "RSVP")
+  end
+
+  defp unattended?(parameters), do: Map.get(parameters, "CUTYPE") in ~w(RESOURCE ROOM)
 
   defp stamp(component, recipients, options) do
     properties =
@@ -868,7 +1172,10 @@ defmodule Dav.Cal.Scheduling do
     %{component | properties: properties}
   end
 
+  defp cancelled?(component), do: value(component, "STATUS") == "CANCELLED"
+
   defp send_to([], _method, _components, _zones, _options, _announced), do: :ok
+  defp send_to(_recipients, _method, [], _zones, _options, _announced), do: :ok
 
   defp send_to(recipients, method, components, zones, options, announced) do
     # The delivered copy carries canonical addresses too. Sending one
@@ -909,10 +1216,10 @@ defmodule Dav.Cal.Scheduling do
     %{calendar | components: replaced}
   end
 
-  defp notified(recipients, %{previous: nil}), do: recipients
+  defp notified(recipients, %{previous: nil}, _options), do: recipients
 
-  defp notified(recipients, %{body: body, previous: previous}) do
-    if shared(body) == shared(previous), do: [], else: recipients
+  defp notified(recipients, %{body: body, previous: previous}, options) do
+    if shared(body, options) == shared(previous, options), do: [], else: recipients
   end
 
   # The event as the attendees see it. Alarms are removed because they
@@ -920,18 +1227,31 @@ defmodule Dav.Cal.Scheduling do
   # attendee is waiting to hear it; and the parameters the server
   # maintains because they record what became of past messages rather
   # than anything this one carries.
-  defp shared(body) do
+  defp shared(body, options) do
+    allowed = extensions(options)
+
     with {:ok, calendar} <- ICalendar.parse(body),
          [_ | _] = components <- schedulable(calendar) do
-      for component <- Enum.map(components, &without_alarms/1),
+      for component <-
+            components |> Enum.map(&without_alarms/1) |> Enum.map(&unextended(&1, allowed)),
           property <- component.properties,
           property.name not in @bookkeeping,
           into: MapSet.new(),
-          do: {property.name, property.value, Map.drop(property.parameters, @maintained)}
+          do: {property.name, addressed_as(property, options), comparable(property.parameters)}
     else
       _unreadable -> nil
     end
   end
+
+  # A person, not a spelling. The client writes `mailto:` where the
+  # server holds `urn:x-uid:`, and comparing the two as text makes
+  # every save look like a change of attendee — which puts a fresh
+  # invitation in everybody's Inbox each time the organiser edits a
+  # word of the summary.
+  defp addressed_as(%{name: name, value: value}, options) when name in ~w(ATTENDEE ORGANIZER),
+    do: canonical_address(value, options)
+
+  defp addressed_as(%{value: value}, _options), do: value
 
   # Which instances the message itself carries. An update that touches
   # one Tuesday is announced as that Tuesday: sending the whole
@@ -1043,8 +1363,17 @@ defmodule Dav.Cal.Scheduling do
     uid = Enum.find_value(components, &value(&1, "UID"))
 
     case collection(home, &Schedule.inbox?/1, options) do
-      nil -> :ok
-      inbox -> store(inbox, message(method, told, zones), uid, options)
+      nil ->
+        :ok
+
+      inbox ->
+        deposit(
+          inbox,
+          message(method, told, zones),
+          uid,
+          options,
+          addressing(method, components, recipient)
+        )
     end
 
     case {method, collection(home, &Cal.calendar?/1, options)} do
@@ -1088,9 +1417,95 @@ defmodule Dav.Cal.Scheduling do
       updated = %{stored | components: answered ++ separated(stored, replies)}
 
       write(object, ICalendar.write(updated), options)
+      refreshed(updated, uid, answering(replies), options)
     else
       _no_such_event -> :ok
     end
+  end
+
+  # Everyone else's copy learns the answer too. An attendee's client
+  # shows the guest list, and without this each of them sees every
+  # other participant as never having replied — the organiser knows
+  # who accepted and nobody else does. It goes straight into their
+  # calendar rather than their Inbox: nothing is being asked of them,
+  # and a message would have their client offer a meeting they are
+  # already holding.
+  defp refreshed(updated, uid, answering, options) do
+    components = schedulable(updated)
+    organizer = Enum.find_value(components, &value(&1, "ORGANIZER"))
+
+    for address <- attendees_of(components),
+        address != organizer,
+        address not in answering,
+        home = home_of(address, options),
+        not is_nil(home),
+        calendar = collection(home, &Cal.calendar?/1, options),
+        not is_nil(calendar) do
+      restated_for(calendar, uid, address, components, options)
+    end
+
+    :ok
+  end
+
+  defp answering(replies) do
+    for component <- replies,
+        property <- component.properties,
+        property.name == "ATTENDEE",
+        uniq: true,
+        do: property.value
+  end
+
+  defp restated_for(calendar, uid, address, components, options) do
+    with %Resource{} = object <- object_with(calendar, uid, options),
+         {:ok, body} <- read(object, options),
+         {:ok, stored} <- ICalendar.parse(body) do
+      revised = Enum.map(stored.components, &restated_component(&1, components, address))
+
+      write(object, ICalendar.write(%{stored | components: revised}), options)
+    else
+      _no_copy_of_their_own -> :ok
+    end
+  end
+
+  defp restated_component(component, components, address) do
+    case Enum.find(components, &(value(&1, "RECURRENCE-ID") == value(component, "RECURRENCE-ID"))) do
+      nil -> component
+      known -> retold(component, known, address)
+    end
+  end
+
+  # Their own line is theirs; every other participant's is the
+  # organiser's to state.
+  defp retold(component, known, address) do
+    answers =
+      for property <- known.properties,
+          property.name == "ATTENDEE",
+          property.value != address,
+          into: %{},
+          do: {property.value, Map.get(property.parameters, "PARTSTAT")}
+
+    properties =
+      Enum.map(component.properties, fn property ->
+        with "ATTENDEE" <- property.name,
+             {:ok, answer} when is_binary(answer) <- Map.fetch(answers, property.value) do
+          # `RSVP=TRUE` is the question, not the answer. Somebody who
+          # has replied is no longer being asked.
+          parameters = Map.put(property.parameters, "PARTSTAT", answer)
+
+          %{
+            property
+            | parameters:
+                if(answer == "NEEDS-ACTION",
+                  do: parameters,
+                  else: Map.delete(parameters, "RSVP")
+                )
+          }
+        else
+          _theirs_or_unknown -> property
+        end
+      end)
+
+    %{component | properties: properties}
   end
 
   # RFC 5546 section 3.2.3: an attendee may answer for one instance of
@@ -1187,7 +1602,7 @@ defmodule Dav.Cal.Scheduling do
 
       updated = %{
         stored
-        | components: Enum.map(stored.components, &cancelled_if(&1, withdrawn))
+        | components: Enum.map(stored.components, &cancelled_if(&1, withdrawn, components))
       }
 
       write(object, ICalendar.write(updated), options)
@@ -1201,12 +1616,29 @@ defmodule Dav.Cal.Scheduling do
   # series; one naming a single override leaves the rest standing.
   # Cancelling everything regardless cleared an attendee's calendar of
   # meetings that are still going ahead.
-  defp cancelled_if(%{name: "VTIMEZONE"} = zone, _withdrawn), do: zone
+  defp cancelled_if(%{name: "VTIMEZONE"} = zone, _withdrawn, _sent), do: zone
 
-  defp cancelled_if(component, withdrawn) do
+  defp cancelled_if(component, withdrawn, sent) do
     if nil in withdrawn or value(component, "RECURRENCE-ID") in withdrawn,
-      do: cancelled(component, nil),
+      do: component |> cancelled(nil) |> numbered(sent),
       else: component
+  end
+
+  # The withdrawal carries its own version, and the copy it cancels
+  # takes it. A recipient left holding the version they were invited
+  # at cannot tell a cancellation from the invitation it withdraws.
+  defp numbered(component, sent) do
+    with %{} = counterpart <-
+           Enum.find(sent, &(value(&1, "RECURRENCE-ID") == value(component, "RECURRENCE-ID"))),
+         sequence when is_binary(sequence) <- value(counterpart, "SEQUENCE") do
+      properties =
+        Enum.reject(component.properties, &(&1.name == "SEQUENCE")) ++
+          [%{name: "SEQUENCE", parameters: %{}, value: sequence}]
+
+      %{component | properties: properties}
+    else
+      _unnumbered -> component
+    end
   end
 
   defp cancelled(%{name: "VTIMEZONE"} = zone, _component), do: zone
@@ -1317,7 +1749,7 @@ defmodule Dav.Cal.Scheduling do
   # the test: it also rises for a changed subject, which the attendees
   # need to see but need not re-accept. What re-asks them is a change
   # to when or where the event happens.
-  defp resequenced?(now, before), do: shape(now, @significant) != shape(before, @significant)
+  defp resequenced?(now, before), do: shape(now, @rescheduled) != shape(before, @rescheduled)
 
   # The recipient's *own* participation, and the ORGANIZER status
   # recording that their reply was delivered — and nothing else. What
@@ -1451,16 +1883,76 @@ defmodule Dav.Cal.Scheduling do
   # it is the server's own act, not a client's request, and running the
   # hooks again would have the delivery re-schedule itself. But that
   # also means nothing stamps its `Schedule-Tag`, so this does.
-  defp store(collection, body, uid, %{store: store, context: context} = options) do
+  # An Inbox holds messages, not the event. Two messages about one
+  # event — an update and a cancellation of one instance — are two
+  # things to read, and writing both under the event's `UID` leaves
+  # the recipient with only whichever arrived last.
+  defp deposit(collection, body, uid, options, addressing) do
+    store(collection, body, unused(collection, uid || "message", options), options, addressing)
+  end
+
+  defp unused(collection, name, %{store: store, context: context}) do
+    Stream.concat([name], Stream.map(Stream.iterate(2, &(&1 + 1)), &"#{name}-#{&1}"))
+    |> Enum.find(fn candidate ->
+      match?(
+        {:error, :not_found},
+        store.resolve(collection.path ++ ["#{candidate}.ics"], context)
+      )
+    end)
+  end
+
+  defp store(collection, body, uid, options, addressing \\ [])
+
+  defp store(collection, body, uid, %{store: store, context: context} = options, addressing) do
     if Store.supports?(store, :put) do
       path = collection.path ++ [(uid || "message") <> ".ics"]
 
       case store.put(path, body, @calendar_type, context) do
-        {:ok, _outcome, resource} -> tag(resource, body, options)
-        _refused -> :ok
+        {:ok, _outcome, resource} ->
+          tag(resource, body, options)
+          addressed(resource, addressing, options)
+
+        _refused ->
+          :ok
       end
     end
   end
+
+  # A message in an Inbox records who sent it and who it was sent to.
+  # The recipient's client reads them to tell an invitation addressed
+  # to them apart from one delivered to a calendar they read on
+  # somebody else's behalf, which the message body does not say.
+  defp addressed(_resource, [], _options), do: :ok
+
+  defp addressed(resource, addressing, %{store: store, context: context}) do
+    if Store.supports?(store, :patch), do: store.patch(resource, addressing, context)
+
+    :ok
+  end
+
+  defp addressing(method, components, recipient) do
+    case originator(method, components) do
+      nil ->
+        []
+
+      sender ->
+        [
+          {:set, {Xml.caldav(), "originator"}, {:hrefs, [sender]}},
+          {:set, {Xml.caldav(), "recipient"}, {:hrefs, [recipient]}}
+        ]
+    end
+  end
+
+  # Whoever the message is from: an invitation or a cancellation comes
+  # from the organiser, and a reply from the one attendee it answers
+  # for.
+  defp originator("REPLY", components) do
+    Enum.find_value(components, fn component ->
+      Enum.find_value(component.properties, &if(&1.name == "ATTENDEE", do: &1.value))
+    end)
+  end
+
+  defp originator(_method, components), do: Enum.find_value(components, &value(&1, "ORGANIZER"))
 
   # A delivered copy gets a *new* tag every time. This is the arrival
   # of a scheduling message, which is precisely what the tag tracks —

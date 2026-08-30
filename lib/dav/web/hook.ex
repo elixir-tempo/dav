@@ -160,7 +160,36 @@ defmodule Dav.Web.Hook do
               options :: map()
             ) :: {:ok, Plug.Conn.t()} | :unhandled
 
-  @optional_callbacks headers: 3, deleted: 2, properties: 3, action: 4
+  @doc """
+  Resource types this hook adds to a resource.
+
+  Optional. `DAV:resourcetype` is protected — a client may not tell
+  the server what a resource *is* — but an extension may: a calendar
+  shared into someone else's home is still a calendar, and also a
+  `CS:shared` one, and only the extension that implemented sharing
+  knows that.
+
+  ### Arguments
+
+  * `resource` is the resource being described.
+
+  * `collection` is its parent collection, or `nil`.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * The qualified names to add. They are added to whatever the store
+    already reports rather than replacing it.
+
+  """
+  @callback types(
+              resource :: Resource.t(),
+              collection :: Resource.t() | nil,
+              options :: map()
+            ) :: [Dav.Xml.qname()]
+
+  @optional_callbacks headers: 3, deleted: 2, properties: 3, action: 4, types: 3
 
   @doc """
   React to a resource having been written.

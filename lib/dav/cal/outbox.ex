@@ -75,6 +75,7 @@ defmodule Dav.Cal.Outbox do
          :ok <- media_type(conn),
          {:ok, calendar, component} <- scheduling_message(body),
          {:ok, recipients} <- recipients(conn, component),
+         :ok <- attendee_allowed(kind, calendar, component, resource, options),
          :ok <- organizer_allowed(kind, component, resource, options) do
       dispatch(conn, calendar, component, recipients, options)
     else
@@ -146,8 +147,30 @@ defmodule Dav.Cal.Outbox do
       is_nil(property(calendar, "METHOD")) -> {:error, caldav("valid-calendar-data")}
       is_nil(component) -> {:error, caldav("valid-scheduling-message")}
       is_nil(property(component, "ORGANIZER")) -> {:error, caldav("valid-organizer")}
+      not one_event?(calendar) -> {:error, caldav("valid-calendar-data")}
+      not one_answer?(calendar, component) -> {:error, caldav("valid-calendar-data")}
       true -> {:ok, calendar, component}
     end
+  end
+
+  # RFC 5546 section 3.2: an iTIP message is about one event. Several
+  # components may describe it — a recurrence and its overrides — but
+  # they share a `UID`, and a message carrying two of them is two
+  # messages in one envelope with no way to say which the recipients
+  # are being asked about.
+  defp one_event?(calendar) do
+    calendar.components
+    |> Enum.filter(&(&1.name in @schedulable))
+    |> Enum.map(&property(&1, "UID"))
+    |> Enum.uniq()
+    |> length() <= 1
+  end
+
+  # "The REPLY method is used to respond to a request" — by one
+  # attendee, for themselves. A reply naming several says nothing
+  # about which of them answered.
+  defp one_answer?(calendar, component) do
+    property(calendar, "METHOD") != "REPLY" or length(values(component, "ATTENDEE")) == 1
   end
 
   # Recipients come from the `Recipient` header when the client sent
@@ -190,6 +213,30 @@ defmodule Dav.Cal.Outbox do
   defp owns?(%Resource{path: home}, %Resource{path: outbox}),
     do: Enum.take(outbox, length(home)) == home
 
+  # RFC 6638 section 4.1: the attendee a `REPLY` answers for must be
+  # the owner of the Outbox it was posted to. Answering on somebody
+  # else's behalf is how a scheduling system is abused, and the
+  # organiser has no way to tell the difference from the message.
+  defp attendee_allowed(:receiver, _calendar, _component, _outbox, _options), do: :ok
+
+  defp attendee_allowed(:outbox, calendar, component, outbox, options) do
+    if property(calendar, "METHOD") == "REPLY" do
+      component |> values("ATTENDEE") |> List.first() |> answering(outbox, options)
+    else
+      :ok
+    end
+  end
+
+  defp answering(attendee, outbox, options) do
+    case principal(attendee, options) do
+      %Resource{} = home ->
+        if owns?(home, outbox), do: :ok, else: {:error, caldav("attendee-allowed")}
+
+      nil ->
+        {:error, caldav("attendee-allowed")}
+    end
+  end
+
   defp dispatch(conn, calendar, component, recipients, options) do
     if component.name == "VFREEBUSY" and property(calendar, "METHOD") == "REQUEST" do
       respond(conn, component, options)
@@ -205,8 +252,11 @@ defmodule Dav.Cal.Outbox do
     responses =
       for recipient <- recipients do
         case principal(recipient, options) do
-          nil -> {recipient, @invalid_user, nil}
-          home -> {recipient, delivery_status(home, calendar, component, options), nil}
+          nil ->
+            {recipient, @invalid_user, nil}
+
+          home ->
+            {recipient, delivery_status(home, recipient, calendar, component, options), nil}
         end
       end
 
@@ -215,13 +265,45 @@ defmodule Dav.Cal.Outbox do
     |> send_resp(200, Schedule.schedule_response(responses))
   end
 
-  defp delivery_status(home, calendar, component, options) do
+  defp delivery_status(home, recipient, calendar, component, options) do
     with %Resource{} = inbox <- inbox_of(home, options),
-         :ok <- put_message(inbox, calendar, component, options) do
+         :ok <- put_message(inbox, recipient, calendar, component, options) do
       @success
     else
       _undeliverable -> @no_inbox
     end
+  end
+
+  # A message in an Inbox records who sent it and who it was sent to.
+  # The recipient's client reads them to tell an invitation addressed
+  # to them apart from one delivered to a calendar they merely read,
+  # which the message body does not say.
+  defp addressed(resource, originator, recipient, store, context) do
+    if is_binary(originator) and Store.supports?(store, :patch) do
+      store.patch(
+        resource,
+        [
+          {:set, {Xml.caldav(), "originator"}, {:hrefs, [originator]}},
+          {:set, {Xml.caldav(), "recipient"}, {:hrefs, [recipient]}}
+        ],
+        context
+      )
+    end
+
+    :ok
+  end
+
+  # An Inbox holds messages, not events. Two messages about one event
+  # are two things to read, and writing both under the event's `UID`
+  # leaves the recipient with only whichever arrived last.
+  defp unused(inbox, name, store, context) do
+    [name]
+    |> Stream.concat(Stream.map(Stream.iterate(2, &(&1 + 1)), &"#{name}-#{&1}"))
+    |> Enum.find_value(fn candidate ->
+      path = inbox.path ++ ["#{candidate}.ics"]
+
+      if match?({:error, :not_found}, store.resolve(path, context)), do: "#{candidate}.ics"
+    end)
   end
 
   defp inbox_of(home, %{store: store, context: context}) do
@@ -231,14 +313,17 @@ defmodule Dav.Cal.Outbox do
     end
   end
 
-  defp put_message(inbox, calendar, component, %{store: store, context: context}) do
+  defp put_message(inbox, recipient, calendar, component, %{store: store, context: context}) do
     if Store.supports?(store, :put) do
-      name = (property(component, "UID") || "message") <> ".ics"
+      name = unused(inbox, property(component, "UID") || "message", store, context)
       body = wrap(calendar, component)
 
       case store.put(inbox.path ++ [name], body, @calendar_type, context) do
-        {:ok, _outcome, _resource} -> :ok
-        _refused -> :error
+        {:ok, _outcome, resource} ->
+          addressed(resource, property(component, "ORGANIZER"), recipient, store, context)
+
+        _refused ->
+          :error
       end
     else
       :error
@@ -281,18 +366,37 @@ defmodule Dav.Cal.Outbox do
     organiser = property(request, "ORGANIZER")
 
     responses =
-      for attendee <- values(request, "ATTENDEE"),
-          do: answer(attendee, organiser, range, options)
+      for property <- Enum.filter(request.properties, &(&1.name == "ATTENDEE")),
+          do: answer(property.value, property.parameters, organiser, range, options)
 
     conn
     |> put_resp_content_type("application/xml", "utf-8")
     |> send_resp(200, Schedule.schedule_response(responses))
   end
 
-  defp answer(attendee, organiser, range, options) do
+  # Read as the person being asked about, not as the person asking.
+  # A shared calendar shows each of its readers something slightly
+  # different — whether an event makes *them* busy is theirs to say —
+  # so answering for someone else while scoped to the requester
+  # reports the requester's own view of time that is not theirs.
+  defp answer(attendee, parameters, organiser, range, options) do
+    options = as_attendee(attendee, options)
+
     case calendars_of(attendee, options) do
-      [] -> {attendee, @invalid_user, nil}
-      calendars -> {attendee, @success, busy(calendars, attendee, organiser, range, options)}
+      [] ->
+        {attendee, @invalid_user, nil}
+
+      calendars ->
+        {attendee, @success, busy(calendars, {attendee, parameters}, organiser, range, options)}
+    end
+  end
+
+  defp as_attendee(attendee, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :scope),
+         %Resource{owner: owner} when is_binary(owner) <- principal(attendee, options) do
+      %{options | context: store.scope(context, owner)}
+    else
+      _unknown -> options
     end
   end
 
@@ -303,8 +407,14 @@ defmodule Dav.Cal.Outbox do
   # answer a scheduler must not give.
   defp calendars_of(attendee, options) do
     case principal(attendee, options) do
-      nil -> []
-      home -> home |> children(options) |> Enum.filter(&Cal.calendar?/1)
+      nil ->
+        []
+
+      home ->
+        home
+        |> children(options)
+        |> Enum.filter(&Cal.calendar?/1)
+        |> Enum.reject(&FreeBusy.transparent?(&1, options))
     end
   end
 
@@ -326,21 +436,62 @@ defmodule Dav.Cal.Outbox do
 
   defp busy(calendars, attendee, organiser, range, options) do
     periods =
-      calendars
-      |> Enum.flat_map(&children(&1, options))
-      |> Enum.reject(& &1.collection?)
-      |> Enum.flat_map(&periods(&1, range, options))
+      Enum.flat_map(calendars, fn calendar ->
+        borrowed = borrowed?(calendar, options)
 
-    FreeBusy.vfreebusy(periods, range, attendee: attendee, organizer: organiser)
+        calendar
+        |> children(options)
+        |> Enum.reject(& &1.collection?)
+        |> Enum.flat_map(&periods(&1, range, borrowed, options))
+      end)
+
+    FreeBusy.vfreebusy(periods, range,
+      attendee: attendee,
+      organizer: organiser,
+      method: "REPLY"
+    )
   end
 
-  defp periods(object, range, %{store: store, context: context}) do
+  defp periods(object, range, borrowed?, %{store: store, context: context}) do
     with true <- Store.supports?(store, :read),
          {:ok, data} <- store.read(object, context),
          {:ok, calendar} <- ICalendar.parse(IO.iodata_to_binary(data)) do
-      FreeBusy.periods_of(calendar, range)
+      FreeBusy.periods_of(%{calendar | components: kept(calendar.components, borrowed?)}, range)
     else
       _unreadable -> []
+    end
+  end
+
+  # An all-day event in somebody else's calendar does not make you
+  # busy. It is on the day, not at a time: being shown a colleague's
+  # holiday says where they are, not that a meeting cannot be booked
+  # with you. Saying so for yourself is different — a sharee who
+  # writes their own `TRANSP` has decided, and their decision stands.
+  defp kept(components, false), do: components
+  defp kept(components, true), do: Enum.reject(components, &undecided_all_day?/1)
+
+  defp undecided_all_day?(component) do
+    all_day?(component) and
+      not Enum.any?(component.properties, &(&1.name == "TRANSP"))
+  end
+
+  defp all_day?(component) do
+    case Enum.find(component.properties, &(&1.name == "DTSTART")) do
+      nil -> false
+      property -> Map.get(property.parameters, "VALUE") == "DATE"
+    end
+  end
+
+  @shared_url {"http://calendarserver.org/ns/", "shared-url"}
+
+  # A calendar that records where it points at is a share link, and
+  # what it shows belongs to somebody else.
+  defp borrowed?(collection, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :properties),
+         %{} = properties <- store.properties(collection, context) do
+      Map.has_key?(properties, @shared_url)
+    else
+      _no_properties -> false
     end
   end
 

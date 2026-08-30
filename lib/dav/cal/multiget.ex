@@ -40,11 +40,25 @@ defmodule Dav.Cal.Multiget do
   # client naming resources by href is not helped by being told the
   # collection it addressed was the wrong kind. The hrefs are resolved
   # on their own merits.
-  def run(%Resource{}, body, _depth, options) do
+  def run(%Resource{} = target, body, _depth, options) do
     with {:ok, document} <- Xml.parse(body),
-         :ok <- Selection.supported(calendar_data(document)) do
-      {:ok, Enum.map(hrefs(document), &answer(&1, requested(document), options))}
+         :ok <- Selection.supported(calendar_data(document)),
+         :ok <- addressable(target, options) do
+      {:ok, Enum.map(hrefs(document), &answer(&1, target, requested(document), options))}
     end
+  end
+
+  # RFC 4791 section 7.9: the report is made against a calendar
+  # collection or a calendar object resource. A file in an ordinary
+  # collection is neither, and answering for it would report as
+  # calendar data something the server treats as calendar data
+  # nowhere else.
+  defp addressable(%Resource{collection?: true}, _options), do: :ok
+
+  defp addressable(%Resource{} = target, %{store: store, context: context}) do
+    if held_in_calendar?(target, store, context),
+      do: :ok,
+      else: {:error, {Xml.caldav(), "supported-calendar-data"}}
   end
 
   defp calendar_data(document) do
@@ -75,8 +89,8 @@ defmodule Dav.Cal.Multiget do
     end
   end
 
-  defp answer(href, wanted, options) do
-    with {:ok, object} <- resolve(href, options),
+  defp answer(href, target, wanted, options) do
+    with {:ok, object} <- resolve(href, target, options),
          {:ok, data} <- read(object, options) do
       Cal.report_response(object, wanted, data)
     else
@@ -86,10 +100,41 @@ defmodule Dav.Cal.Multiget do
     end
   end
 
-  defp resolve(href, %{store: store, context: context}) do
-    case store.resolve(Store.segments(URI.parse(href).path || ""), context) do
-      {:ok, object} -> {:ok, object}
-      {:error, :not_found} -> :error
+  # An href in a request body is escaped once as XML content and once
+  # as a URI, so it carries one more layer than a request line does:
+  # `3%2520a.ics` here names the resource `3 a.ics`.
+  defp resolve(href, target, %{store: store, context: context}) do
+    segments = Enum.map(Store.segments(URI.parse(href).path || ""), &URI.decode/1)
+
+    case store.resolve(segments, context) do
+      {:ok, object} ->
+        if addressed?(object, target) and held_in_calendar?(object, store, context),
+          do: {:ok, object},
+          else: :error
+
+      {:error, :not_found} ->
+        :error
+    end
+  end
+
+  # A report made against one resource answers for that resource. The
+  # hrefs a client sends name members of a collection; against a
+  # single object there is one member, and any other name is asking
+  # about somebody else's resource.
+  defp addressed?(_object, %Resource{collection?: true}), do: true
+  defp addressed?(%Resource{path: path}, %Resource{path: path}), do: true
+  defp addressed?(_object, _target), do: false
+
+  # A calendar object resource lives in a calendar collection. An
+  # `.ics` file in an ordinary collection is a file, and answering for
+  # it would report as calendar data something the server treats as
+  # calendar data nowhere else.
+  defp held_in_calendar?(%Resource{collection?: true}, _store, _context), do: true
+
+  defp held_in_calendar?(%Resource{path: path}, store, context) do
+    case store.resolve(Enum.drop(path, -1), context) do
+      {:ok, collection} -> Cal.calendar?(collection)
+      _no_parent -> false
     end
   end
 

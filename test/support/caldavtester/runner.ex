@@ -44,7 +44,7 @@ defmodule Dav.CalDAVTester.Runner do
 
   # How many of the suite's users to provision. The scheduling
   # scenarios name up to five between them.
-  @people 5
+  @people 40
 
   # How many accounts `serverinfo.xml` declares. Credentials are
   # checked against all of them.
@@ -97,6 +97,7 @@ defmodule Dav.CalDAVTester.Runner do
     {results, state} =
       Enum.map_reduce(Scenario.tests(scenario, Features.declared()), state, fn {suite, test},
                                                                                state ->
+        state = suited(state, suite)
         {outcome, state} = run_test(test, state)
         {{suite.name, test.name, outcome}, state}
       end)
@@ -108,6 +109,32 @@ defmodule Dav.CalDAVTester.Runner do
     clean_up(scenario, state)
 
     results
+  end
+
+  # `$uid1:` names one event for as long as a suite runs — that is what
+  # lets one fixture reference another's — and a different event in the
+  # next suite. Sharing them across a whole scenario has the second
+  # suite storing an event whose `UID` the first one is still using,
+  # which a server enforcing `CALDAV:no-uid-conflict` refuses.
+  defp suited(%{suite: name} = state, %Scenario.Suite{name: name}), do: state
+
+  defp suited(state, %Scenario.Suite{change_uid?: false} = suite),
+    do: Map.put(state, :suite, suite.name)
+
+  defp suited(state, %Scenario.Suite{name: name}) do
+    seen = Map.get(state, :suites, 0) + 1
+
+    uids =
+      for index <- 1..20,
+          into: %{},
+          do:
+            {"$uid#{index}:",
+             "caldavtester-uid-#{seen}-#{String.pad_leading("#{index}", 4, "0")}"}
+
+    state
+    |> Map.put(:suite, name)
+    |> Map.put(:suites, seen)
+    |> Map.update!(:substitutions, &Map.merge(&1, uids))
   end
 
   defp clean_up(scenario, state) do
@@ -413,7 +440,7 @@ defmodule Dav.CalDAVTester.Runner do
     index = account(request, state)
 
     if correct?(request, index, state),
-      do: state.substitutions["$principal#{index}:"],
+      do: canonical_principal(index, state.substitutions),
       else: nil
   end
 
@@ -576,7 +603,13 @@ defmodule Dav.CalDAVTester.Runner do
 
     {:ok, DavPlug.call(conn, options)}
   rescue
-    error -> {:failed, "request raised #{inspect(error.__struct__)}: #{Exception.message(error)}"}
+    error ->
+      {:failed,
+       "request raised #{inspect(error.__struct__)}: #{Exception.message(error)} @ " <>
+         (__STACKTRACE__
+          |> Enum.take(4)
+          |> Exception.format_stacktrace()
+          |> String.replace("\n", " "))}
   catch
     kind, reason -> {:failed, "request #{kind}: #{inspect(reason)}"}
   end
@@ -663,7 +696,17 @@ defmodule Dav.CalDAVTester.Runner do
           is_binary(home),
           do: {index, segments(home)}
 
-    homes = Enum.map(people, &elem(&1, 1))
+    # Rooms and equipment are calendar users too. They have a home, a
+    # principal and an address like anyone else — the difference is
+    # that nobody sits at their keyboard, which is why an invitation
+    # to one is answered by the server rather than by them.
+    rooms =
+      for index <- 1..@people,
+          home = substitutions["$rcalendarhome#{index}:"],
+          is_binary(home),
+          do: {index, segments(home)}
+
+    homes = Enum.map(people ++ rooms, &elem(&1, 1))
 
     # No `tasks` collection: this server does not declare
     # `split-calendars`, so VTODOs live in the calendar and a
@@ -672,12 +715,7 @@ defmodule Dav.CalDAVTester.Runner do
     collections =
       for home <- homes, leaf <- ["calendar"], do: home ++ [leaf]
 
-    owners =
-      for {index, home} <- people,
-          owner = substitutions["$principal#{index}:"],
-          is_binary(owner),
-          into: %{},
-          do: {home, owner}
+    owners = Map.merge(owned(people, substitutions), owned_rooms(rooms, substitutions))
 
     resources =
       ([[] | ancestors(homes)] ++ homes)
@@ -721,26 +759,31 @@ defmodule Dav.CalDAVTester.Runner do
     # write and stops the moment addresses are normalised, which is
     # the moment it matters.
     addresses =
-      for {index, home} <- people,
-          key <- ~w(cuaddr email cuaddrurn cuaddralt),
-          address = substitutions["$#{key}#{index}:"],
-          is_binary(address),
-          into: %{},
-          do: {address, home}
+      Map.merge(
+        located(people, ~w(cuaddr email cuaddrurn cuaddralt), substitutions),
+        located(rooms, ~w(rcuaddr rcuaddrurn rcuaddralt), substitutions)
+      )
 
     # The suite posts server-to-server messages at a top-level
     # endpoint, which a deployment marks explicitly.
     receiver = [%Resource{path: ["inbox"], collection?: true, types: [Schedule.receiver()]}]
 
+    # One principal, two paths. The suite addresses people by name —
+    # `/principals/users/user01/` — and expects properties to answer
+    # with the stable form, `/principals/__uids__/<guid>/`. A
+    # deployment that offers only one of them either cannot be
+    # addressed or reports an owner nobody asked about.
     principals =
       for {index, _home} <- people,
-          path = substitutions["$principal#{index}:"],
+          canonical = canonical_principal(index, substitutions),
+          is_binary(canonical),
+          path <- Enum.uniq([substitutions["$principal#{index}:"], canonical]),
           is_binary(path),
           do: %Resource{
             path: segments(path),
             collection?: true,
             types: [Acl.principal()],
-            owner: path,
+            owner: canonical,
             display_name: substitutions["$username#{index}:"]
           }
 
@@ -754,10 +797,16 @@ defmodule Dav.CalDAVTester.Runner do
     SchedulingStore.start(
       resources ++
         calendars ++
-        scheduling ++ notifications ++ tree ++ principals ++ proxies(principals) ++ receiver,
+        scheduling ++
+        notifications ++
+        tree ++
+        ancestry(room_principals(rooms, substitutions)) ++
+        principals ++
+        room_principals(rooms, substitutions) ++ proxies(principals) ++ receiver,
       addresses,
       principal_properties(people, substitutions),
-      canonical_addresses(people, substitutions)
+      canonical_addresses(people, substitutions),
+      aliased_homes(people, substitutions)
     )
   end
 
@@ -774,6 +823,89 @@ defmodule Dav.CalDAVTester.Runner do
           types: [Acl.principal()],
           owner: principal.owner
         }
+  end
+
+  # The form properties report. `$principaluri` is the identifier that
+  # does not change when someone is renamed, which is why the suite
+  # writes its expectations in terms of it.
+  defp owned(people, substitutions) do
+    for {index, home} <- people,
+        owner = canonical_principal(index, substitutions),
+        is_binary(owner),
+        into: %{},
+        do: {home, owner}
+  end
+
+  defp owned_rooms(rooms, substitutions) do
+    for {index, home} <- rooms,
+        owner = substitutions["$rprincipal#{index}:"],
+        is_binary(owner),
+        into: %{},
+        do: {home, owner}
+  end
+
+  defp located(who, keys, substitutions) do
+    for {index, home} <- who,
+        key <- keys,
+        address = substitutions["$#{key}#{index}:"],
+        is_binary(address),
+        into: %{},
+        do: {address, home}
+  end
+
+  defp room_principals(rooms, substitutions) do
+    for {index, _home} <- rooms,
+        path = substitutions["$rprincipal#{index}:"],
+        is_binary(path),
+        do: %Resource{
+          path: segments(path),
+          collection?: true,
+          types: [Acl.principal()],
+          owner: path,
+          display_name: substitutions["$resourcename#{index}:"]
+        }
+  end
+
+  defp ancestry(principals) do
+    principals
+    |> Enum.map(& &1.path)
+    |> ancestors()
+    |> Enum.uniq()
+    |> Enum.map(&%Resource{path: &1, collection?: true})
+  end
+
+  # A calendar home answers to two names: the stable one built from a
+  # user's identifier, and the readable one built from their login.
+  # They are the same collection, so the second is an alias rather
+  # than a copy — two copies would drift apart on the first write.
+  defp aliased_homes(people, substitutions) do
+    homes =
+      for {index, home} <- people,
+          alternate = substitutions["$calendarhomealt#{index}:"],
+          is_binary(alternate),
+          segments(alternate) != home,
+          into: %{},
+          do: {segments(alternate), home}
+
+    # And the same for principals. A grant made against one spelling of
+    # somebody has to be visible against the other, or a proxy added by
+    # name is a stranger when looked up by identifier.
+    principals =
+      for {index, _home} <- people,
+          named = substitutions["$principal#{index}:"],
+          canonical = canonical_principal(index, substitutions),
+          is_binary(named),
+          is_binary(canonical),
+          segments(named) != segments(canonical),
+          leaf <- [[], ["calendar-proxy-read"], ["calendar-proxy-write"]],
+          into: %{},
+          do: {segments(named) ++ leaf, segments(canonical) ++ leaf}
+
+    Map.merge(homes, principals)
+  end
+
+  defp canonical_principal(index, substitutions) do
+    substitutions["$principaluri#{index}:"] || substitutions["$principal#{index}:"]
   end
 
   # Every spelling of a user maps to the one form the server stores.
@@ -801,18 +933,27 @@ defmodule Dav.CalDAVTester.Runner do
   # supplies them; here they are seeded so the suite can ask for them.
   defp principal_properties(people, substitutions) do
     for {index, home} <- people,
-        path = substitutions["$principal#{index}:"],
+        path = canonical_principal(index, substitutions),
         is_binary(path),
         into: %{} do
       {segments(path),
        %{
+         # A deployment knows people's names. Sharing invitations carry
+         # them so that an invitee's client shows "User 01" rather than
+         # a principal URL, and the name is the server's to give: a
+         # sharer's client can spell it however it likes.
+         {Xml.dav(), "displayname"} => substitutions["$username#{index}:"],
          {Xml.caldav(), "calendar-home-set"} => {:hrefs, ["/" <> Enum.join(home, "/") <> "/"]},
          {Xml.caldav(), "schedule-inbox-URL"} =>
            {:hrefs, ["/" <> Enum.join(home ++ ["inbox"], "/") <> "/"]},
          {Xml.caldav(), "schedule-outbox-URL"} =>
            {:hrefs, ["/" <> Enum.join(home ++ ["outbox"], "/") <> "/"]},
          {Xml.caldav(), "calendar-user-address-set"} =>
-           {:hrefs, Enum.filter([substitutions["$cuaddr#{index}:"]], &is_binary/1)}
+           {:hrefs,
+            Enum.filter(
+              [substitutions["$cuaddrurn#{index}:"], substitutions["$cuaddr#{index}:"]],
+              &is_binary/1
+            )}
        }}
     end
   end
@@ -841,6 +982,7 @@ defmodule Dav.CalDAVTester.Runner do
       validators: [Cal.Object],
       hooks: [Cal.Scheduling, Cal.Sharing],
       authentication: :required,
+      compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness
@@ -852,7 +994,7 @@ defmodule Dav.CalDAVTester.Runner do
       # are the harness acting on its own behalf rather than a
       # scenario's, so they act as the first account. A per-request
       # `user` overrides this.
-      principal: substitutions["$principal1:"],
+      principal: canonical_principal(1, substitutions),
       reports: [
         {{Xml.dav(), "acl-principal-prop-set"}, Principal.AclPrincipalPropSet},
         {{Xml.dav(), "principal-match"}, Principal.Match},
