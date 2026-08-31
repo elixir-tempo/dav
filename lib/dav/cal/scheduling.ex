@@ -424,6 +424,104 @@ defmodule Dav.Cal.Scheduling do
     end
   end
 
+  @doc """
+  Whether a property instruction may be applied.
+
+  RFC 4791 section 6.2.1: `CALDAV:calendar-free-busy-set` names the
+  calendars consulted for the owner's free-busy time. A set naming a
+  collection that does not exist — or is not a calendar — describes a
+  consultation that can never happen, and the reference refuses the
+  write rather than storing it. The property may be replaced but not
+  removed.
+
+  ### Arguments
+
+  * `resource` is the resource being patched.
+
+  * `instruction` is one parsed instruction, `{:set, qname, value}`
+    or `{:remove, qname}`.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `:ok` for any property this hook gives no semantics to, and for a
+    valid free-busy set.
+
+  * `{:error, qname}` for a free-busy set naming anything but
+    existing calendars, or an attempt to remove it.
+
+  """
+  @impl Dav.Web.Hook
+  @spec patchable(Resource.t(), {:set, Xml.qname(), term()} | {:remove, Xml.qname()}, map()) ::
+          :ok | {:error, Xml.qname()}
+  def patchable(_resource, {:remove, {ns, "calendar-free-busy-set"} = name}, _options)
+      when ns == "urn:ietf:params:xml:ns:caldav",
+      do: {:error, name}
+
+  def patchable(_resource, {:set, {ns, "calendar-free-busy-set"} = name, value}, options)
+      when ns == "urn:ietf:params:xml:ns:caldav" do
+    case value do
+      {:hrefs, hrefs} ->
+        if Enum.all?(hrefs, &calendar_href?(&1, options)), do: :ok, else: {:error, name}
+
+      _not_a_set_of_hrefs ->
+        {:error, name}
+    end
+  end
+
+  def patchable(_resource, _instruction, _options), do: :ok
+
+  defp calendar_href?(href, %{store: store, context: context}) do
+    with path when path != [] <- String.split(href, "/", trim: true),
+         {:ok, %Resource{} = found} <- store.resolve(path, context) do
+      Cal.calendar?(found)
+    else
+      _missing -> false
+    end
+  end
+
+  @doc """
+  Repair the default-calendar pointer after a move.
+
+  A calendar that is somebody's scheduling default does not stop
+  being it by being renamed: the stored
+  `CALDAV:schedule-default-calendar-URL` on their Inbox followed the
+  old address and is rewritten to the new one.
+
+  ### Arguments
+
+  * `source` is the path the resource was moved from.
+
+  * `destination` is the path it now lives at.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `:ok`, always.
+
+  """
+  @impl Dav.Web.Hook
+  @spec relocated([String.t()], [String.t()], map()) :: :ok
+  def relocated(source, destination, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :patch),
+         {:ok, %Resource{} = landed} <- store.resolve(destination, context),
+         true <- Cal.calendar?(landed),
+         {:ok, home} <- store.resolve(Enum.drop(source, -1), context),
+         %Resource{} = inbox <- collection(home, &Schedule.inbox?/1, options),
+         {:hrefs, [held]} <- stored_default(inbox, options),
+         true <- String.trim_trailing(held, "/") == "/" <> Enum.join(source, "/") do
+      instruction =
+        {:set, {Xml.caldav(), "schedule-default-calendar-URL"}, {:hrefs, [Resource.href(landed)]}}
+
+      store.patch(inbox, [instruction], context)
+      :ok
+    else
+      _not_the_default -> :ok
+    end
+  end
+
   defp stated_free_busy_set(resource, %{store: store, context: context}) do
     with true <- Store.supports?(store, :properties),
          %{} = properties <- store.properties(resource, context) do
@@ -450,11 +548,19 @@ defmodule Dav.Cal.Scheduling do
   # home, which is where the delivery would go anyway.
   defp default_calendar(resource, options) do
     with true <- Schedule.inbox?(resource),
-         nil <- stored_default(resource, options),
-         %Resource{} = calendar <- first_calendar(resource, options) do
-      [{{Xml.caldav(), "schedule-default-calendar-URL"}, {:hrefs, [Resource.href(calendar)]}}]
+         nil <- stored_default(resource, options) do
+      case first_calendar(resource, options) do
+        %Resource{} = calendar ->
+          [{{Xml.caldav(), "schedule-default-calendar-URL"}, {:hrefs, [Resource.href(calendar)]}}]
+
+        nil ->
+          # The property outlives its calendar: a home whose last
+          # calendar was deleted still answers, with nothing in it,
+          # until a delivery provisions a new default.
+          [{{Xml.caldav(), "schedule-default-calendar-URL"}, nil}]
+      end
     else
-      _stated_or_absent -> []
+      _not_an_inbox_or_stated -> []
     end
   end
 
@@ -919,7 +1025,7 @@ defmodule Dav.Cal.Scheduling do
   defp shape(components, names) do
     for component <- components,
         property <- component.properties,
-        property.name in names or String.starts_with?(property.name, "X-"),
+        property.name in names,
         into: MapSet.new(),
         do: {property.name, property.value}
   end
@@ -1179,6 +1285,13 @@ defmodule Dav.Cal.Scheduling do
       # sent to the attendees and kept for the organiser, so an
       # invitation cannot say one thing in the Inbox and another in
       # the organiser's calendar.
+      options =
+        Map.put(
+          options,
+          :series_master,
+          Enum.find(components, &(&1.name != "VTIMEZONE" and is_nil(value(&1, "RECURRENCE-ID"))))
+        )
+
       components =
         components
         |> Enum.map(&remembered(&1, change, options))
@@ -1190,6 +1303,8 @@ defmodule Dav.Cal.Scheduling do
       components =
         components ++
           (components |> revived(change, options) |> Enum.map(&remembered(&1, change, options)))
+
+      components = compacted(components, change, options)
 
       delivering? = organizer_delivers?(components)
 
@@ -1490,13 +1605,21 @@ defmodule Dav.Cal.Scheduling do
       not answerable?(components, organizer, addresses, options) ->
         record_unschedulable(resource, calendar, organizer, options)
 
-      organizer_delivers?(components) and
-          (answered?(change, addresses) or withdrawn(change, components, addresses) != []) ->
+      organizer_delivers?(components) and answering?(change, components, addresses, options) ->
         # An `EXDATE` added with no other word *is* the answer: the
         # attendee has declined that instance, and the reply must say
         # so even though their own `PARTSTAT` never moved.
+        # The reply carries what changed and nothing else — the
+        # reference generates it from the changed instances alone. An
+        # unanswered component echoed into it would stamp the
+        # organiser's copy as though a question still open had been
+        # processed.
         replies =
-          for(component <- components, do: only(component, addresses)) ++
+          for(
+            component <- components,
+            spoken_for?(component, change, addresses, options),
+            do: only(component, addresses)
+          ) ++
             withdrawn(change, components, addresses)
 
         send_to([organizer], "REPLY", replies, zones(calendar), options, every(replies))
@@ -1513,6 +1636,14 @@ defmodule Dav.Cal.Scheduling do
   # organiser is told so explicitly: the instance is gone from the
   # reply's own components, so without this the message says nothing
   # at all about the one thing that changed.
+  # Whether this save says anything the organiser must hear: an
+  # answer, a withdrawn occurrence, or a change to the extensions
+  # that travel.
+  defp answering?(change, components, addresses, options) do
+    answered?(change, addresses) or withdrawn(change, components, addresses) != [] or
+      extensions_changed?(change, components, addresses, options)
+  end
+
   defp withdrawn(%{previous: previous} = change, components, addresses)
        when is_binary(previous) do
     case ICalendar.parse(previous) do
@@ -1529,6 +1660,120 @@ defmodule Dav.Cal.Scheduling do
   end
 
   defp withdrawn(_change, _components, _addresses), do: []
+
+  # Whether this component says anything the previous copy did not —
+  # the writer's own answer, or the extensions that travel. A copy
+  # with no previous version speaks for everything it holds.
+  defp spoken_for?(component, %{previous: previous}, addresses, options)
+       when is_binary(previous) do
+    allowed = extensions(options)
+
+    case ICalendar.parse(previous) do
+      {:ok, before} ->
+        case Enum.find(schedulable(before), &(utc_rid(&1) == utc_rid(component))) do
+          nil ->
+            true
+
+          counterpart ->
+            own_answer(component, addresses) != own_answer(counterpart, addresses) or
+              travelling_view(component, addresses, allowed) !=
+                travelling_view(counterpart, addresses, allowed)
+        end
+
+      _unreadable ->
+        true
+    end
+  end
+
+  defp spoken_for?(_component, _change, _addresses, _options), do: true
+
+  defp own_answer(component, addresses) do
+    Enum.find_value(component.properties, fn property ->
+      if property.name == "ATTENDEE" and property.value in addresses,
+        do: Map.get(property.parameters, "PARTSTAT", "NEEDS-ACTION")
+    end)
+  end
+
+  # Travelling extensions answer too. An attendee changing an `X-`
+  # property or a public parameter on their own line has said
+  # something the organiser's copy carries, and the reference replies
+  # with it even though no `PARTSTAT` moved.
+  defp extensions_changed?(%{previous: previous}, components, addresses, options)
+       when is_binary(previous) do
+    allowed = extensions(options)
+
+    case ICalendar.parse(previous) do
+      {:ok, before} ->
+        held = schedulable(before)
+
+        Enum.any?(components, &travelling_moved?(&1, held, addresses, allowed))
+
+      _unreadable ->
+        false
+    end
+  end
+
+  defp extensions_changed?(_change, _components, _addresses, _options), do: false
+
+  defp travelling_moved?(component, held, addresses, allowed) do
+    case Enum.find(held, &(utc_rid(&1) == utc_rid(component))) do
+      nil ->
+        false
+
+      counterpart ->
+        travelling_view(component, addresses, allowed) !=
+          travelling_view(counterpart, addresses, allowed)
+    end
+  end
+
+  # What this writer's copy says through the extensions that travel:
+  # the shared `X-` properties, and the public parameters on their own
+  # `ATTENDEE` line.
+  defp travelling_view(component, addresses, allowed) do
+    properties =
+      for property <- component.properties,
+          travels?(property.name, allowed),
+          do: {property.name, property.value}
+
+    parameters =
+      for property <- component.properties,
+          property.name == "ATTENDEE",
+          property.value in addresses,
+          do: travelling(property.parameters, allowed)
+
+    {Enum.sort(properties), parameters}
+  end
+
+  # A reschedule redraws the series, and an override that survived it
+  # saying nothing the new master does not — same time, same words,
+  # same freshly re-asked attendees — is no exception any more. The
+  # expected copies carry only the master; keeping the ghost would
+  # hand every recipient an override describing nothing.
+  defp compacted(components, change, options) do
+    master = Map.get(options, :series_master)
+
+    with %{} <- master,
+         true <- series_rescheduled?(change, master) do
+      Enum.reject(components, fn component ->
+        rid = value(component, "RECURRENCE-ID")
+
+        is_binary(rid) and not cancelled?(component) and
+          instance(component, options) ==
+            instance(derived_instance(master, rid_parameters(component), rid), options)
+      end)
+    else
+      _unchanged_series -> components
+    end
+  end
+
+  defp series_rescheduled?(%{previous: previous}, master) when is_binary(previous) do
+    case ICalendar.parse(previous) do
+      {:ok, before} -> reasked?(master, schedulable(before))
+      _unreadable -> false
+    end
+  end
+
+  defp series_rescheduled?(_change, _master), do: false
 
   # An organiser who deletes an override without excluding its date
   # has not cancelled the occurrence — the rule still produces it. The
@@ -1705,6 +1950,7 @@ defmodule Dav.Cal.Scheduling do
         calendar
         | components:
             (calendar.components ++ dropped_by_merge(calendar, change, addresses, options))
+            |> Enum.map(&organizer_as_held(&1, change))
             |> Enum.map(&answered(&1, organizer))
             |> Enum.map(&others_restored(&1, change, addresses, options))
             |> Enum.map(&shareable(&1, extensions(options)))
@@ -1877,6 +2123,47 @@ defmodule Dav.Cal.Scheduling do
     end)
   end
 
+  # The `ORGANIZER` line is not the attendee's to decorate. Whatever
+  # parameters their client hung on it are dropped in favour of the
+  # stored spelling — except `SCHEDULE-AGENT`, which is the one thing
+  # an attendee may state there (RFC 6638 section 7.1).
+  defp organizer_as_held(%{name: "VTIMEZONE"} = zone, _change), do: zone
+
+  defp organizer_as_held(component, %{previous: previous}) when is_binary(previous) do
+    case ICalendar.parse(previous) do
+      {:ok, before} ->
+        held = schedulable(before)
+
+        counterpart =
+          Enum.find(held, &(utc_rid(&1) == utc_rid(component))) ||
+            Enum.find(held, &is_nil(value(&1, "RECURRENCE-ID")))
+
+        stated =
+          case counterpart do
+            nil -> nil
+            found -> Enum.find(found.properties, &(&1.name == "ORGANIZER"))
+          end
+
+        %{
+          component
+          | properties: Enum.map(component.properties, &held_organizer_line(&1, stated))
+        }
+
+      _unreadable ->
+        component
+    end
+  end
+
+  defp organizer_as_held(component, _change), do: component
+
+  defp held_organizer_line(%{name: "ORGANIZER"} = property, %{value: value, parameters: held})
+       when value == property.value do
+    agent = Map.take(property.parameters, ["SCHEDULE-AGENT"])
+    %{property | parameters: Map.merge(held, agent)}
+  end
+
+  defp held_organizer_line(property, _stated), do: property
+
   defp answered(%{name: "VTIMEZONE"} = zone, _organizer), do: zone
 
   defp answered(component, organizer) do
@@ -2031,8 +2318,14 @@ defmodule Dav.Cal.Scheduling do
         # an organiser's client does not know what anyone said and
         # must not overwrite it in passing. A *significant* change is
         # different: when the timing moves, everyone is being asked
-        # again, and their last answer was to a different meeting.
-        reasked = asked_again?(component, held)
+        # again, and their last answer was to a different meeting. A
+        # rescheduled *series* re-asks every component at once — the
+        # reference transfers no answer anywhere when the master moved
+        # (`transferItems`, the `reschedule` flag).
+        reasked =
+          asked_again?(component, held) or
+            reasked?(Map.get(options, :series_master), held)
+
         answers = if reasked, do: [], else: held
 
         component
@@ -2818,7 +3111,7 @@ defmodule Dav.Cal.Scheduling do
   # not delivered, not deposited, and the sender's copy records `5.3`
   # rather than success.
   defp forged?(home, method, components, uid, options) when method in ~w(REQUEST CANCEL) do
-    with %Resource{} = calendar <- collection(home, &Cal.calendar?/1, options),
+    with %Resource{} = calendar <- holding_calendar(home, uid, options),
          %Resource{} = object <- object_with(calendar, uid, options),
          {:ok, body} <- read(object, options),
          {:ok, stored} <- ICalendar.parse(body),
@@ -2847,7 +3140,7 @@ defmodule Dav.Cal.Scheduling do
         )
     end
 
-    case {method, collection(home, &Cal.calendar?/1, options)} do
+    case {method, holding_calendar(home, uid, options) || provisioned(method, home, options)} do
       {"REQUEST", %Resource{} = calendar} ->
         address = canonical_address(recipient, options)
 
@@ -2879,10 +3172,41 @@ defmodule Dav.Cal.Scheduling do
     :ok
   end
 
+  # The calendar that already holds the meeting, wherever the
+  # recipient keeps it — a copy moved into another calendar of theirs
+  # is still the copy, and delivering to the first calendar found
+  # would plant a duplicate beside it. A home holding no copy at all
+  # answers with its first calendar.
+  defp holding_calendar(home, uid, %{store: store, context: context} = options) do
+    case store.children(home, context) do
+      {:ok, children} ->
+        calendars = Enum.filter(children, &Cal.calendar?/1)
+        Enum.find(calendars, &object_with(&1, uid, options)) || List.first(calendars)
+
+      _nothing ->
+        nil
+    end
+  end
+
   # Nobody sits at a room's keyboard to accept, so its own copy
   # answers on arrival: the line goes to `ACCEPTED` before the
   # transparency rule looks at it, and the room's time reads busy the
   # moment it is booked.
+  # A home with no calendar still receives invitations: the reference
+  # provisions the default calendar on first delivery rather than
+  # bouncing the message. Only a `REQUEST` creates one — a `CANCEL` or
+  # `REPLY` for a copy that cannot exist has nothing to update.
+  defp provisioned("REQUEST", home, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :mkcalendar),
+         {:ok, _made} <- store.mkcalendar(home.path ++ ["calendar"], context) do
+      collection(home, &Cal.calendar?/1, options)
+    else
+      _cannot_provision -> nil
+    end
+  end
+
+  defp provisioned(_method, _home, _options), do: nil
+
   defp auto_accepted(%{name: "VTIMEZONE"} = zone, _address), do: zone
 
   defp auto_accepted(component, address) do
@@ -3298,10 +3622,20 @@ defmodule Dav.Cal.Scheduling do
       {:ok, parameters} ->
         # "2.0" is iTIP's "request succeeded", which is what the
         # organiser's client shows as a confirmed attendee.
+        # The reply's travelling parameters replace the stored set
+        # rather than pile onto it — a parameter the attendee removed
+        # is gone, the way the reference deletes a public parameter
+        # the reply no longer carries.
+        kept =
+          for {name, value} <- property.parameters,
+              not travels?(name, allowed),
+              into: %{},
+              do: {name, value}
+
         %{
           property
           | parameters:
-              property.parameters
+              kept
               |> Map.merge(Map.take(parameters, ["PARTSTAT"]))
               |> Map.merge(travelling(parameters, allowed))
               |> Map.delete("RSVP")
@@ -3777,7 +4111,25 @@ defmodule Dav.Cal.Scheduling do
         preserved(calendar, recipient, components, announced, held, options)
       end
     else
-      _no_previous_copy -> invited_to(components, recipient, options)
+      _no_previous_copy -> arrived_fresh(components, recipient, options)
+    end
+  end
+
+  # A first delivery carries no history to merge — but it still obeys
+  # the missing-declined rule: with no master in the message, an
+  # instance that already shows the recipient `DECLINED` is one they
+  # refused, and it does not reappear in a copy they no longer hold
+  # (`transferItems`, the missing-declined return).
+  defp arrived_fresh(components, recipient, options) do
+    invited = invited_to(components, recipient, options)
+
+    master? =
+      Enum.any?(invited, &(&1.name != "VTIMEZONE" and is_nil(value(&1, "RECURRENCE-ID"))))
+
+    if master? do
+      invited
+    else
+      Enum.reject(invited, &declined_in?(&1, recipient, options))
     end
   end
 
@@ -3823,9 +4175,10 @@ defmodule Dav.Cal.Scheduling do
       |> Enum.map(&carry_alarms(&1, held))
       |> Enum.map(&carry_transparency(&1, held))
       |> Enum.map(&carry_private(&1, held))
+      |> Enum.map(&carry_reply_record(&1, held))
       |> Enum.map(&carry_exclusions(&1, exclusions))
       |> only_announced(held, announced, recipient, options)
-      |> readmitted(announced)
+      |> readmitted(announced, recipient, options)
       |> Enum.map(&reinstated(&1, Map.get(options, :created, [])))
       |> unexcluded()
       |> Enum.map(&asked_afresh(&1, recipient, options))
@@ -3874,14 +4227,31 @@ defmodule Dav.Cal.Scheduling do
   # master cannot keep disclaiming a component the same object now
   # carries. The reference removes the matching `EXDATE` whenever it
   # adds an override from a message (`processRequest`).
-  defp readmitted(kept, announced) do
+  # Only an override that *asks* the recipient lifts their own
+  # exclusion: they declined that date, and an update that still
+  # shows them declined does not overrule the refusal. One that puts
+  # the question back — a moved instance, a forced re-invitation, a
+  # place they were newly given — arrives reading `NEEDS-ACTION`, and
+  # the returned instance replaces the `EXDATE`.
+  defp readmitted(kept, announced, recipient, options) do
+    address = canonical_address(recipient, options)
+
     arrived =
       for component <- announced,
-          rid = value(component, "RECURRENCE-ID"),
+          component.name != "VTIMEZONE",
+          rid = utc_rid(component),
           is_binary(rid),
+          asking_again?(component, address, options),
           do: rid
 
     Enum.map(kept, &without_exclusions_for(&1, arrived))
+  end
+
+  defp asking_again?(component, address, options) do
+    Enum.any?(component.properties, fn property ->
+      property.name == "ATTENDEE" and addressed_as(property, options) == address and
+        Map.get(property.parameters, "PARTSTAT", "NEEDS-ACTION") == "NEEDS-ACTION"
+    end)
   end
 
   defp only_announced(kept, [], _announced, _recipient, _options), do: kept
@@ -3998,6 +4368,37 @@ defmodule Dav.Cal.Scheduling do
   end
 
   defp alarms_of(component), do: Enum.filter(component.components, &(&1.name == "VALARM"))
+
+  # The record that a reply reached the organiser belongs to the
+  # *copy*, not to one occurrence of it: the `SCHEDULE-STATUS` on the
+  # `ORGANIZER` line says what became of the last reply sent from this
+  # copy, and every component carries the same answer. A component
+  # restored without it — one the recipient never replied about —
+  # takes the record the rest of the copy already shows.
+  defp carry_reply_record(%{name: "VTIMEZONE"} = zone, _held), do: zone
+
+  defp carry_reply_record(component, held) do
+    delivery = Enum.find_value(held, &reply_record_of/1)
+
+    if is_nil(delivery) do
+      component
+    else
+      properties = Enum.map(component.properties, &recorded_delivery(&1, delivery))
+
+      %{component | properties: properties}
+    end
+  end
+
+  defp reply_record_of(component) do
+    Enum.find_value(component.properties, fn property ->
+      if property.name == "ORGANIZER", do: Map.get(property.parameters, "SCHEDULE-STATUS")
+    end)
+  end
+
+  defp recorded_delivery(%{name: "ORGANIZER"} = property, delivery),
+    do: %{property | parameters: Map.put_new(property.parameters, "SCHEDULE-STATUS", delivery)}
+
+  defp recorded_delivery(property, _delivery), do: property
 
   # The recipient's own bookkeeping — travel time, needs-reply flags —
   # lives on their copy and nowhere else. The reference removes these
@@ -4275,6 +4676,82 @@ defmodule Dav.Cal.Scheduling do
   def addresses_of(collection, options), do: owner_addresses(collection, options)
 
   @doc """
+  Whether a resource may be removed by the requesting principal.
+
+  A sharee with write access may edit their own view of an
+  organiser's event — `TRANSP`, alarms, `X-` data — but deleting it
+  cancels a meeting belonging to the organiser and the people
+  invited, none of whom they are. The reference refuses the removal
+  outright rather than quietly cancelling on a stranger's behalf.
+
+  ### Arguments
+
+  * `resource` is the resource the request asks to delete.
+
+  * `collection` is its parent collection, or `nil`.
+
+  * `options` carries `:store`, `:context` and `:principal`.
+
+  ### Returns
+
+  * `:ok` for anything but a scheduling object being removed by
+    somebody who is neither its owner nor a participant.
+
+  * `{:error, {\"DAV:\", \"need-privileges\"}}` otherwise.
+
+  """
+  @impl Dav.Web.Hook
+  @spec removable(Resource.t(), Resource.t() | nil, map()) ::
+          :ok | {:error, {String.t(), String.t()}}
+  def removable(%Resource{collection?: true}, _collection, _options), do: :ok
+
+  def removable(resource, %Resource{} = collection, options) do
+    with {:ok, body} <- read(resource, options),
+         {:ok, calendar} <- ICalendar.parse(body),
+         [_ | _] = components <- schedulable(calendar),
+         organizer when is_binary(organizer) <- organizer_of(components),
+         owner when is_binary(owner) <- shared_from(collection, options) || collection.owner,
+         who when is_binary(who) and who != owner <- Map.get(options, :principal),
+         false <- involved_in?(components, who, options) do
+      {:error, {Xml.dav(), "need-privileges"}}
+    else
+      _their_own_or_unscheduled -> :ok
+    end
+  end
+
+  def removable(_resource, _collection, _options), do: :ok
+
+  defp involved_in?(components, principal, %{store: store, context: context} = options) do
+    with true <- function_exported?(store, :addresses, 2),
+         {:ok, addresses} <- store.addresses(principal, context) do
+      canonical = Enum.map(addresses, &canonical_address(&1, options))
+
+      Enum.any?(components, &names_any?(&1, canonical, options))
+    else
+      # With no way to name the requester, refusing would lock out
+      # legitimate participants — the plain access rules stand alone.
+      _no_lookup -> true
+    end
+  end
+
+  defp names_any?(component, canonical, options) do
+    Enum.any?(component.properties, fn property ->
+      property.name in ~w(ATTENDEE ORGANIZER) and
+        canonical_address(property.value, options) in canonical
+    end)
+  end
+
+  defp shared_from(collection, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :origin),
+         real when real != collection.path <- store.origin(collection.path, context),
+         {:ok, %Resource{owner: owner}} <- store.resolve(real, context) do
+      owner
+    else
+      _not_a_link -> nil
+    end
+  end
+
+  @doc """
   Whether a calendar user address belongs to this server.
 
   ### Arguments
@@ -4301,17 +4778,27 @@ defmodule Dav.Cal.Scheduling do
   def hosted?(address, options), do: not is_nil(home_of(address, options))
 
   defp owner_addresses(nil, _options), do: []
-  defp owner_addresses(%Resource{owner: nil}, _options), do: []
 
-  # Without an explicit lookup the principal URL is all there is, and
-  # comparing it against an `ORGANIZER` of `mailto:...` would never
-  # match — so scheduling is skipped rather than guessed at.
-  defp owner_addresses(%Resource{owner: owner}, %{store: store, context: context}) do
-    with true <- function_exported?(store, :addresses, 2),
-         {:ok, addresses} <- store.addresses(owner, context) do
-      addresses
-    else
-      _no_lookup -> []
+  # Whose calendar this really is. A calendar shared into somebody's
+  # home is a *view* of the sharer's: the collection at that path is
+  # owned by the invitee, but the events in it are scheduled for the
+  # sharer — a sharee's save must not be read as the sharee answering.
+  defp owner_addresses(%Resource{} = collection, %{store: store, context: context} = options) do
+    case shared_from(collection, options) || collection.owner do
+      nil ->
+        []
+
+      owner ->
+        # Without an explicit lookup the principal URL is all there
+        # is, and comparing it against an `ORGANIZER` of `mailto:...`
+        # would never match — so scheduling is skipped rather than
+        # guessed at.
+        with true <- function_exported?(store, :addresses, 2),
+             {:ok, addresses} <- store.addresses(owner, context) do
+          addresses
+        else
+          _no_lookup -> []
+        end
     end
   end
 

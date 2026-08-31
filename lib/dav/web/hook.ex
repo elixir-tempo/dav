@@ -189,7 +189,102 @@ defmodule Dav.Web.Hook do
               options :: map()
             ) :: [Dav.Xml.qname()]
 
-  @optional_callbacks headers: 3, deleted: 2, properties: 3, action: 4, types: 3
+  @doc """
+  Whether a property instruction may be applied to a resource.
+
+  Optional. Most stored properties are the client's to shape, but an
+  extension may give one semantics the server must defend — an href
+  set that must name real collections, a property that may be
+  replaced but never removed. The base server knows nothing of those
+  meanings, so it asks.
+
+  ### Arguments
+
+  * `resource` is the resource being patched.
+
+  * `instruction` is one parsed instruction, `{:set, qname, value}`
+    or `{:remove, qname}`.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `:ok` when the instruction is acceptable — including when the
+    hook has no opinion about the property.
+
+  * `{:error, qname}` naming the refused property.
+
+  """
+  @callback patchable(
+              resource :: Resource.t(),
+              instruction :: {:set, Dav.Xml.qname(), term()} | {:remove, Dav.Xml.qname()},
+              options :: map()
+            ) :: :ok | {:error, Dav.Xml.qname()}
+
+  @doc """
+  A resource has moved to a new address.
+
+  Optional. Anything an extension keeps that points at the old
+  address — a default-calendar href, say — is the extension's to
+  repair, and only it knows what it stored.
+
+  ### Arguments
+
+  * `source` is the path the resource was moved from.
+
+  * `destination` is the path it now lives at.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `:ok`, always.
+
+  """
+  @callback relocated(
+              source :: [String.t()],
+              destination :: [String.t()],
+              options :: map()
+            ) :: :ok
+
+  @doc """
+  Whether a resource may be removed by the requesting principal.
+
+  Optional. The base server treats write access as write access; an
+  extension may know better — a sharee with write access to a
+  calendar may edit their own view of an organiser's event, but
+  removing it cancels a meeting that was never theirs to cancel.
+
+  ### Arguments
+
+  * `resource` is the resource the request asks to delete.
+
+  * `collection` is its parent collection, or `nil`.
+
+  * `options` carries `:store`, `:context` and `:principal`.
+
+  ### Returns
+
+  * `:ok` when the hook has no objection.
+
+  * `{:error, {namespace, name}}` naming the precondition that
+    refuses the removal.
+
+  """
+  @callback removable(
+              resource :: Resource.t(),
+              collection :: Resource.t() | nil,
+              options :: map()
+            ) :: :ok | {:error, {String.t(), String.t()}}
+
+  @optional_callbacks headers: 3,
+                      deleted: 2,
+                      properties: 3,
+                      action: 4,
+                      types: 3,
+                      patchable: 3,
+                      relocated: 3,
+                      removable: 3
 
   @doc """
   React to a resource having been written.

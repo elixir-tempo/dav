@@ -598,6 +598,7 @@ defmodule Dav.Web.Plug do
   defp delete(conn, options) do
     with :ok <- capable(options, :delete),
          {:ok, resource} <- resolve(conn, options),
+         :ok <- removable(resource, options),
          :ok <- schedule_tag_matches(conn, resource.path, options),
          :ok <- entity_tag_matches(conn, resource.path, options),
          # Read before removing: afterwards there is nothing left to
@@ -628,7 +629,24 @@ defmodule Dav.Web.Plug do
       {:error, :schedule_tag} -> send_resp(conn, 412, "")
       {:error, :entity_tag} -> send_resp(conn, 412, "")
       {:error, :not_found} -> send_resp(conn, 404, "")
+      {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
     end
+  end
+
+  # An extension may know a removal is not the requester's to make —
+  # a sharee deleting an organiser's meeting — where plain access
+  # control sees only write permission.
+  defp removable(resource, options) do
+    collection = parent(resource.path, options)
+
+    options.hooks
+    |> Enum.filter(&implements?(&1, :removable, 3))
+    |> Enum.find_value(:ok, fn hook ->
+      case hook.removable(resource, collection, options) do
+        :ok -> nil
+        {:error, _failed} = refusal -> refusal
+      end
+    end)
   end
 
   defp mkcol(conn, options) do
@@ -876,6 +894,7 @@ defmodule Dav.Web.Plug do
          displaced = if(replacing?, do: contents(destination, options), else: nil),
          :ok <- carry_out(kind, source, destination, options) do
       aftermath(kind, source, destination, held, displaced, options)
+      if kind == :move, do: relocated_hooks(source, destination, options)
 
       if replacing?,
         do: send_resp(conn, 204, ""),
@@ -1053,6 +1072,12 @@ defmodule Dav.Web.Plug do
     :ok
   end
 
+  defp relocated_hooks(source, destination, options) do
+    options.hooks
+    |> Enum.filter(&implements?(&1, :relocated, 3))
+    |> Enum.each(& &1.relocated(source.path, destination, options))
+  end
+
   defp landed_write(destination, held, previous, options) do
     case options.store.resolve(destination, options.context) do
       {:ok, resource} -> written(resource, held, previous, destination, false, options)
@@ -1103,10 +1128,23 @@ defmodule Dav.Web.Plug do
   # request, and the others report `424 Failed Dependency` — they would
   # have worked, and did not, because of something else.
   defp applied(resource, instructions, options) do
-    case Enum.find(instructions, &protected?/1) do
+    case Enum.find(instructions, &protected?/1) ||
+           refused_by_hook(resource, instructions, options) do
       nil -> attempt(resource, instructions, options)
       blocked -> blocked_by(resource, instructions, blocked)
     end
+  end
+
+  # A property an extension gives semantics to is the extension's to
+  # refuse — an href set naming collections that must exist, say. The
+  # base server cannot judge it, so each instruction is offered to the
+  # hooks before anything is stored.
+  defp refused_by_hook(resource, instructions, options) do
+    judges = Enum.filter(options.hooks, &implements?(&1, :patchable, 3))
+
+    Enum.find(instructions, fn instruction ->
+      Enum.any?(judges, &match?({:error, _name}, &1.patchable(resource, instruction, options)))
+    end)
   end
 
   defp attempt(resource, instructions, options) do

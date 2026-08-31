@@ -800,11 +800,19 @@ defmodule Dav.CalDAVTester.Verifier do
     expected_bad = href_set(args, "badhrefs", prefix)
     absent = href_set(args, "nohrefs", prefix)
 
+    # `ignoremissing` reads backwards: upstream uses it to mean "hrefs
+    # the expectation does not name are fine" — the named `okhrefs`
+    # must still all be present, the extras are simply not counted
+    # against the response.
+    surplus? = not Map.has_key?(args, "ignoremissing")
+
     [
       {"missing (OK)", MapSet.difference(expected_ok, ok)},
-      {"unexpected (OK)", MapSet.difference(ok, expected_ok)},
+      {"unexpected (OK)",
+       if(surplus?, do: MapSet.difference(ok, expected_ok), else: MapSet.new())},
       {"missing (BAD)", MapSet.difference(expected_bad, bad)},
-      {"unexpected (BAD)", MapSet.difference(bad, expected_bad)},
+      {"unexpected (BAD)",
+       if(surplus?, do: MapSet.difference(bad, expected_bad), else: MapSet.new())},
       {"present but should not be", MapSet.intersection(absent, MapSet.union(ok, bad))}
     ]
     |> Enum.reject(fn {_label, set} -> MapSet.size(set) == 0 end)
