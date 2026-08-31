@@ -64,7 +64,13 @@ defmodule Dav.CalDAVTester.Scenario do
 
     @type t :: %__MODULE__{
             method: String.t(),
-            data: %{content_type: String.t(), filepath: String.t() | nil} | nil,
+            data:
+              %{
+                content_type: String.t(),
+                filepath: String.t() | nil,
+                substitutions: [{String.t(), String.t()}]
+              }
+              | nil,
             iterate_data?: boolean(),
             uris: [String.t()],
             headers: [{String.t(), String.t()}],
@@ -288,7 +294,14 @@ defmodule Dav.CalDAVTester.Scenario do
   defp data(element) do
     %{
       content_type: Document.text(element, "content-type"),
-      filepath: Document.text(element, "filepath")
+      filepath: Document.text(element, "filepath"),
+      # A request may rewrite names inside the file it sends —
+      # `<substitute>` maps a placeholder to a value, which may itself
+      # be a substitution.
+      substitutions:
+        for substitute <- Document.children(element, "substitute") do
+          {Document.text(substitute, "name"), Document.text(substitute, "value")}
+        end
     }
   end
 

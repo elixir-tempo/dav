@@ -176,19 +176,102 @@ defmodule Dav.Cal.Sharing do
   @impl Dav.Web.Hook
   @spec deleted(Hook.change(), map()) :: :ok
   def deleted(%{resource: %Resource{} = resource} = change, options) do
-    # An invitation to a calendar that is gone is worse than no
-    # invitation: the sharee's client offers it, and accepting it fails
-    # with nothing to say why. The invitations come from the change
-    # rather than the store — by now the calendar, and the property
-    # they lived on, are gone.
-    if Cal.calendar?(resource) do
-      for invitation <- recorded_on(change), do: withdraw(resource, invitation.href, options)
+    cond do
+      # A sharee deleting their view has left the share, not killed
+      # the calendar. The slot they occupied stays spoken for — the
+      # reference keeps the share record, and creating an ordinary
+      # calendar over a retired share slot is refused.
+      view_deleted?(change) ->
+        left_share(change, options)
+        retire(resource, options)
+
+      # An invitation to a calendar that is gone is worse than no
+      # invitation: the sharee's client offers it, and accepting it
+      # fails with nothing to say why. The invitations come from the
+      # change rather than the store — by now the calendar, and the
+      # property they lived on, are gone.
+      Cal.calendar?(resource) ->
+        for invitation <- recorded_on(change), do: withdraw(resource, invitation.href, options)
+        :ok
+
+      true ->
+        :ok
+    end
+  end
+
+  def deleted(_change, _options), do: :ok
+
+  # The view is a real collection of the sharee's; what marks it is
+  # the `shared-url` it keeps. Read from the change — by now the
+  # collection, and the property with it, are gone.
+  defp view_deleted?(change) do
+    change
+    |> Map.get(:properties, %{})
+    |> Map.has_key?({@namespace, "shared-url"})
+  end
+
+  # The sharer's record hears about the departure: the invitation
+  # stands at "deleted", so a later re-share asks afresh instead of
+  # claiming an acceptance that no longer holds.
+  defp left_share(change, %{store: store, context: context} = options) do
+    with {:hrefs, [shared | _rest]} <-
+           change |> Map.get(:properties, %{}) |> Map.get({@namespace, "shared-url"}),
+         {:ok, original} <- store.resolve(Store.segments(shared), context),
+         who when is_binary(who) <- Map.get(options, :principal),
+         [address | _more] <- addresses_of(who, options) do
+      answered(original, address, "deleted", options)
     end
 
     :ok
   end
 
-  def deleted(_change, _options), do: :ok
+  defp retire(resource, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :patch),
+         {:ok, home} <- store.resolve(Enum.drop(resource.path, -1), context) do
+      held = retired_paths(home, %{store: store, context: context})
+      value = Enum.map_join([resource.path | held], "\n", &Enum.join(&1, "/"))
+      store.patch(home, [{:set, {@namespace, "retired-shares"}, value}], context)
+    end
+
+    :ok
+  end
+
+  defp retired_paths(home, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :properties),
+         %{} = properties <- store.properties(home, context),
+         value when is_binary(value) <- Map.get(properties, {@namespace, "retired-shares"}) do
+      for line <- String.split(value, "\n", trim: true), do: String.split(line, "/", trim: true)
+    else
+      _none -> []
+    end
+  end
+
+  @doc """
+  Whether a path is a retired share slot.
+
+  A sharee who deleted their view of a shared calendar has left the
+  share; the path it occupied stays reserved, and an ordinary
+  calendar may not be created over it.
+
+  ### Arguments
+
+  * `path` is the path being created.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `true` when a share view was deleted at this path, and `false`
+    otherwise.
+
+  """
+  @spec retired?([String.t()], map()) :: boolean()
+  def retired?(path, %{store: store, context: context} = options) do
+    case store.resolve(Enum.drop(path, -1), context) do
+      {:ok, home} -> path in retired_paths(home, options)
+      _no_home -> false
+    end
+  end
 
   defp recorded_on(change) do
     case change |> Map.get(:properties, %{}) |> Map.get(invite_property()) do
@@ -404,8 +487,17 @@ defmodule Dav.Cal.Sharing do
   end
 
   defp invite(calendar, %{store: store, context: context} = options) do
+    # On a sharee's view the property answers from the origin — who
+    # shares this calendar, and with whom — with the sharer named as
+    # the organizer, the way the sharee's client expects to find them.
+    {source, organizer} =
+      case linked_original(calendar, options) do
+        nil -> {calendar, []}
+        original -> {original, organizer_element(original, options)}
+      end
+
     inner =
-      for invitation <- current(calendar, store, context) do
+      for invitation <- current(source, store, context) do
         [
           # The prefixes are declared here rather than assumed. A
           # property value is markup inside somebody else's document,
@@ -426,8 +518,89 @@ defmodule Dav.Cal.Sharing do
         ]
       end
 
-    {:elements, [@namespace, Xml.dav()], inner}
+    {:elements, [@namespace, Xml.dav()], [organizer | inner]}
   end
+
+  defp organizer_element(original, options) do
+    [
+      ~s(<CS:organizer xmlns:CS=") <> @namespace <> ~s(" xmlns:D="DAV:">),
+      "<D:href>",
+      escape(original.owner || ""),
+      "</D:href>",
+      named(original.owner, options),
+      "</CS:organizer>"
+    ]
+  end
+
+  @doc """
+  The properties a shared view inherits from its origin.
+
+  A calendar shared into somebody's home shows the sharer's stored
+  properties — description, display name, colour — until the sharee
+  stores their own on the view; those always win. The share's own
+  bookkeeping does not travel.
+
+  ### Arguments
+
+  * `resource` is the resource being described.
+
+  * `collection` is its parent, unused.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * The origin's stored properties for a shared view, and nothing
+    for any other resource.
+
+  """
+  @impl Dav.Web.Hook
+  @spec inherited(Resource.t(), Resource.t() | nil, map()) :: [{Xml.qname(), Xml.value()}]
+  def inherited(resource, _collection, options) do
+    with %Resource{} = original <- linked_original(resource, options),
+         %{} = properties <- stored_properties(original, options) do
+      # A direct share is the owner's calendar seen whole — colour
+      # and all. An invited share starts from per-user defaults: the
+      # view is named and coloured by the sharee, and only the
+      # calendar's own description shows through.
+      invited? = invited_view?(original, options)
+
+      for {name, value} <- properties,
+          not private_to_origin?(name),
+          not (invited? and per_user?(name)),
+          do: {name, value}
+    else
+      _not_a_view -> []
+    end
+  end
+
+  defp invited_view?(original, %{store: store, context: context} = options) do
+    case Map.get(options, :principal) do
+      who when is_binary(who) ->
+        named = for address <- [who | addresses_of(who, options)], do: canonical(address, options)
+
+        Enum.any?(
+          current(original, store, context),
+          &(canonical(&1.href, options) in named)
+        )
+
+      _anonymous ->
+        false
+    end
+  end
+
+  defp private_to_origin?({@namespace, local})
+       when local in ~w(invite-state retired-shares shared-url),
+       do: true
+
+  defp private_to_origin?({_namespace, _local}), do: false
+
+  # The display name and colour are per-user by design: the view is
+  # named at accept time from the invitation's summary, and each side
+  # paints their own copy without the other noticing.
+  defp per_user?({"DAV:", "displayname"}), do: true
+  defp per_user?({"http://apple.com/ns/ical/", "calendar-color"}), do: true
+  defp per_user?({_namespace, _local}), do: false
 
   @impl Dav.Web.Method
   def call(conn, path, options) do
@@ -466,6 +639,12 @@ defmodule Dav.Cal.Sharing do
     case Enum.filter(invitations, &refused?(&1, options)) do
       [] ->
         existing = current(calendar, options.store, options.context)
+
+        # A re-invitation changes the terms, not the answer: somebody
+        # who accepted stays accepted at the new access, and the
+        # notification says so rather than asking them afresh.
+        invitations = Enum.map(invitations, &carried_state(&1, existing, options))
+
         record(calendar, invitations, removals, options)
         for invitation <- invitations, do: notify(calendar, invitation, options)
         for href <- removals, do: uninvite(calendar, href, existing, options)
@@ -474,6 +653,20 @@ defmodule Dav.Cal.Sharing do
 
       refused ->
         withheld(conn, invitations, refused)
+    end
+  end
+
+  defp carried_state(invitation, existing, options) do
+    wanted = canonical(invitation.href, options)
+
+    case Enum.find(existing, &(canonical(&1.href, options) == wanted)) do
+      # Somebody who answered keeps their answer; somebody who left —
+      # or never answered — is being asked afresh.
+      %{state: state} when state in ~w(accepted declined) ->
+        Map.put(invitation, :state, state)
+
+      _fresh_or_departed ->
+        invitation
     end
   end
 
@@ -645,10 +838,39 @@ defmodule Dav.Cal.Sharing do
   # notice — deleting it would remove the only record of a share they
   # can see disappearing.
   defp uninvite(calendar, href, existing, options) do
-    case Enum.find(existing, &(&1.href == href)) do
-      %{state: "noresponse"} -> withdraw(calendar, href, options)
-      %{} -> unbind(calendar, href, options)
-      _not_invited -> :ok
+    wanted = canonical(href, options)
+
+    case Enum.find(existing, &(canonical(&1.href, options) == wanted)) do
+      %{state: "noresponse"} ->
+        withdraw(calendar, href, options)
+
+      %{} = invitation ->
+        farewell(calendar, invitation, options)
+        unbind(calendar, href, options)
+
+      _not_invited ->
+        :ok
+    end
+  end
+
+  # An accepted sharee is told the share is over — an invite-deleted
+  # notification, titled the way *they* named the calendar: their
+  # client knows it by the display name they gave their view, not by
+  # the sharer's summary. Read before `unbind/3` takes the view away.
+  defp farewell(calendar, invitation, options) do
+    summary = view_summary(calendar, invitation.href, options) || invitation.summary
+    notify(calendar, %{invitation | state: "deleted", summary: summary}, options)
+  end
+
+  defp view_summary(calendar, href, %{store: store, context: context} = options) do
+    with {:ok, home} <- store.principal(href, context),
+         {:ok, children} <- store.children(home, context),
+         %Resource{} = link <- Enum.find(children, &views?(&1, calendar, options)),
+         %{} = properties <- stored_properties(link, options),
+         name when is_binary(name) <- Map.get(properties, {"DAV:", "displayname"}) do
+      name
+    else
+      _unnamed -> nil
     end
   end
 
@@ -667,8 +889,13 @@ defmodule Dav.Cal.Sharing do
     :ok
   end
 
-  defp views?(%Resource{collection?: true} = resource, calendar, %{store: store, context: context}) do
-    Store.supports?(store, :origin) and store.origin(resource.path, context) == calendar.path
+  defp views?(%Resource{collection?: true} = resource, calendar, options) do
+    with %{} = properties <- stored_properties(resource, options),
+         {:hrefs, [shared | _rest]} <- Map.get(properties, {@namespace, "shared-url"}) do
+      Store.segments(shared) == calendar.path
+    else
+      _not_a_view -> false
+    end
   end
 
   defp views?(_resource, _calendar, _options), do: false
@@ -743,7 +970,9 @@ defmodule Dav.Cal.Sharing do
       "<D:href>",
       escape(canonical(invitation.href, options)),
       "</D:href>",
-      "<CS:invite-noresponse/>",
+      "<CS:invite-",
+      state_of(invitation),
+      "/>",
       "<CS:access><CS:",
       invitation.access,
       "/></CS:access>",
@@ -768,6 +997,9 @@ defmodule Dav.Cal.Sharing do
     ]
     |> IO.iodata_to_binary()
   end
+
+  defp state_of(%{state: state}) when state in ~w(accepted declined deleted), do: state
+  defp state_of(_invitation), do: "noresponse"
 
   # The display name of whoever an address belongs to.
   defp common_name(address, %{store: store, context: context} = options) do
@@ -920,9 +1152,17 @@ defmodule Dav.Cal.Sharing do
       "<CS:in-reply-to>",
       escape(text_of(document, "in-reply-to") || ""),
       "</CS:in-reply-to>",
-      "<CS:summary>",
-      escape(text_of(document, "summary") || ""),
-      "</CS:summary>",
+      # Only an acceptance names the calendar: the summary is what the
+      # sharee called the view they now hold, and a decline holds
+      # nothing. The reference's decline notification carries no
+      # summary even when the reply did.
+      case {accepted?, text_of(document, "summary")} do
+        {true, summary} when is_binary(summary) ->
+          ["<CS:summary>", escape(summary), "</CS:summary>"]
+
+        _declined_or_unnamed ->
+          ""
+      end,
       "<CS:common-name>",
       escape(text_of(document, "common-name") || ""),
       "</CS:common-name>",
@@ -955,11 +1195,39 @@ defmodule Dav.Cal.Sharing do
       shared ->
         path = free(home.path ++ [Path.basename(shared)], shared, options)
         link(path, shared, options)
+        christened(path, document, shared, options)
 
         conn
         |> put_resp_content_type("application/xml", "utf-8")
         |> send_resp(200, shared_as(path))
     end
+  end
+
+  # The view is named from the invitation's summary — the name the
+  # sharer offered it under — and is the sharee's to change from
+  # there.
+  defp christened(path, document, shared, %{store: store, context: context} = options) do
+    with true <- is_list(path) and Store.supports?(store, :patch),
+         name when is_binary(name) and name != "" <- offered_name(document, shared, options) do
+      store.patch(
+        %Resource{path: path, collection?: true},
+        [{:set, {"DAV:", "displayname"}, name}],
+        context
+      )
+    end
+
+    :ok
+  end
+
+  defp offered_name(document, shared, %{store: store, context: context}) do
+    text_of(document, "summary") ||
+      with {:ok, original} <- store.resolve(Store.segments(shared), context),
+           %{summary: summary} <-
+             Enum.find(current(original, store, context), &(&1.summary not in [nil, ""])) do
+        summary
+      else
+        _unnamed -> nil
+      end
   end
 
   # Two people may both share a calendar named `calendar`. An
@@ -1070,9 +1338,14 @@ defmodule Dav.Cal.Sharing do
           {:ok, Plug.Conn.t()} | :unhandled
   def action("share", conn, resource, options) do
     with true <- Cal.calendar?(resource),
+         true <- entitled?(resource, options),
          %Resource{path: home} <- caller_home(options) do
       path = home ++ [List.last(resource.path)]
-      link(path, Resource.href(resource), options)
+
+      # The link records the calendar's *canonical* address. A share
+      # taken out through an aliased path would otherwise point at a
+      # spelling only the alias resolver knows.
+      link(path, Resource.href(canonical_resource(resource, options)), options)
 
       {:ok,
        conn
@@ -1084,6 +1357,31 @@ defmodule Dav.Cal.Sharing do
   end
 
   def action(_other, _conn, _resource, _options), do: :unhandled
+
+  defp canonical_resource(resource, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :origin),
+         real when real != resource.path <- store.origin(resource.path, context),
+         {:ok, %Resource{} = found} <- store.resolve(real, context) do
+      found
+    else
+      _already_canonical -> resource
+    end
+  end
+
+  # Direct sharing binds without an invitation, so it is only for
+  # somebody who already has access — the owner, or one of their
+  # proxies. Anyone else asking is refused, not quietly granted a
+  # calendar nobody offered them.
+  defp entitled?(resource, options) do
+    case Map.get(options, :principal) do
+      who when is_binary(who) ->
+        named = [who | addresses_of(who, options)]
+        who == resource.owner or proxied(resource, named, options) != nil
+
+      _anonymous ->
+        false
+    end
+  end
 
   # The caller's own calendar home, reached the only way the store
   # offers: a principal has addresses, and an address has a home.

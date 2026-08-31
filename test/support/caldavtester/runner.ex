@@ -801,11 +801,25 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp body(%{data: %{filepath: nil}}, _substitutions), do: ""
 
-  defp body(%{data: %{filepath: filepath}}, substitutions) do
+  defp body(%{data: %{filepath: filepath} = data}, substitutions) do
     case File.read(Path.join(@root, filepath)) do
-      {:ok, contents} -> ServerInfo.expand(contents, substitutions)
-      _missing -> ""
+      {:ok, contents} ->
+        contents
+        |> substituted(Map.get(data, :substitutions, []), substitutions)
+        |> ServerInfo.expand(substitutions)
+
+      _missing ->
+        ""
     end
+  end
+
+  # The request's own `<substitute>` pairs run first: they name things
+  # the shared fixture leaves open, and their values may themselves be
+  # substitutions.
+  defp substituted(contents, pairs, substitutions) do
+    Enum.reduce(pairs, contents, fn {name, value}, expanded ->
+      String.replace(expanded, name, ServerInfo.expand(value, substitutions))
+    end)
   end
 
   # `**` in a request URI stands for a name the suite does not care

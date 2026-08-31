@@ -29,6 +29,7 @@ defmodule Dav.Cal.Mkcalendar do
   import Plug.Conn
 
   alias Dav.Cal
+  alias Dav.Cal.Sharing
   alias Dav.Web.Properties
   alias Dav.Web.Store
   alias Dav.Xml
@@ -40,6 +41,7 @@ defmodule Dav.Cal.Mkcalendar do
     with :ok <- supported(store),
          {:ok, properties} <- requested(body),
          :ok <- vacant(path, options),
+         :ok <- unretired(path, options),
          :ok <- settable(properties),
          :ok <- outside_calendars(path, options),
          {:ok, resource} <- store.mkcalendar(path, context) do
@@ -48,6 +50,9 @@ defmodule Dav.Cal.Mkcalendar do
     else
       {:error, :unsupported} ->
         send_resp(conn, 405, "")
+
+      {:error, :retired} ->
+        send_resp(conn, 403, "")
 
       {:error, :body} ->
         send_resp(conn, 415, "")
@@ -82,6 +87,14 @@ defmodule Dav.Cal.Mkcalendar do
   # The URL being taken outranks any complaint about the body: a 207
   # about properties on a calendar that cannot be created reads as
   # though it could have been.
+  # A sharee who deleted their view of a shared calendar has left the
+  # share, and the path stays spoken for — the share can come back,
+  # and a plain calendar sitting in its place could not be told apart
+  # from it.
+  defp unretired(path, options) do
+    if Sharing.retired?(path, options), do: {:error, :retired}, else: :ok
+  end
+
   defp vacant(path, %{store: store, context: context}) do
     case store.resolve(path, context) do
       {:ok, _resource} -> {:error, :exists}

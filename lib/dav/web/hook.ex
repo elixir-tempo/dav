@@ -277,6 +277,34 @@ defmodule Dav.Web.Hook do
               options :: map()
             ) :: :ok | {:error, {String.t(), String.t()}}
 
+  @doc """
+  Properties a resource inherits when it states none of its own.
+
+  Optional. A stored value always wins over an inherited one — this
+  is the floor under a resource's dead properties, not a ceiling. A
+  calendar shared into somebody's home shows the sharer's
+  description and name until the sharee sets their own; only the
+  extension that implemented sharing knows where to look.
+
+  ### Arguments
+
+  * `resource` is the resource being described.
+
+  * `collection` is its parent collection, or `nil`.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * The inherited properties, as `{qname, value}` pairs.
+
+  """
+  @callback inherited(
+              resource :: Resource.t(),
+              collection :: Resource.t() | nil,
+              options :: map()
+            ) :: [{Dav.Xml.qname(), Dav.Xml.value()}]
+
   @optional_callbacks headers: 3,
                       deleted: 2,
                       properties: 3,
@@ -284,7 +312,8 @@ defmodule Dav.Web.Hook do
                       types: 3,
                       patchable: 3,
                       relocated: 3,
-                      removable: 3
+                      removable: 3,
+                      inherited: 3
 
   @doc """
   React to a resource having been written.

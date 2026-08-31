@@ -1230,7 +1230,19 @@ defmodule Dav.Web.Plug do
   # Merging the two would force a choice between letting clients
   # forge protected properties and letting extensions state none.
   defp dead(resource, options) do
-    {stored(resource, options), contributed(resource, options)}
+    {Map.merge(inherited(resource, options), stored(resource, options)),
+     contributed(resource, options)}
+  end
+
+  # The floor under the stored properties: what a resource shows when
+  # it states nothing of its own. A stored value always wins.
+  defp inherited(resource, options) do
+    collection = parent(resource.path, options)
+
+    options.hooks
+    |> Enum.filter(&implements?(&1, :inherited, 3))
+    |> Enum.flat_map(& &1.inherited(resource, collection, options))
+    |> Map.new()
   end
 
   defp stored(resource, %{store: store, context: context}) do

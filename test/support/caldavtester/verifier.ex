@@ -641,7 +641,7 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
-  defp test_node(node, "=" <> value), do: String.trim(node.text) == value
+  defp test_node(node, "=" <> value), do: same_text?(String.trim(node.text), value)
   defp test_node(node, "!" <> value), do: String.trim(node.text) != value
   defp test_node(node, "*" <> value), do: String.contains?(node.text, value)
   defp test_node(node, "$" <> value), do: not String.contains?(node.text, value)
@@ -655,12 +655,23 @@ defmodule Dav.CalDAVTester.Verifier do
       end
 
     Enum.any?(node.children, fn child ->
-      clark(child.name) == name and (value == nil or String.trim(child.text) == value)
+      clark(child.name) == name and (value == nil or same_text?(String.trim(child.text), value))
     end)
   end
 
   defp test_node(node, "||"), do: String.trim(node.text) != "" or node.children != []
+
   defp test_node(_node, _unknown), do: true
+
+  # An href's trailing slash is a serialisation choice — upstream
+  # emits collection hrefs with one, expectations are written with
+  # and without — so href-shaped values compare with it trimmed, the
+  # same way `multistatusItems` compares its href sets.
+  defp same_text?(text, value) do
+    if String.starts_with?(value, "/"),
+      do: String.trim_trailing(text, "/") == String.trim_trailing(value, "/"),
+      else: text == value
+  end
 
   ## --- multistatus verifiers --------------------------------------
 

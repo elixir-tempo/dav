@@ -470,7 +470,32 @@ defmodule Dav.Cal.Scheduling do
     end
   end
 
+  def patchable(_resource, {:set, {ns, "schedule-default-calendar-URL"} = name, value}, options)
+      when ns == "urn:ietf:params:xml:ns:caldav" do
+    # RFC 6638 section 9.2, sharpened the way the reference does: the
+    # default calendar is where *your* invitations land, and a
+    # calendar shared into your home belongs to somebody else —
+    # deliveries into it would put your meetings on their calendar.
+    case value do
+      {:hrefs, [href]} ->
+        if own_calendar_href?(href, options), do: :ok, else: {:error, name}
+
+      _not_one_href ->
+        {:error, name}
+    end
+  end
+
   def patchable(_resource, _instruction, _options), do: :ok
+
+  defp own_calendar_href?(href, %{store: store, context: context}) do
+    with path when path != [] <- String.split(href, "/", trim: true),
+         {:ok, %Resource{} = found} <- store.resolve(path, context),
+         true <- Cal.calendar?(found) do
+      not Store.supports?(store, :origin) or store.origin(found.path, context) == found.path
+    else
+      _missing_or_not_a_calendar -> false
+    end
+  end
 
   defp calendar_href?(href, %{store: store, context: context}) do
     with path when path != [] <- String.split(href, "/", trim: true),

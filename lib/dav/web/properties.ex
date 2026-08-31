@@ -161,8 +161,11 @@ defmodule Dav.Web.Properties do
   def fetch(%Resource{types: []}, {"DAV:", "resourcetype"}), do: {:ok, nil}
   def fetch(%Resource{types: types}, {"DAV:", "resourcetype"}), do: {:ok, {:names, types}}
 
+  # Only a name somebody actually gave it. Deriving one from the path
+  # turns every collection's URL leaf into a claimed display name,
+  # where RFC 4918 has the property simply absent until set.
   def fetch(%Resource{} = resource, {"DAV:", "displayname"}) do
-    case resource.display_name || Resource.name(resource) do
+    case resource.display_name do
       nil -> :error
       name -> {:ok, name}
     end
