@@ -50,6 +50,7 @@ defmodule Dav.Cal.Object do
   # generous enough never to trouble a real invitation and small enough
   # to refuse an abusive one.
   @max_attendees 100
+  @max_attachments 5
 
   @typedoc "The precondition that failed, as a qualified name."
   @type violation :: Xml.qname()
@@ -406,15 +407,25 @@ defmodule Dav.Cal.Object do
   # the server's to choose; naming one at all is what lets a client be
   # told why a 500-attendee invitation was refused.
   defp within_limits(calendar) do
-    too_many? =
-      calendar.components
-      |> Enum.any?(fn component ->
-        Enum.count(component.properties, &(&1.name == "ATTENDEE")) > @max_attendees
-      end)
+    cond do
+      crowded?(calendar) -> {:error, precondition("max-attendees-per-instance")}
+      overloaded?(calendar) -> {:error, precondition("max-attachments")}
+      true -> :ok
+    end
+  end
 
-    if too_many?,
-      do: {:error, precondition("max-attendees-per-instance")},
-      else: :ok
+  defp crowded?(calendar) do
+    Enum.any?(calendar.components, fn component ->
+      Enum.count(component.properties, &(&1.name == "ATTENDEE")) > @max_attendees
+    end)
+  end
+
+  # The reference caps managed and linked attachments alike at five
+  # per instance — an override counts on its own.
+  defp overloaded?(calendar) do
+    Enum.any?(calendar.components, fn component ->
+      Enum.count(component.properties, &(&1.name == "ATTACH")) > @max_attachments
+    end)
   end
 
   defp every_component(component) do

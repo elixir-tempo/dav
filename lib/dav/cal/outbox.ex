@@ -278,15 +278,19 @@ defmodule Dav.Cal.Outbox do
       # RFC 6638 appendix A: on a server doing implicit scheduling,
       # the old explicit `POST` of an event message duplicates what
       # the PUT already did — a compatible client double-books every
-      # attendee. The reference accepts the request and delivers
-      # nothing; only the free-busy question above is still the
-      # Outbox's to answer. The server-to-server receiver is
-      # different: its messages arrive from elsewhere and have no PUT
+      # attendee. The reference accepts the request, reports each
+      # recipient as succeeding, and delivers nothing locally — a
+      # recipient on another server is queued for iSchedule rather
+      # than double-delivered here. Only the free-busy question above
+      # is still the Outbox's to answer; the server-to-server receiver
+      # is different, its messages arrive from elsewhere with no PUT
       # behind them.
       kind == :outbox ->
+        responses = for recipient <- recipients, do: {recipient, @success, nil}
+
         conn
         |> put_resp_content_type("application/xml", "utf-8")
-        |> send_resp(200, Schedule.schedule_response([]))
+        |> send_resp(200, Schedule.schedule_response(responses))
 
       true ->
         deliver(conn, calendar, component, recipients, options)
@@ -446,16 +450,45 @@ defmodule Dav.Cal.Outbox do
       [] ->
         # A recipient addressed by a local principal path refers to
         # something this server can name — a group, a disabled
-        # account — and merely cannot be scheduled with. One
-        # addressed by URI that resolves to nobody does not exist.
-        if String.starts_with?(attendee, "/"),
-          do: {attendee, @invalid_user, nil},
-          else: {attendee, @invalid_user, nil, :missing}
+        # account — and merely cannot be scheduled with. A `mailto:`
+        # this server does not host names somebody on another server,
+        # and the question goes out over iSchedule — reported as
+        # succeeding, the way the reference queues it. Any other URI
+        # that resolves to nobody does not exist.
+        cond do
+          String.starts_with?(attendee, "/") -> {attendee, @invalid_user, nil}
+          remote?(attendee, organiser) -> {attendee, @success, nil}
+          true -> {attendee, @invalid_user, nil, :missing}
+        end
 
       calendars ->
         {attendee, @success, busy(calendars, {attendee, parameters}, organiser, range, options)}
     end
   end
+
+  # An address this server cannot resolve but another might: a
+  # `mailto:` names a user by domain, and a domain this deployment
+  # does not host is somebody else's to answer for. The organiser's
+  # own domain is the one domain known to be served here, so an
+  # unresolvable user *there* is nobody, not a neighbour.
+  defp remote?(attendee, organiser) do
+    case {mail_domain(attendee), mail_domain(organiser)} do
+      {[_, theirs], [_, ours]} -> String.downcase(theirs) != String.downcase(ours)
+      {[_, _theirs], _not_mailto} -> true
+      {_not_a_mailbox, _organiser} -> false
+    end
+  end
+
+  defp mail_domain(address) when is_binary(address) do
+    with true <- String.match?(address, ~r/^mailto:/i),
+         [user, domain] <- address |> String.slice(7..-1//1) |> String.split("@", parts: 2) do
+      [user, domain]
+    else
+      _not_a_mailbox -> nil
+    end
+  end
+
+  defp mail_domain(_address), do: nil
 
   defp as_attendee(attendee, %{store: store, context: context} = options) do
     with true <- Store.supports?(store, :scope),

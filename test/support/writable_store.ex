@@ -441,6 +441,28 @@ defmodule Dav.Test.WritableStore do
     {held, target} = {underlying(agent, from), underlying(agent, to)}
 
     Agent.update(pid(agent), fn state -> transplant(state, held, target, :drop) end)
+    settle_personal(agent, target)
+    :ok
+  end
+
+  # A body moved into a shared collection carries per-user data it
+  # acquired somewhere private. Landing it splits the copy the same
+  # way a direct write would — the mover keeps their `TRANSP` and
+  # alarms, the other sharees never see them.
+  defp settle_personal(agent, target) do
+    with who when is_binary(who) <- asking(agent),
+         true <- shared?(agent, target),
+         body when is_binary(body) <- Agent.get(pid(agent), &Map.get(&1.bodies, target)),
+         {:ok, calendar} <- ICalendar.parse(body) do
+      shared = ICalendar.write(without_personal(calendar))
+
+      Agent.update(pid(agent), fn state ->
+        %{state | bodies: Map.put(state.bodies, target, IO.iodata_to_binary(shared))}
+      end)
+
+      keep_personal(agent, target, personal_of(calendar))
+    end
+
     :ok
   end
 

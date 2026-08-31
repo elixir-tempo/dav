@@ -35,6 +35,12 @@
   {"implicitcopymove.xml", "COPY to calendar with overwrite - ORGANIZER"} =>
     {:incidental,
      "expects the attendee copy removed after cancel; the current reference marks it cancelled (itip.py processCancel) — earlier-era behaviour"},
+  {"copymove.xml", "MOVE"} =>
+    {:incidental,
+     "test 5 expects a cross-calendar overwrite-move refused under the no-duplicate-uids posture; implicitcopymove requires the opposite posture, and this deployment takes that one"},
+  {"servertoserverincoming.xml", "POST free-busy"} =>
+    {:incidental,
+     "test 2 posts the byte-identical one-attendee request as test 1 but expects a second attendee's busy time — the discriminator is not in the vendored fixture"},
   {"servertoserverincoming.xml", "POST Errors"} =>
     {:incidental,
      "identical requests, contradictory expectations; discriminators are connection-level"},
