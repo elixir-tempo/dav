@@ -185,7 +185,7 @@ defmodule Dav.Cal.ScheduleTest do
     assert conn.resp_body =~ "recipient-specified"
   end
 
-  test "an invitation is delivered to the attendee's inbox", context do
+  test "an explicit event POST is accepted and delivers nothing", context do
     body =
       Enum.join(
         [
@@ -204,11 +204,12 @@ defmodule Dav.Cal.ScheduleTest do
 
     conn = DavPlug.call(conn("POST", "/alice/outbox/", body), context.options)
 
+    # RFC 6638 appendix A: on a server doing implicit scheduling, the
+    # old explicit POST duplicates what the PUT already did, and a
+    # compatible client would double-book every attendee. The request
+    # succeeds; nothing is delivered.
     assert conn.status == 200
-    assert conn.resp_body =~ "2.0;Success"
 
-    # Delivery is the point: the message must actually be in Bob's
-    # Inbox, not merely reported as sent.
     listing =
       conn(
         "PROPFIND",
@@ -218,26 +219,26 @@ defmodule Dav.Cal.ScheduleTest do
       |> Conn.put_req_header("depth", "1")
       |> DavPlug.call(context.options)
 
-    assert listing.resp_body =~ "invite-1.ics"
+    refute listing.resp_body =~ "invite-1.ics"
   end
 
-  test "a stored scheduling message keeps its METHOD", context do
+  test "a delivered scheduling message keeps its METHOD", context do
     body =
       Enum.join(
         [
           "BEGIN:VCALENDAR",
-          "METHOD:REQUEST",
           "BEGIN:VEVENT",
           "UID:invite-2",
           "ORGANIZER:mailto:alice@example.com",
-          "ATTENDEE:mailto:bob@example.com",
+          "ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:bob@example.com",
+          "DTSTART:20260615T090000Z",
           "END:VEVENT",
           "END:VCALENDAR"
         ],
         "\r\n"
       ) <> "\r\n"
 
-    DavPlug.call(conn("POST", "/alice/outbox/", body), context.options)
+    DavPlug.call(conn("PUT", "/alice/calendar/invite-2.ics", body), context.options)
 
     stored = DavPlug.call(conn("GET", "/bob/inbox/invite-2.ics", ""), context.options)
 

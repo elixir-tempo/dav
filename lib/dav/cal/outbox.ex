@@ -81,7 +81,7 @@ defmodule Dav.Cal.Outbox do
          {:ok, recipients} <- recipients(conn, component),
          :ok <- attendee_allowed(kind, calendar, component, resource, options),
          :ok <- organizer_allowed(kind, component, resource, options) do
-      dispatch(conn, calendar, component, recipients, options)
+      dispatch(kind, conn, calendar, component, recipients, options)
     else
       {:error, :not_found} ->
         send_resp(conn, 404, "")
@@ -270,11 +270,26 @@ defmodule Dav.Cal.Outbox do
     end
   end
 
-  defp dispatch(conn, calendar, component, recipients, options) do
-    if component.name == "VFREEBUSY" and property(calendar, "METHOD") == "REQUEST" do
-      respond(conn, component, options)
-    else
-      deliver(conn, calendar, component, recipients, options)
+  defp dispatch(kind, conn, calendar, component, recipients, options) do
+    cond do
+      component.name == "VFREEBUSY" and property(calendar, "METHOD") == "REQUEST" ->
+        respond(conn, component, options)
+
+      # RFC 6638 appendix A: on a server doing implicit scheduling,
+      # the old explicit `POST` of an event message duplicates what
+      # the PUT already did — a compatible client double-books every
+      # attendee. The reference accepts the request and delivers
+      # nothing; only the free-busy question above is still the
+      # Outbox's to answer. The server-to-server receiver is
+      # different: its messages arrive from elsewhere and have no PUT
+      # behind them.
+      kind == :outbox ->
+        conn
+        |> put_resp_content_type("application/xml", "utf-8")
+        |> send_resp(200, Schedule.schedule_response([]))
+
+      true ->
+        deliver(conn, calendar, component, recipients, options)
     end
   end
 

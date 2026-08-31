@@ -1712,7 +1712,10 @@ defmodule Dav.Cal.Scheduling do
         # unanswered component echoed into it would stamp the
         # organiser's copy as though a question still open had been
         # processed.
-        replies = spoken_replies(components, restored, change, addresses, options)
+        replies =
+          components
+          |> spoken_replies(restored, change, addresses, options)
+          |> Enum.map(&confirmed/1)
 
         send_to([organizer], "REPLY", replies, zones(calendar), options, every(replies))
         record_reply(resource, calendar, organizer, addresses, change, options)
@@ -1760,6 +1763,14 @@ defmodule Dav.Cal.Scheduling do
   # verbatim from the previous copy. Only a copy that keeps its
   # master qualifies — with no master, taking an instance out is the
   # decline it looks like.
+  # RFC 5546 section 3.2.3: a `REPLY` reports how the request fared,
+  # and the reference writes `2.0;Success` into every component it
+  # answers with.
+  defp confirmed(component) do
+    stated = %{name: "REQUEST-STATUS", parameters: %{}, value: "2.0;Success"}
+    %{component | properties: component.properties ++ [stated]}
+  end
+
   # A repaired component answers too: the client's save touched it,
   # and the organiser hears the restored state — an unchanged
   # `PARTSTAT` with the reply's own request-status, the way the
@@ -1800,8 +1811,41 @@ defmodule Dav.Cal.Scheduling do
       %{calendar | components: calendar.components ++ restored}
       |> repaired_transparency(components, change)
 
+    components = Enum.map(components, &public_restored(&1, change, options))
+
+    calendar = %{
+      calendar
+      | components: Enum.map(calendar.components, &public_restored(&1, change, options))
+    }
+
     {calendar, components, restored}
   end
+
+  # A travelling `X-` property is the organiser's word about the
+  # meeting, not the attendee's to erase: a save that omits one has
+  # lost it, and the stored value goes back on. A *changed* value is
+  # different — those travel, in both directions.
+  defp public_restored(%{name: "VTIMEZONE"} = zone, _change, _options), do: zone
+
+  defp public_restored(component, %{previous: previous}, options) when is_binary(previous) do
+    allowed = extensions(options)
+
+    with {:ok, before} <- ICalendar.parse(previous),
+         %{} = counterpart <-
+           Enum.find(schedulable(before), &(utc_rid(&1) == utc_rid(component))) do
+      missing =
+        for property <- counterpart.properties,
+            travels?(property.name, allowed),
+            not Enum.any?(component.properties, &(&1.name == property.name)),
+            do: property
+
+      %{component | properties: component.properties ++ missing}
+    else
+      _no_previous_word -> component
+    end
+  end
+
+  defp public_restored(component, _change, _options), do: component
 
   defp re_identified(calendar, components, %{previous: previous}) when is_binary(previous) do
     with {:ok, before} <- ICalendar.parse(previous),
@@ -2813,11 +2857,15 @@ defmodule Dav.Cal.Scheduling do
       # fresh attendee carrying one is claiming a delivery that never
       # happened — the stored value stands, or none does.
       case Map.fetch(known, value) do
+        # A client repeating the stored answer is echoing what the
+        # server showed it, and the echo round-trips as written —
+        # `RSVP` and `SCHEDULE-STATUS` included. Only a *different*
+        # answer is the organiser speaking for somebody, and is
+        # coerced back to the record. A merging write is stale, not an
+        # echo: the client asked for reconciliation, and the stored
+        # record is restored over whatever its old copy carried.
         {:ok, {answer, _delivery}} ->
-          parameters
-          |> Map.put("PARTSTAT", answer)
-          |> stamped_as(record_for(known, value, merging))
-          |> awaiting()
+          restated_answer(parameters, answer, known, value, merging)
 
         :error ->
           # No stored answer and nothing worth writing: an absent
@@ -2830,6 +2878,17 @@ defmodule Dav.Cal.Scheduling do
           |> Map.delete("SCHEDULE-STATUS")
           |> awaiting()
       end
+    end
+  end
+
+  defp restated_answer(parameters, answer, known, value, merging) do
+    if not merging and Map.get(parameters, "PARTSTAT", "NEEDS-ACTION") == answer do
+      parameters
+    else
+      parameters
+      |> Map.put("PARTSTAT", answer)
+      |> stamped_as(record_for(known, value, merging))
+      |> awaiting()
     end
   end
 
@@ -3846,6 +3905,8 @@ defmodule Dav.Cal.Scheduling do
 
     Enum.filter(replies, &(value(&1, "RECURRENCE-ID") == instance))
   end
+
+  defp accept(%{name: "VTIMEZONE"} = zone, _replies, _allowed), do: zone
 
   defp accept(component, replies, allowed) do
     answers =
