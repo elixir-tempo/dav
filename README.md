@@ -34,9 +34,9 @@ HTTP                    RFC 9110/9111/9112
 * `calendar-query`, `calendar-multiget` and `free-busy-query` as `Dav.Web.Report`s.
 * `Dav.Cal.TimeRange` — the five-row overlap table of RFC 4791 section 9.9, with recurrence expanded through Tempo.
 
-`Dav.Cal.Schedule` begins CalDAV scheduling — RFC 6638, which is Standards Track and **updates RFC 4791**, so it is a requirement rather than an extension. In place so far: the `CALDAV:schedule-inbox` and `CALDAV:schedule-outbox` collection types, the `CALDAV:schedule-response` document, and `POST` on a scheduling Outbox answering a busy-time request — one `CALDAV:request-status` per recipient, so an organiser asking about five people learns which of them could not be answered for.
+`Dav.Cal.Scheduling` implements CalDAV scheduling — RFC 6638, which is Standards Track and **updates RFC 4791**, so it is a requirement rather than an extension. Storing an event with attendees delivers the invitations, an attendee's save replies to the organiser, cancellations and reschedules travel as iTIP messages, free-busy is answered from the Outbox, auto-managed rooms accept on arrival, and the `Schedule-Tag` weak-`ETag` ledger of section 3.2.10 governs conditional writes. `Dav.Cal.Sharing` implements Apple's calendar-sharing extension — invitations, notifications, per-sharee views and per-user data. The behavioural record of how both were driven to conformance, model by model, is the [conformance record](https://hexdocs.pm/dav/conformance.html).
 
-Not built yet: implicit scheduling on `PUT`, iTIP delivery to Inboxes, `Dav.Card`, collection synchronisation (RFC 6578), and ACL (RFC 3744).
+Not built yet: `Dav.Card`, collection synchronisation (RFC 6578), and ACL enforcement (RFC 3744) beyond the principal reports.
 
 ## Measured against the conformance suite
 
@@ -46,15 +46,17 @@ Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests 
 
 CalDAVTester gates 850 of its own blocks on `<require-feature>`, read against a `serverinfo.xml` describing *the server under test*. Apple's file declares 84 features because Apple's server implements 84; running this server against that list asks it thousands of questions it never claimed to answer, and a server is not non-conformant for lacking a feature it does not advertise.
 
-`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, and `no-duplicate-uids`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
+`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, and `timezones-by-reference`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
 
-Against that declaration the suite puts **2,521 tests**, of which:
+Against that declaration the suite puts **2,541 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 2,067 | 82% |
-| failed | 447 | 18% |
-| skipped | 7 | 0% |
+| passed | 2,527 | 99.4% |
+| failed | 12 | 0.5% |
+| skipped | 2 | 0.1% |
+
+Every failure is classified and cited: none are against RFC-required or Apple-interop behaviour — the remaining fourteen (failed plus skipped) are expectations the vendored, archived fixtures cannot support on principle, each with its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).
 
 Fourteen verifiers are ported — `statusCode`, `header`, `multistatusItems`, `propfindItems`, `propfindValues`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlDataMatch`, `xmlElementMatch`, `prepostcondition`, `freeBusy` and `postFreeBusy` — along with the suite's compound directives (`DELETEALL`, `GETNEW`, `WAITCOUNT`, `GETCONTAINS`) and the `grab` elements that carry a value from one response into a later request. A check the harness cannot make is reported skipped, never counted as a pass.
 

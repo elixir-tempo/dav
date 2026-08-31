@@ -20,9 +20,9 @@
 %{
   # --- incidental: cannot pass as vendored -------------------------------
   {"implicitcopymove.xml", "PUT UID restrictions - ORGANIZER"} =>
-    {:incidental, "expected files predate address canonicalisation; see TODO.md"},
+    {:incidental, "expected files predate address canonicalisation; see CONFORMANCE.md"},
   {"implicitcopymove.xml", "PUT UID restrictions - ATTENDEE"} =>
-    {:incidental, "expected files predate address canonicalisation; see TODO.md"},
+    {:incidental, "expected files predate address canonicalisation; see CONFORMANCE.md"},
   {"implicitcopymove.xml", "MOVE to other calendar - ATTENDEE"} =>
     {:incidental,
      "expects the attendee copy removed after cancel; the current reference marks it cancelled (itip.py processCancel) — earlier-era behaviour"},
@@ -45,7 +45,8 @@
     {:incidental,
      "identical requests, contradictory expectations; discriminators are connection-level"},
   {"implicitdeletecalendar.xml", "Multiple Nested Calendars Delete"} =>
-    {:incidental, "sibling fixtures expect SEQUENCE:2 and none from one DELETE; see TODO.md"},
+    {:incidental,
+     "sibling fixtures expect SEQUENCE:2 and none from one DELETE; see CONFORMANCE.md"},
   {"bad-ical.xml", nil} => {:incidental, "the vendored fixture directory is empty upstream"},
   {"schedulenomore.xml", nil} => {:incidental, "the SCHEDULE method was never standardised"},
 

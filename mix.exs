@@ -66,7 +66,7 @@ defmodule Dav.MixProject do
     [
       source_ref: "v#{@version}",
       main: "readme",
-      extras: ["README.md", "LICENSE.md", "CHANGELOG.md"],
+      extras: ["README.md", "LICENSE.md", "CHANGELOG.md", "CONFORMANCE.md"],
       formatters: ["html", "markdown"],
       groups_for_modules: groups_for_modules(),
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"]
