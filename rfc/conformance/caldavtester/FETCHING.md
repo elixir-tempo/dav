@@ -101,3 +101,7 @@ They are upstream's own build hygiene, and the first silently excluded
 empty and the fourth named a directory the archive does not contain.
 
 Nothing else has been modified.
+
+* `Resource/CalDAV/implicit/copymove/put-restrictions/4.ics` — added `TRANSP:TRANSPARENT` to the attendee's expected copy. The fixture predates CalendarServer's `addTranspForNeedsAction` (`itip.py`), which unconditionally marks a `NEEDS-ACTION` recipient's delivered copy transparent; every other fixture family from the later era (`scheduletag`, `cancels`, `scenario1`) already expects it, and the ten tests comparing against this file test UID and COPY/MOVE semantics, not transparency.
+
+* `scripts/tests/CalDAV/timezones.xml` — the `Timezone cache - aliases` suite's December expectation moved from `1211T140000Z/1211T150000Z` to `1211T150000Z/1211T160000Z`. The fixture bakes in Brazilian daylight saving, which Brazil abolished in 2019, and the suite pins the event to `$now.year.0` — so with any current timezone database, `12:00` in `Brazil/East` on December 11 is `15:00Z`. The test's intent — the server resolves the aliased `TZID` through its own timezone cache rather than trusting the truncated inline `VTIMEZONE` — is preserved and sharpened: a server honouring the inline definition (whose obsolete rules still claim daylight saving) now produces `14:00Z` and fails.

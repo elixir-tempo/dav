@@ -28,6 +28,8 @@ defmodule Dav.Cal.Mkcalendar do
 
   import Plug.Conn
 
+  alias Dav.Cal
+  alias Dav.Web.Properties
   alias Dav.Web.Store
   alias Dav.Xml
 
@@ -37,19 +39,80 @@ defmodule Dav.Cal.Mkcalendar do
 
     with :ok <- supported(store),
          {:ok, properties} <- requested(body),
+         :ok <- vacant(path, options),
+         :ok <- settable(properties),
+         :ok <- outside_calendars(path, options),
          {:ok, resource} <- store.mkcalendar(path, context) do
       apply_properties(resource, properties, options)
       send_resp(conn, 201, "")
     else
-      {:error, :unsupported} -> send_resp(conn, 405, "")
-      {:error, :body} -> send_resp(conn, 415, "")
+      {:error, :unsupported} ->
+        send_resp(conn, 405, "")
+
+      {:error, :body} ->
+        send_resp(conn, 415, "")
+
       # A calendar may not be created where something already is, and
       # MUST NOT be created inside another calendar.
       # RFC 4918's `DAV:resource-must-be-null` — a bare 405 says the
       # method was refused, this says the URL was already taken.
-      {:error, :exists} -> precondition(conn, {Xml.dav(), "resource-must-be-null"})
-      {:error, :conflict} -> send_resp(conn, 409, "")
-      {:error, :forbidden} -> send_resp(conn, 403, "")
+      {:error, :exists} ->
+        precondition(conn, {Xml.dav(), "resource-must-be-null"})
+
+      {:error, :inside_calendar} ->
+        precondition(conn, {Xml.caldav(), "calendar-collection-location-ok"})
+
+      # RFC 4791 section 5.3.1.2: a body asking for a property the
+      # client may not set fails the whole request as a `207`, naming
+      # the property that refused and marking the rest as never
+      # attempted — and the calendar is not created.
+      {:error, {:unsettable, properties}} ->
+        conn
+        |> put_resp_content_type("application/xml", "utf-8")
+        |> send_resp(207, Xml.multistatus([refused(path, properties)]))
+
+      {:error, :conflict} ->
+        send_resp(conn, 409, "")
+
+      {:error, :forbidden} ->
+        send_resp(conn, 403, "")
+    end
+  end
+
+  # The URL being taken outranks any complaint about the body: a 207
+  # about properties on a calendar that cannot be created reads as
+  # though it could have been.
+  defp vacant(path, %{store: store, context: context}) do
+    case store.resolve(path, context) do
+      {:ok, _resource} -> {:error, :exists}
+      _absent -> :ok
+    end
+  end
+
+  defp settable(properties) do
+    if Enum.any?(properties, fn {name, _value} -> Properties.protected?(name) end),
+      do: {:error, {:unsettable, properties}},
+      else: :ok
+  end
+
+  defp refused(path, properties) do
+    {denied, blocked} =
+      Enum.split_with(properties, fn {name, _value} -> Properties.protected?(name) end)
+
+    propstats =
+      [
+        {"HTTP/1.1 403 Forbidden", for({name, _value} <- denied, do: {name, nil})},
+        {"HTTP/1.1 424 Failed Dependency", for({name, _value} <- blocked, do: {name, nil})}
+      ]
+      |> Enum.reject(fn {_status, listed} -> listed == [] end)
+
+    {"/" <> Enum.join(path, "/") <> "/", propstats}
+  end
+
+  defp outside_calendars(path, %{store: store, context: context}) do
+    case store.resolve(Enum.drop(path, -1), context) do
+      {:ok, parent} -> if Cal.calendar?(parent), do: {:error, :inside_calendar}, else: :ok
+      _absent -> :ok
     end
   end
 

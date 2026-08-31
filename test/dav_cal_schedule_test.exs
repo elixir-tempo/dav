@@ -399,9 +399,12 @@ defmodule Dav.Cal.ScheduleTest do
 
       # An organiser fixing a typo re-delivers the whole event.
       # Overwriting the attendee's copy wholesale would reset their
-      # acceptance and lose the record that their reply arrived.
+      # acceptance and lose the record that their reply arrived. The
+      # client echoes the answer the server showed it — writing
+      # `NEEDS-ACTION` over a stored answer is the *other* thing, an
+      # organiser deliberately asking again.
       DavPlug.call(
-        conn("PUT", "/alice/calendar/r.ics", invitation("Two", "NEEDS-ACTION")),
+        conn("PUT", "/alice/calendar/r.ics", invitation("Two", "ACCEPTED")),
         context.options
       )
 
@@ -598,7 +601,9 @@ defmodule Dav.Cal.ScheduleTest do
     end
 
     test "an organiser may put the question again", context do
-      asked = String.replace(meeting("One"), "PARTSTAT=DECLINED", "PARTSTAT=NEEDS-ACTION")
+      asked =
+        meeting("Two")
+        |> String.replace("PARTSTAT=DECLINED", "PARTSTAT=NEEDS-ACTION")
 
       DavPlug.call(conn("PUT", "/alice/calendar/q.ics", meeting("One")), context.options)
       DavPlug.call(conn("PUT", "/bob/calendar/parts.ics", accepted()), context.options)
@@ -609,8 +614,8 @@ defmodule Dav.Cal.ScheduleTest do
 
       # Not an organiser overwriting somebody's answer: `NEEDS-ACTION`
       # is the one value that says "I am asking again", and the
-      # attendee is put back to being asked — with `RSVP` to say a
-      # reply is wanted.
+      # attendee is put back to being asked — with `RSVP` on the
+      # delivered update to say a reply is wanted.
       assert stored =~ "PARTSTAT=NEEDS-ACTION"
       assert stored =~ "RSVP=TRUE"
     end

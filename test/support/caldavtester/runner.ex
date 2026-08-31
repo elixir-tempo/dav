@@ -580,10 +580,13 @@ defmodule Dav.CalDAVTester.Runner do
     Map.put(state.options, :principal, principal_for(request, state))
   end
 
-  # Only *wrong* credentials fail. `auth='no'` marks an endpoint that
-  # does not need a user at all — the server-to-server receiver is
-  # one — and treating it as a rejection would 401 every legitimately
-  # anonymous request in the suite.
+  # `auth='no'` is an anonymous request: no principal at all. Whether
+  # anonymity is acceptable is the server's decision per endpoint —
+  # the server-to-server receiver takes it, everything else answers
+  # `401` — which is exactly what the suite is probing. Only *wrong*
+  # credentials fail for authenticated requests.
+  defp principal_for(%{authenticate?: false}, _state), do: nil
+
   defp principal_for(request, state) do
     index = account(request, state)
 
@@ -1013,8 +1016,19 @@ defmodule Dav.CalDAVTester.Runner do
       addresses,
       Map.merge(principal_properties(people, substitutions), group_properties(substitutions)),
       canonical_addresses(people, substitutions),
-      aliased_homes(people, substitutions)
+      aliased_homes(people, substitutions),
+      unattended_addresses(rooms, substitutions)
     )
+  end
+
+  # Every spelling of every room and resource address, folded for
+  # lookup. The store answers `unattended?/2` from this set, which is
+  # how the library refuses a resource as an organiser without a
+  # `CUTYPE` in the data to go on.
+  defp unattended_addresses(rooms, substitutions) do
+    for {address, _home} <- located(rooms, ~w(rcuaddr rcuaddrurn rcuaddralt), substitutions),
+        into: MapSet.new(),
+        do: String.downcase(address)
   end
 
   # Apple's calendar-user-proxy draft: every principal has two child

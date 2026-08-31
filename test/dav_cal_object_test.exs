@@ -118,8 +118,10 @@ defmodule Dav.Cal.ObjectTest do
     end
 
     test "an unresolvable zone must carry its definition" do
+      # RFC 7809: with timezones by reference, an identifier the
+      # server cannot resolve fails `CALDAV:valid-timezone`.
       assert validate(event(["DTSTART;TZID=Made/Up:20260615T090000"])) ==
-               {:error, {@caldav, "valid-calendar-data"}}
+               {:error, {@caldav, "valid-timezone"}}
     end
 
     test "an unresolvable zone with its VTIMEZONE is accepted" do

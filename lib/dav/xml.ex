@@ -349,10 +349,18 @@ defmodule Dav.Xml do
       {:components, names} ->
         ["<", tag, ">", Enum.map(names, &component(&1, prefixes)), "</", tag, ">"]
 
+      {:lang, language, inner} ->
+        ["<", tag, " xml:lang='", escape(language), "'>", spoken(inner, prefixes), "</", tag, ">"]
+
       text when is_binary(text) ->
         ["<", tag, ">", escape(text), "</", tag, ">"]
     end
   end
+
+  defp spoken(text, _prefixes) when is_binary(text), do: escape(text)
+  defp spoken({:names, names}, prefixes), do: Enum.map(names, &empty(&1, prefixes))
+  defp spoken({:hrefs, hrefs}, prefixes), do: Enum.map(hrefs, &href(&1, prefixes))
+  defp spoken(_other, _prefixes), do: []
 
   # Namespaces a structured value will use, so they are declared
   # alongside the ones the property names contribute. Without this a
@@ -363,6 +371,7 @@ defmodule Dav.Xml do
   defp within({:hrefs, _hrefs}), do: [dav()]
   defp within({:elements, namespaces, _inner}), do: namespaces
   defp within({:components, _names}), do: [caldav()]
+  defp within({:lang, _language, inner}), do: within(inner)
   defp within(_other), do: []
 
   defp empty({namespace, local}, prefixes), do: ["<", prefixes[namespace], ":", local, "/>"]
@@ -782,11 +791,26 @@ defmodule Dav.Xml do
 
   defp properties_of(_other), do: []
 
-  defp named_value({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t} = element) do
-    [{element_qname(element), structured(content)}]
+  defp named_value(
+         {:xmlElement, _n, _e, _nsi, _ns, _p, _pos, attributes, content, _l, _pa, _t} = element
+       ) do
+    [{element_qname(element), content |> structured() |> language_tagged(attributes)}]
   end
 
   defp named_value(_other), do: []
+
+  # RFC 4918 section 4.3: `xml:lang` on a stored property is part of
+  # the value and comes back with it — dropping the attribute stores a
+  # name with its language stripped off.
+  defp language_tagged(value, attributes) do
+    language =
+      Enum.find_value(attributes, fn
+        {:xmlAttribute, :"xml:lang", _e, _nsi, _ns, _p, _pos, _l, found, _norm} -> text(found)
+        _other -> nil
+      end)
+
+    if is_nil(language), do: value, else: {:lang, language, value}
+  end
 
   # A property's value is not always text. `CALDAV:schedule-default-
   # calendar-URL` holds a `DAV:href`, and `DAV:resourcetype` holds

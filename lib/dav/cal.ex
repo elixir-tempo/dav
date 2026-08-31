@@ -92,6 +92,36 @@ defmodule Dav.Cal do
   def timezone?(_other), do: false
 
   @doc """
+  Whether a value names a time zone this server knows.
+
+  ### Arguments
+
+  * `identifier` is a candidate time zone identifier, such as
+    `"America/New_York"`.
+
+  ### Returns
+
+  * `true` when the identifier resolves in the zone database.
+
+  ### Examples
+
+      iex> Dav.Cal.timezone_id?("America/New_York")
+      true
+
+      iex> Dav.Cal.timezone_id?("bogus")
+      false
+
+  """
+  @spec timezone_id?(term()) :: boolean()
+  def timezone_id?(identifier) when is_binary(identifier) do
+    match?({:ok, _now}, DateTime.now(identifier))
+  rescue
+    _no_database -> false
+  end
+
+  def timezone_id?(_other), do: false
+
+  @doc """
   Whether a resource is a calendar collection.
 
   ### Arguments

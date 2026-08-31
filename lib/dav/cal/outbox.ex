@@ -64,6 +64,8 @@ defmodule Dav.Cal.Outbox do
   @invalid_user "3.7;Invalid calendar user"
   @no_inbox "5.1;Service unavailable"
 
+  @free_busy_limit 30
+
   # The components an iTIP message can be about.
   @schedulable ~w(VFREEBUSY VEVENT VTODO VJOURNAL VPOLL)
 
@@ -73,15 +75,21 @@ defmodule Dav.Cal.Outbox do
          {:ok, kind} <- accepts(resource),
          {:ok, body, conn} <- request_body(conn, options),
          :ok <- media_type(conn),
+         :ok <- readable(body),
          {:ok, calendar, component} <- scheduling_message(body),
          {:ok, recipients} <- recipients(conn, component),
          :ok <- attendee_allowed(kind, calendar, component, resource, options),
          :ok <- organizer_allowed(kind, component, resource, options) do
       dispatch(conn, calendar, component, recipients, options)
     else
-      {:error, :not_found} -> send_resp(conn, 404, "")
-      {:error, :not_outbox} -> send_resp(conn, 403, "")
-      {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
+      {:error, :not_found} ->
+        send_resp(conn, 404, "")
+
+      {:error, :not_outbox} ->
+        send_resp(conn, 403, "")
+
+      {:error, {_namespace, _local} = failed} ->
+        precondition(conn, failed)
     end
   end
 
@@ -99,6 +107,13 @@ defmodule Dav.Cal.Outbox do
     type = conn |> get_req_header("content-type") |> List.first() || "text/calendar"
 
     if calendar_type?(type), do: :ok, else: {:error, caldav("supported-calendar-data")}
+  end
+
+  # The declared charset is utf-8, and bytes that are not UTF-8 are
+  # not calendar data in it — decoding them as if they were stores
+  # mojibake under another user's name.
+  defp readable(body) do
+    if String.valid?(body), do: :ok, else: {:error, caldav("valid-calendar-data")}
   end
 
   defp calendar_type?(type) do
@@ -365,9 +380,21 @@ defmodule Dav.Cal.Outbox do
     range = {property(request, "DTSTART"), property(request, "DTEND")}
     organiser = property(request, "ORGANIZER")
 
+    # The reference caps a free-busy request at thirty calendar users
+    # including the organiser (`LimitFreeBusyAttendees`): expanding a
+    # calendar per attendee is real work, and a runaway request would
+    # do it hundreds of times. The overflow is answered `5.1` rather
+    # than silently dropped.
+    {asked, overflow} =
+      request.properties
+      |> Enum.filter(&(&1.name == "ATTENDEE"))
+      |> Enum.split(@free_busy_limit - 1)
+
     responses =
-      for property <- Enum.filter(request.properties, &(&1.name == "ATTENDEE")),
-          do: answer(property.value, property.parameters, organiser, range, options)
+      for(
+        property <- asked,
+        do: answer(property.value, property.parameters, organiser, range, options)
+      ) ++ for property <- overflow, do: {property.value, @no_inbox, nil}
 
     conn
     |> put_resp_content_type("application/xml", "utf-8")
@@ -384,7 +411,13 @@ defmodule Dav.Cal.Outbox do
 
     case calendars_of(attendee, options) do
       [] ->
-        {attendee, @invalid_user, nil}
+        # A recipient addressed by a local principal path refers to
+        # something this server can name — a group, a disabled
+        # account — and merely cannot be scheduled with. One
+        # addressed by URI that resolves to nobody does not exist.
+        if String.starts_with?(attendee, "/"),
+          do: {attendee, @invalid_user, nil},
+          else: {attendee, @invalid_user, nil, :missing}
 
       calendars ->
         {attendee, @success, busy(calendars, {attendee, parameters}, organiser, range, options)}

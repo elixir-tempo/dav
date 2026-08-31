@@ -13,7 +13,14 @@ defmodule Dav.Test.SchedulingStore do
   alias Dav.Test.WritableStore
   alias Dav.Web.Store
 
-  def start(resources, addresses, dead \\ %{}, canonical \\ %{}, aliases \\ %{}) do
+  def start(
+        resources,
+        addresses,
+        dead \\ %{},
+        canonical \\ %{},
+        aliases \\ %{},
+        unattended \\ MapSet.new()
+      ) do
     agent = WritableStore.start(resources)
 
     Agent.update(agent, fn state ->
@@ -21,6 +28,7 @@ defmodule Dav.Test.SchedulingStore do
       |> Map.put(:addresses, addresses)
       |> Map.put(:canonical, canonical)
       |> Map.put(:aliases, aliases)
+      |> Map.put(:unattended, unattended)
     end)
 
     agent
@@ -28,6 +36,12 @@ defmodule Dav.Test.SchedulingStore do
 
   @impl Dav.Web.Store
   defdelegate scope(context, principal), to: WritableStore
+
+  @impl Dav.Web.Store
+  def unattended?(address, agent) do
+    known = Agent.get(WritableStore.pid(agent), &Map.get(&1, :unattended, MapSet.new()))
+    MapSet.member?(known, String.downcase(address))
+  end
 
   @impl Dav.Web.Store
   def canonical_address(address, agent) do
@@ -107,8 +121,11 @@ defmodule Dav.Test.SchedulingStore do
 
   @calendar_timezone {"urn:ietf:params:xml:ns:caldav", "calendar-timezone"}
 
+  @calendar_timezone_id {"urn:ietf:params:xml:ns:caldav", "calendar-timezone-id"}
+
   defp acceptable?({:set, @default_calendar, value}, agent), do: calendar?(value, agent)
   defp acceptable?({:set, @calendar_timezone, value}, _agent), do: Cal.timezone?(value)
+  defp acceptable?({:set, @calendar_timezone_id, value}, _agent), do: Cal.timezone_id?(value)
   defp acceptable?(_change, _agent), do: true
 
   defp calendar?({:hrefs, [href]}, agent), do: calendar?(href, agent)

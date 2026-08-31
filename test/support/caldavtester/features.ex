@@ -69,7 +69,13 @@ defmodule Dav.CalDAVTester.Features do
                 # `Dav.Cal.Object` refuses a second resource carrying a
                 # `UID` already used in the collection, so the suites
                 # that assume duplicates are allowed do not apply.
-                "no-duplicate-uids"
+                "no-duplicate-uids",
+                # RFC 7809 posture: a `TZID` naming a zone the server
+                # knows is accepted without an inline `VTIMEZONE`
+                # (`Dav.Cal.Object`'s `timezones_present/1` resolves
+                # known zones), so the strict-inclusion error test
+                # excludes itself.
+                "timezones-by-reference"
               ]
 
   @doc """

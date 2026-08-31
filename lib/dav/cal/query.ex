@@ -122,8 +122,23 @@ defmodule Dav.Cal.Query do
   # to hear that rather than have most of it dropped.
   defp timezone_of(document) do
     case Enum.find(document.children, &named?(&1, "timezone")) do
-      nil -> :ok
+      nil -> timezone_id_of(document)
       element -> only_zones(element.text)
+    end
+  end
+
+  # RFC 7809 section 5.2: `CALDAV:timezone-id` names a zone by
+  # identifier instead of shipping the definition, and an identifier
+  # the server does not know fails `CALDAV:valid-timezone`.
+  defp timezone_id_of(document) do
+    case Enum.find(document.children, &named?(&1, "timezone-id")) do
+      nil ->
+        :ok
+
+      element ->
+        if Cal.timezone_id?(String.trim(element.text)),
+          do: :ok,
+          else: {:error, {Xml.caldav(), "valid-timezone"}}
     end
   end
 
@@ -208,10 +223,21 @@ defmodule Dav.Cal.Query do
   # floating event is read as UTC, which moves it by the collection's
   # offset — hours, easily enough to fall outside the window asked for.
   defp floating_zone(document, target, options) do
-    case Enum.find(document.children, &named?(&1, "timezone")) do
-      nil -> collection_zone(target, options)
-      element -> tzid(element.text) || collection_zone(target, options)
-    end
+    named_zone =
+      case Enum.find(document.children, &named?(&1, "timezone")) do
+        nil ->
+          # RFC 7809 section 4: `CALDAV:timezone-id` names the zone by
+          # identifier instead of shipping the whole VTIMEZONE.
+          case Enum.find(document.children, &named?(&1, "timezone-id")) do
+            nil -> nil
+            element -> element.text
+          end
+
+        element ->
+          tzid(element.text)
+      end
+
+    named_zone || collection_zone(target, options)
   end
 
   defp collection_zone(target, %{store: store, context: context}) do

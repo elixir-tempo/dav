@@ -192,6 +192,96 @@ defmodule Dav.Cal.TimeRange do
   defp lasts(extent, instance), do: ending(extent, instance)
 
   @doc """
+  Whether a moment is an occurrence of a component.
+
+  `CANCEL` generation needs this: an organiser excluding a date that
+  the previous rule never produced has not withdrawn anything, and a
+  cancellation for it would name a meeting the recipient never had.
+
+  ### Arguments
+
+  * `component` is the component whose occurrences are asked about.
+
+  * `parameters` are the iCalendar parameters the moment was written
+    with — its `TZID`, when it has one.
+
+  * `instance` is the moment, as written.
+
+  ### Returns
+
+  * `true` when the component's occurrence set contains the moment.
+
+  ### Examples
+
+      iex> ics = "BEGIN:VCALENDAR\\r\\nBEGIN:VEVENT\\r\\nDTSTART:20260615T090000Z\\r\\nRRULE:FREQ=DAILY;COUNT=3\\r\\nEND:VEVENT\\r\\nEND:VCALENDAR\\r\\n"
+      iex> {:ok, calendar} = Dav.Cal.ICalendar.parse(ics)
+      iex> [event] = calendar.components
+      iex> {Dav.Cal.TimeRange.occurs?(event, %{}, "20260616T090000Z"), Dav.Cal.TimeRange.occurs?(event, %{}, "20260630T090000Z")}
+      {true, false}
+
+  """
+  @spec occurs?(ICalendar.component(), %{optional(String.t()) => String.t()}, String.t()) ::
+          boolean()
+  def occurs?(component, parameters, instance) do
+    case property(component, "DTSTART") do
+      %{value: value, parameters: written} = dtstart ->
+        if zone_of(written, value, nil) == zone_of(parameters, instance, nil) and
+             String.ends_with?(value, "Z") == String.ends_with?(instance, "Z") do
+          occurs_on_the_clock?(component, dtstart, instance)
+        else
+          occurs_in_utc?(component, parameters, instance)
+        end
+
+      nil ->
+        false
+    end
+  end
+
+  # RFC 5545 section 3.8.5.3: a recurrence repeats in the *local* time
+  # of its `DTSTART` — the weekly 15:00 stays 15:00 across a daylight
+  # saving change. Expanding in UTC steps by exact weeks instead, so
+  # after the change every occurrence is an hour off and no exclusion
+  # matches. When the moment is written in the same zone as `DTSTART`,
+  # both sides are compared as wall-clock readings and the zone never
+  # enters into it.
+  defp occurs_on_the_clock?(component, dtstart, instance) do
+    with {:ok, start} when not is_nil(start) <- moment(dtstart.value),
+         {:ok, moment} when not is_nil(moment) <- moment(instance) do
+      ruled =
+        case property(component, "RRULE") do
+          nil -> [start]
+          rule -> expand(rule.value, start)
+        end
+
+      added =
+        for property <- component.properties,
+            property.name == "RDATE",
+            part <- String.split(property.value, ","),
+            {:ok, extra} <- [moment(part)],
+            not is_nil(extra),
+            do: extra
+
+      Enum.any?(ruled ++ added, &same_moment?(&1, moment))
+    else
+      _unreadable -> false
+    end
+  end
+
+  # A moment written in a different zone than `DTSTART` has no shared
+  # wall clock to compare on, so both sides convert to UTC.
+  defp occurs_in_utc?(component, parameters, instance) do
+    with {:ok, dtstart} <- property_value(component, "DTSTART", nil),
+         {:ok, moment} when not is_nil(moment) <-
+           moment(instance, zone_of(parameters, instance, nil)) do
+      component
+      |> starts(dtstart)
+      |> Enum.any?(&same_moment?(&1, moment))
+    else
+      _unreadable -> false
+    end
+  end
+
+  @doc """
   Whether an alarm fires inside a window.
 
   RFC 4791 section 9.9: a `time-range` on a `VALARM` is tested against

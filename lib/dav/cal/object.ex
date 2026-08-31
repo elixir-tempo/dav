@@ -36,6 +36,7 @@ defmodule Dav.Cal.Object do
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Scheduling
   alias Dav.Cal.Sharing
+  alias Dav.Cal.TimeRange
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -101,17 +102,23 @@ defmodule Dav.Cal.Object do
          :ok <- structure(calendar),
          :ok <- readable_values(calendar),
          :ok <- timezones_present(calendar),
+         :ok <- instances_valid(calendar),
          :ok <- within_limits(calendar),
          :ok <- unique_uid(calendar),
          :ok <- welcomed(calendar, collection, options),
+         # The UID test comes before the participation ones: writing a
+         # second copy of a meeting into another calendar is refused
+         # as the duplicate it is (`unique-scheduling-object-resource`),
+         # not as an attendee overstepping.
+         :ok <- no_uid_conflict(calendar, collection, path, options),
+         :ok <- uid_unchanged(calendar, path, options),
          :ok <- attendee_allowed(calendar, collection, path, options),
          :ok <- organizer_allowed(calendar, collection, options),
          :ok <- organizer_kept(calendar, path, options),
          :ok <- theirs_to_change(calendar, collection, path, options),
          :ok <- attendee_kept(calendar, collection, path, options),
-         :ok <- agent_unchanged(calendar, collection, path, options),
-         :ok <- same_organizer(calendar, path, options) do
-      no_uid_conflict(calendar, collection, path, options)
+         :ok <- agent_unchanged(calendar, collection, path, options) do
+      same_organizer(calendar, path, options)
     end
   end
 
@@ -311,13 +318,88 @@ defmodule Dav.Cal.Object do
           not known?(zone),
           do: zone
 
-    if unresolvable == [], do: :ok, else: {:error, precondition("valid-calendar-data")}
+    # RFC 7809: with timezones by reference, a `TZID` that resolves
+    # in the zone database needs no inline `VTIMEZONE` — and one that
+    # resolves nowhere fails `CALDAV:valid-timezone`.
+    if unresolvable == [], do: :ok, else: {:error, precondition("valid-timezone")}
   end
 
   defp known?(zone) do
     match?({:ok, _moment}, DateTime.now(zone))
   rescue
     _no_database -> true
+  end
+
+  # A resource keeps its `UID` for life. Overwriting a calendar
+  # object with one carrying a different `UID` swaps the meeting out
+  # from under every reference to it — scheduling state, other
+  # copies, client caches — so the reference refuses it as an invalid
+  # calendar object resource rather than treating it as an edit.
+  defp uid_unchanged(calendar, path, options) do
+    with [uid] <- uids(calendar),
+         %{} = before <- stored(path, options),
+         [held] <- uids(before),
+         false <- held == uid do
+      {:error, precondition("valid-calendar-object-resource")}
+    else
+      _new_or_unchanged -> :ok
+    end
+  end
+
+  # An override names an occurrence the rule actually produces —
+  # RFC 5545 section 3.8.4.4, `RECURRENCE-ID` "identifies a specific
+  # instance". One that names no instance would be a component the
+  # master disclaims. A value at midnight on a day that has an
+  # instance is the known client slip the server repairs on store, so
+  # it passes here.
+  defp instances_valid(calendar) do
+    components = Enum.reject(calendar.components, &(&1.name == "VTIMEZONE"))
+    master = Enum.find(components, &is_nil(recurrence_of(&1)))
+
+    # A cancelled series is past enforcing: its overrides are history
+    # being tidied, not instances being claimed, and the reference
+    # accepts them as they stand.
+    ruled? =
+      master != nil and Enum.any?(master.properties, &(&1.name == "RRULE")) and
+        not Enum.any?(
+          master.properties,
+          &(&1.name == "STATUS" and &1.value == "CANCELLED")
+        )
+
+    invalid =
+      for component <- components,
+          ruled?,
+          property <- component.properties,
+          property.name == "RECURRENCE-ID",
+          not TimeRange.occurs?(master, property.parameters, property.value),
+          not repairable_midnight?(master, property),
+          do: property.value
+
+    if invalid == [], do: :ok, else: {:error, precondition("valid-calendar-data")}
+  end
+
+  defp repairable_midnight?(master, %{parameters: parameters, value: value}) do
+    case String.split(value, "T", parts: 2) do
+      [_date, time] when time in ["000000", "000000Z"] ->
+        day_instance(master, parameters, value) != nil
+
+      _not_midnight ->
+        false
+    end
+  end
+
+  @doc false
+  def day_instance(master, parameters, midnight) do
+    [date, _time] = String.split(midnight, "T", parts: 2)
+
+    with %{value: start} <- Enum.find(master.properties, &(&1.name == "DTSTART")),
+         [_start_date, start_time] <- String.split(start, "T", parts: 2) do
+      candidate = date <> "T" <> start_time
+
+      if TimeRange.occurs?(master, parameters, candidate), do: candidate, else: nil
+    else
+      _no_start -> nil
+    end
   end
 
   # RFC 4791 section 5.2.9 caps attendees per instance. The limit is
@@ -510,9 +592,25 @@ defmodule Dav.Cal.Object do
     addresses = Scheduling.addresses_of(collection, options)
     {organizer, _parameters} = organizer_of(calendar)
 
-    if organizer in addresses and orphaned?(calendar),
-      do: {:error, precondition("organizer-allowed")},
-      else: :ok
+    cond do
+      # A room does not call meetings. An auto-managed calendar user
+      # answers invitations by itself; an event organised *by* one
+      # has nobody behind it to process the replies, and the
+      # reference refuses it the same way.
+      is_binary(organizer) and attendee_values(calendar) != [] and
+          unattended_user?(organizer, options) ->
+        {:error, precondition("organizer-allowed")}
+
+      organizer in addresses and orphaned?(calendar) ->
+        {:error, precondition("organizer-allowed")}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp unattended_user?(address, %{store: store, context: context}) do
+    Store.supports?(store, :unattended?) and store.unattended?(address, context)
   end
 
   # A sharee with write access may edit the events in a calendar
@@ -651,13 +749,23 @@ defmodule Dav.Cal.Object do
   # saying so — but a `PUT` that quietly drops their own `ATTENDEE`
   # leaves the organiser still expecting them and no message to say
   # otherwise.
+  # The writer's role comes from the *stored* copy: a body that
+  # strips the `ORGANIZER` altogether is precisely the overwrite this
+  # refuses — an attendee turning the meeting into a private
+  # appointment while everyone else still holds it — and judging the
+  # role from the new body would let that body vouch for itself.
   defp attendee_kept(calendar, collection, path, options) do
     addresses = Scheduling.addresses_of(collection, options)
-    {organizer, _parameters} = organizer_of(calendar)
 
     with false <- addresses == [],
-         false <- organizer in [nil | addresses],
          %{} = before <- stored(path, options),
+         # A `VTODO` is exempt: task clients notoriously strip the
+         # scheduling properties when completing one, and the server
+         # repairs the body instead of refusing it — the suite's
+         # "Client removing properties fix" family depends on it.
+         true <- Enum.any?(before.components, &(&1.name == "VEVENT")),
+         {organizer, _parameters} when not is_nil(organizer) <- organizer_of(before),
+         false <- organizer in addresses,
          true <- attends?(before, addresses),
          false <- attends?(calendar, addresses) do
       {:error, precondition("valid-attendee-change")}
@@ -686,7 +794,8 @@ defmodule Dav.Cal.Object do
          # expects to deliver.
          true <- Scheduling.hosted?(organizer, options),
          %{} = before <- stored(path, options),
-         {^organizer, held} <- organizer_of(before),
+         {held_organizer, held} when not is_nil(held_organizer) <- organizer_of(before),
+         true <- same_user?(held_organizer, organizer, options),
          # A `SCHEDULE-AGENT` the *server* wrote is not the client's
          # to be held to: it is stamped alongside a `SCHEDULE-STATUS`
          # saying why, and a client that never sent it cannot be
@@ -700,6 +809,23 @@ defmodule Dav.Cal.Object do
   end
 
   defp agent_of(parameters), do: Map.get(parameters, "SCHEDULE-AGENT", "SERVER")
+
+  defp same_user?(one, other, %{store: store, context: context}) do
+    if Store.supports?(store, :canonical_address) do
+      canonical(one, store, context) == canonical(other, store, context)
+    else
+      one == other
+    end
+  end
+
+  defp canonical(address, store, context) do
+    case store.canonical_address(address, context) do
+      {:ok, canonical} -> canonical
+      _unknown -> address
+    end
+  end
+
+  defp stored(_path, options) when not is_map_key(options, :store), do: nil
 
   defp stored(path, %{store: store, context: context}) do
     with true <- Store.supports?(store, :read),

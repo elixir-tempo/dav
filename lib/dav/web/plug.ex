@@ -28,6 +28,7 @@ defmodule Dav.Web.Plug do
 
   import Plug.Conn
 
+  alias Dav.Cal
   alias Dav.Web.Properties
   alias Dav.Web.Resource
   alias Dav.Web.Store
@@ -132,10 +133,23 @@ defmodule Dav.Web.Plug do
 
   @impl Plug
   def call(%Plug.Conn{} = conn, %{} = options) do
-    if authenticated?(options),
+    if authenticated?(options) or anonymous_endpoint?(conn, options),
       do: dispatch(conn.method, conn, scoped(options)),
       else: challenge(conn)
   end
+
+  # A server-to-server receiver takes messages from *other servers*,
+  # which hold no account here — requiring a user on it would refuse
+  # the one caller it exists for. Every other resource still demands
+  # one when the deployment does.
+  defp anonymous_endpoint?(conn, %{store: store, context: context}) do
+    case store.resolve(Store.segments(conn.request_path), context) do
+      {:ok, resource} -> Enum.any?(resource.types, &(&1 == receiver_type()))
+      _absent -> false
+    end
+  end
+
+  defp receiver_type, do: {"urn:ietf:params:xml:ns:ischedule", "receiver"}
 
   # Asked once, at the edge, so every callback below sees the same
   # context. A store that holds shared data needs to know who is
@@ -258,7 +272,7 @@ defmodule Dav.Web.Plug do
          :ok <- validate(body, path, options, type),
          previous = contents(path, options),
          {:ok, outcome, resource} <- options.store.put(path, body, type, options.context) do
-      written(resource, body, previous, path, options)
+      written(resource, body, previous, path, merging?(conn), options)
 
       settled = settled(resource, path, options)
 
@@ -356,7 +370,7 @@ defmodule Dav.Web.Plug do
 
     for hook <- options.hooks,
         concerns?(hook, resource, collection),
-        function_exported?(hook, :deleted, 2),
+        implements?(hook, :deleted, 2),
         do: hook.deleted(change, options)
 
     :ok
@@ -419,13 +433,44 @@ defmodule Dav.Web.Plug do
   # a refused request.
   defp entity_tag_matches(conn, path, options) do
     current = current_etag(path, options)
+    if_match = get_req_header(conn, "if-match")
 
     cond do
-      not matched?(get_req_header(conn, "if-match"), current) -> {:error, :entity_tag}
-      not unmatched?(get_req_header(conn, "if-none-match"), current) -> {:error, :entity_tag}
-      true -> :ok
+      not (matched?(if_match, current) or schedule_matched?(if_match, path, options)) ->
+        {:error, :entity_tag}
+
+      not unmatched?(get_req_header(conn, "if-none-match"), current) ->
+        {:error, :entity_tag}
+
+      true ->
+        :ok
     end
   end
+
+  # RFC 6638 section 3.2.10. On a scheduling object the `ETag` moves
+  # when the server applies another attendee's reply, though nothing
+  # the client's copy states has changed. The tags accumulated since
+  # the `Schedule-Tag` last changed still satisfy `If-Match`; the
+  # ledger is kept by the scheduling hook and starts over whenever
+  # the tag itself moves.
+  defp schedule_matched?([wanted | _rest], path, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :properties),
+         {:ok, resource} <- store.resolve(path, context),
+         %{} = properties <- store.properties(resource, context),
+         listed when is_binary(listed) <-
+           Map.get(properties, {Xml.caldav(), "schedule-etags"}) do
+      known = String.split(listed, " ")
+
+      wanted
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.any?(&(&1 in known))
+    else
+      _no_ledger -> false
+    end
+  end
+
+  defp schedule_matched?(_headers, _path, _options), do: false
 
   defp matched?([], _current), do: true
   defp matched?(_headers, nil), do: false
@@ -456,7 +501,7 @@ defmodule Dav.Web.Plug do
          collection = parent(resource.path, options),
          {_name, value} <-
            options.hooks
-           |> Enum.filter(&function_exported?(&1, :headers, 3))
+           |> Enum.filter(&implements?(&1, :headers, 3))
            |> Enum.flat_map(& &1.headers(resource, collection, options))
            |> Enum.find(fn {name, _value} -> name == "schedule-tag" end) do
       value
@@ -473,7 +518,7 @@ defmodule Dav.Web.Plug do
     with action when is_binary(action) <- action_of(conn),
          {:ok, resource} <- resolve(conn, options) do
       options.hooks
-      |> Enum.filter(&function_exported?(&1, :action, 4))
+      |> Enum.filter(&implements?(&1, :action, 4))
       |> Enum.find_value(:unhandled, &claimed(&1, action, conn, resource, options))
     else
       _no_action_or_resource -> :unhandled
@@ -495,7 +540,7 @@ defmodule Dav.Web.Plug do
     collection = parent(resource.path, options)
 
     options.hooks
-    |> Enum.filter(&function_exported?(&1, :headers, 3))
+    |> Enum.filter(&implements?(&1, :headers, 3))
     |> Enum.flat_map(& &1.headers(resource, collection, options))
     |> Enum.reduce(conn, fn {name, value}, conn -> put_resp_header(conn, name, value) end)
   end
@@ -504,14 +549,27 @@ defmodule Dav.Web.Plug do
   # storing an event with attendees has to deliver the invitations
   # (RFC 6638 section 3), and a hook cannot fail the write that
   # triggered it.
-  defp written(resource, body, previous, path, options) do
+  defp written(resource, body, previous, path, merging, options) do
     collection = parent(path, options)
-    change = %{resource: resource, body: body, previous: previous, collection: collection}
+
+    change = %{
+      resource: resource,
+      body: body,
+      previous: previous,
+      collection: collection,
+      merge: merging
+    }
 
     for hook <- options.hooks, hook.applies?(collection), do: hook.written(change, options)
 
     :ok
   end
+
+  # RFC 6638 section 3.2.10: a write conditional on the Schedule-Tag
+  # says "merge my changes" rather than "replace what is there" — the
+  # client knows its copy may be stale in ways it never agreed to, and
+  # asks the server to reconcile rather than refuse.
+  defp merging?(conn), do: get_req_header(conn, "if-schedule-tag-match") != []
 
   # What a collection may contain is the collection's business, not
   # this module's: `Dav.Cal.Object` enforces RFC 4791's restrictions on
@@ -814,7 +872,11 @@ defmodule Dav.Web.Plug do
          :ok <- parent_of(destination, options),
          :ok <- validate_transfer(kind, source, destination, options),
          :ok <- relocatable(source, destination, options),
+         held = transferred_body(source, options),
+         displaced = if(replacing?, do: contents(destination, options), else: nil),
          :ok <- carry_out(kind, source, destination, options) do
+      aftermath(kind, source, destination, held, displaced, options)
+
       if replacing?,
         do: send_resp(conn, 204, ""),
         else: conn |> at(destination_header(conn)) |> send_resp(201, "")
@@ -964,6 +1026,54 @@ defmodule Dav.Web.Plug do
   defp lookup([], _options), do: {:ok, :root}
   defp lookup(path, %{store: store, context: context}), do: store.resolve(path, context)
 
+  # RFC 4791 section 5.3.2 applies the PUT rules to "the resource
+  # targeted by a COPY or MOVE", and RFC 6638 section 3.1 makes
+  # landing in a calendar collection a scheduling operation: an event
+  # arriving from a plain collection is being created as a scheduling
+  # object and delivers its invitations; one moved between calendars
+  # is the same event relocating, so its own content is its previous
+  # state and nothing is announced; one moved *out* of the calendar
+  # world has been taken off the calendar, which is a delete.
+  defp aftermath(_kind, _source, _destination, nil, _displaced, _options), do: :ok
+
+  defp aftermath(kind, source, destination, held, displaced, options) do
+    landed = calendar_parent?(Enum.drop(destination, -1), options)
+    left = calendar_parent?(Enum.drop(source.path, -1), options)
+
+    if landed do
+      previous = if kind == :move and left, do: held, else: displaced
+      landed_write(destination, held, previous, options)
+    end
+
+    if kind == :move and left and not landed do
+      collection = parent(source.path, options)
+      withdrawn(source, held, collection, options)
+    end
+
+    :ok
+  end
+
+  defp landed_write(destination, held, previous, options) do
+    case options.store.resolve(destination, options.context) do
+      {:ok, resource} -> written(resource, held, previous, destination, false, options)
+      _absent -> :ok
+    end
+  end
+
+  defp transferred_body(source, options) do
+    case body_of(source, options) do
+      {:ok, body} -> body
+      :error -> nil
+    end
+  end
+
+  defp calendar_parent?(path, %{store: store, context: context}) do
+    case store.resolve(path, context) do
+      {:ok, resource} -> Cal.calendar?(resource)
+      _absent -> false
+    end
+  end
+
   defp carry_out(:copy, source, destination, options) do
     options.store.copy(source, destination, options.context)
   end
@@ -1061,7 +1171,7 @@ defmodule Dav.Web.Plug do
 
     extra =
       options.hooks
-      |> Enum.filter(&function_exported?(&1, :types, 3))
+      |> Enum.filter(&implements?(&1, :types, 3))
       |> Enum.flat_map(& &1.types(resource, collection, options))
 
     %{resource | types: Enum.uniq(resource.types ++ extra)}
@@ -1117,9 +1227,16 @@ defmodule Dav.Web.Plug do
   defp current_user(%{principal: principal}),
     do: %{{Xml.dav(), "current-user-principal"} => {:hrefs, [principal]}}
 
+  # `function_exported?/3` answers for *loaded* modules only, and a
+  # request served before anything else touched an extension would
+  # silently skip its callbacks. Loading is idempotent and cheap.
+  defp implements?(hook, name, arity) do
+    Code.ensure_loaded?(hook) and function_exported?(hook, name, arity)
+  end
+
   defp hook_properties(resource, collection, options) do
     options.hooks
-    |> Enum.filter(&function_exported?(&1, :properties, 3))
+    |> Enum.filter(&implements?(&1, :properties, 3))
     |> Enum.flat_map(& &1.properties(resource, collection, options))
     |> Map.new()
   end

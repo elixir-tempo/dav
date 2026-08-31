@@ -221,7 +221,8 @@ defmodule Dav.Web.Hook do
           required(:body) => binary(),
           required(:previous) => binary() | nil,
           required(:collection) => Resource.t() | nil,
-          optional(:properties) => %{optional(term()) => term()}
+          optional(:properties) => %{optional(term()) => term()},
+          optional(:merge) => boolean()
         }
 
   @callback written(change :: change(), options :: map()) :: :ok

@@ -182,40 +182,57 @@ defmodule Dav.Cal.Schedule do
 
       iex> Dav.Cal.Schedule.schedule_response([{"mailto:a@example.com", "2.0;Success", nil}])
       ...> |> IO.iodata_to_binary()
-      ...> |> String.contains?("<C:recipient><D:href>mailto:a@example.com</D:href></C:recipient>")
+      ...> |> String.contains?("<recipient><D:href>mailto:a@example.com</D:href></recipient>")
       true
 
   """
   @spec schedule_response([{String.t(), String.t(), binary() | nil}]) :: [iodata()]
+  # Serialised in the CalDAV *default* namespace, the way the
+  # reference emits it: unprefixed elements with one `xmlns` on the
+  # root. Prefixes would be equivalent XML, but clients (and the
+  # conformance suite) match these responses textually.
   def schedule_response(responses) do
     [
       ~s(<?xml version="1.0" encoding="utf-8"?>),
-      ~s(<C:schedule-response xmlns:D="DAV:" xmlns:C="),
+      ~s(<schedule-response xmlns:D="DAV:" xmlns="),
       Xml.caldav(),
       ~s(">),
       Enum.map(responses, &response/1),
-      "</C:schedule-response>"
+      "</schedule-response>"
     ]
   end
 
-  defp response({recipient, status, data}) do
+  # RFC 6638 section 8.2: a recipient the server cannot find at all
+  # fails the `CALDAV:recipient-exists` check, and the response names
+  # the failed precondition alongside the `3.7` status — so a client
+  # can tell "no such user" from a user who exists but cannot be
+  # scheduled with.
+  defp response({recipient, status, data, :missing}) do
+    failed = ["<D:error><recipient-exists xmlns='", Xml.caldav(), "'/></D:error>"]
+    response({recipient, status, data}, failed)
+  end
+
+  defp response({recipient, status, data}), do: response({recipient, status, data}, [])
+
+  defp response({recipient, status, data}, failed) do
     [
-      "<C:response>",
-      "<C:recipient><D:href>",
+      "<response>",
+      "<recipient><D:href>",
       escape(recipient),
-      "</D:href></C:recipient>",
-      "<C:request-status>",
+      "</D:href></recipient>",
+      "<request-status>",
       escape(status),
-      "</C:request-status>",
+      "</request-status>",
       calendar_data(data),
-      "</C:response>"
+      failed,
+      "</response>"
     ]
   end
 
   defp calendar_data(nil), do: []
 
   defp calendar_data(data),
-    do: ["<C:calendar-data>", escape(IO.iodata_to_binary(data)), "</C:calendar-data>"]
+    do: ["<calendar-data>", escape(IO.iodata_to_binary(data)), "</calendar-data>"]
 
   defp escape(text) do
     text

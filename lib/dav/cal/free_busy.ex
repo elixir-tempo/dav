@@ -65,6 +65,7 @@ defmodule Dav.Cal.FreeBusy do
   @behaviour Dav.Web.Report
 
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.Schedule
   alias Dav.Cal.TimeRange
   alias Dav.Web.Resource
   alias Dav.Web.Store
@@ -84,6 +85,16 @@ defmodule Dav.Cal.FreeBusy do
   def run(%Resource{collection?: false}, _body, _depth, _options), do: {:error, :forbidden}
 
   def run(%Resource{} = collection, body, depth, options) do
+    if Schedule.inbox?(collection) or Schedule.outbox?(collection),
+      do: {:error, {Xml.dav(), "supported-report"}},
+      else: query(collection, body, depth, options)
+  end
+
+  # RFC 6638 section 2.2: the scheduling Inbox and Outbox hold copies
+  # of messages, not the calendar itself — a free-busy answer computed
+  # over them would double-count every invitation still sitting there.
+  # The report is simply not supported on either.
+  defp query(collection, body, depth, options) do
     with {:ok, document} <- Xml.parse(body),
          {:ok, range} <- range_of(document) do
       periods =
@@ -195,14 +206,20 @@ defmodule Dav.Cal.FreeBusy do
   @spec transparent?(Resource.t(), map()) :: boolean()
   def transparent?(collection, %{store: store, context: context}) do
     with true <- Store.supports?(store, :properties),
-         %{} = properties <- store.properties(collection, context),
-         {:elements, _namespaces, markup} <-
-           Map.get(properties, {Xml.caldav(), "schedule-calendar-transp"}) do
-      String.contains?(markup, "transparent")
+         %{} = properties <- store.properties(collection, context) do
+      properties |> Map.get({Xml.caldav(), "schedule-calendar-transp"}) |> says_transparent?()
     else
       _opaque -> false
     end
   end
+
+  defp says_transparent?({:elements, _namespaces, markup}),
+    do: String.contains?(markup, "transparent")
+
+  defp says_transparent?({:names, names}),
+    do: Enum.any?(names, fn {_namespace, local} -> local == "transparent" end)
+
+  defp says_transparent?(_opaque), do: false
 
   defp busy(object, range, floating, options) do
     with {:ok, data} <- read(object, options),
@@ -379,7 +396,16 @@ defmodule Dav.Cal.FreeBusy do
     considered = Enum.filter(calendar.components, &(&1.name in @considered))
     overrides = Enum.filter(considered, &(not is_nil(value(&1, "RECURRENCE-ID"))))
 
-    Enum.flat_map(considered, &periods(&1, range, floating, overrides))
+    # Overrides stand in for the master's rule-produced instances, so
+    # only the master's expansion is trimmed by them. An override
+    # handed its own recurrence set would suppress the one instance it
+    # exists to describe.
+    Enum.flat_map(considered, fn component ->
+      case value(component, "RECURRENCE-ID") do
+        nil -> periods(component, range, floating, overrides)
+        _override -> periods(component, range, floating, [])
+      end
+    end)
   end
 
   @doc """

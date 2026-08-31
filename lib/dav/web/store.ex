@@ -234,6 +234,7 @@ defmodule Dav.Web.Store do
           | :addresses
           | :canonical_address
           | :origin
+          | :unattended?
         ) :: boolean()
   def supports?(store, capability) do
     Code.ensure_loaded?(store) and function_exported?(store, capability, arity(capability))
@@ -253,6 +254,7 @@ defmodule Dav.Web.Store do
   defp arity(:principal), do: 2
   defp arity(:addresses), do: 2
   defp arity(:canonical_address), do: 2
+  defp arity(:unattended?), do: 2
 
   @doc """
   A resource's dead properties.
@@ -501,6 +503,29 @@ defmodule Dav.Web.Store do
   @callback canonical_address(address :: String.t(), context :: term()) ::
               {:ok, String.t()} | {:error, :not_found}
 
+  @doc """
+  Whether an address names an auto-managed calendar user.
+
+  Optional. A room or a piece of equipment answers its own
+  invitations — the server accepts for it — and it cannot organise a
+  meeting of its own. Scheduling needs to know which addresses are of
+  that kind when the data does not say (a `CUTYPE` parameter is the
+  organiser's claim, not the server's knowledge).
+
+  ### Arguments
+
+  * `address` is a calendar user address as written.
+
+  * `context` is the store's own context.
+
+  ### Returns
+
+  * `true` when the address names a room or resource this server
+    manages automatically, and `false` otherwise.
+
+  """
+  @callback unattended?(address :: String.t(), context :: term()) :: boolean()
+
   @optional_callbacks read: 2,
                       put: 4,
                       delete: 2,
@@ -514,5 +539,6 @@ defmodule Dav.Web.Store do
                       scope: 2,
                       addresses: 2,
                       canonical_address: 2,
-                      origin: 2
+                      origin: 2,
+                      unattended?: 2
 end
