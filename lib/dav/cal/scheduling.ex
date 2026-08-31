@@ -1621,16 +1621,14 @@ defmodule Dav.Cal.Scheduling do
 
     case {method, collection(home, &Cal.calendar?/1, options)} do
       {"REQUEST", %Resource{} = calendar} ->
-        store(
-          calendar,
-          own_copy(
-            preserving(calendar, recipient, components, told, uid, options),
-            zones,
-            canonical_address(recipient, options)
-          ),
-          uid,
-          options
-        )
+        address = canonical_address(recipient, options)
+
+        delivered =
+          calendar
+          |> preserving(recipient, components, told, uid, options)
+          |> Enum.map(&transparent_until_answered(&1, address))
+
+        store(calendar, own_copy(delivered, zones, address), uid, options)
 
       {"REPLY", %Resource{} = calendar} ->
         apply_reply(calendar, components, uid, options)
@@ -1709,6 +1707,31 @@ defmodule Dav.Cal.Scheduling do
 
     :ok
   end
+
+  # The reference's `addTranspForNeedsAction`: an event the recipient
+  # has not answered does not make them busy. Their free-busy shows
+  # the meetings they are *in*, not every invitation sitting unread —
+  # and the moment they accept, their own `TRANSP` takes over.
+  defp transparent_until_answered(%{name: "VEVENT"} = component, address) do
+    unanswered? =
+      Enum.any?(component.properties, fn property ->
+        property.name == "ATTENDEE" and property.value == address and
+          Map.get(property.parameters, "PARTSTAT", "NEEDS-ACTION") == "NEEDS-ACTION"
+      end)
+
+    if unanswered? do
+      stated = %{name: "TRANSP", parameters: %{}, value: "TRANSPARENT"}
+
+      %{
+        component
+        | properties: Enum.reject(component.properties, &(&1.name == "TRANSP")) ++ [stated]
+      }
+    else
+      component
+    end
+  end
+
+  defp transparent_until_answered(component, _address), do: component
 
   defp answering(replies) do
     for component <- replies,
