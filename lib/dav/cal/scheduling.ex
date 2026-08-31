@@ -45,22 +45,19 @@ defmodule Dav.Cal.Scheduling do
   alias Dav.Web.Store
   alias Dav.Xml
 
-  # RFC 5546 section 2.1.4: an organiser making a change that affects
-  # what attendees agreed to must raise `SEQUENCE`, and their clients
-  # use it to tell a re-invitation from a duplicate. A change to a
-  # description or an alarm is not one of those; a change to when or
-  # where it happens is.
   # The type the suite expects a stored calendar object to report,
   # parameter included: a client that asked for `charset=utf-8` on the
   # way in is entitled to see it on the way out.
   @calendar_type "text/calendar;charset=utf-8"
 
-  @significant ~w(DTSTART DTEND DURATION DUE RRULE RDATE EXDATE LOCATION STATUS)
-
-  # When the meeting itself moves. A narrower list than `@significant`:
-  # an event being called off, or moving down the corridor, is news the
-  # attendees need without being asked to answer for it again.
-  @rescheduled ~w(DTSTART DTEND DURATION DUE RRULE RDATE)
+  # When the meeting itself moves — the changes that ask an attendee
+  # to answer again, per occurrence. The reference's
+  # `attendeeNeedsAction` list exactly: an event being called off, or
+  # moving down the corridor, is news they need without being
+  # re-asked, so `LOCATION` and `STATUS` are not here — and neither is
+  # `RRULE`, which is judged at the series level, where a truncation
+  # is excused.
+  @rescheduled ~w(DTSTART DTEND DURATION DUE RECURRENCE-ID)
 
   # Properties every save rewrites, and parameters the server owns.
   # Neither is news to an attendee, so neither counts as a reason to
@@ -196,11 +193,19 @@ defmodule Dav.Cal.Scheduling do
   # invitation any more, and a `Schedule-Tag` left behind on it would
   # go on validating a scheduling object that no longer exists. So the
   # property is removed rather than merely left unchanged.
+  # A fresh tag on every client write. `Schedule-Tag` exists so a
+  # change the *server* makes — applying an attendee's reply to the
+  # organiser's copy — moves the `ETag` without moving it; those
+  # writes go straight to the store and never pass this hook, so
+  # everything that does arrive here is a client's own edit. An
+  # earlier version kept the tag when the scheduling *shape* was
+  # unchanged, which quietly kept it across an alarm being removed —
+  # a change the reference suite says must move it.
   defp tagging(resource, body, previous, options) do
-    if scheduling_body?(body) do
-      tag = if unchanged?(body, previous), do: kept_tag(resource, options), else: nil
+    _ = {resource, previous, options}
 
-      {:set, schedule_tag(), tag || fresh_tag(body)}
+    if scheduling_body?(body) do
+      {:set, schedule_tag(), fresh_tag(body)}
     else
       {:remove, schedule_tag()}
     end
@@ -217,31 +222,6 @@ defmodule Dav.Cal.Scheduling do
     end
   end
 
-  defp unchanged?(_body, nil), do: false
-
-  defp unchanged?(body, previous), do: scheduling_shape(body) == scheduling_shape(previous)
-
-  # What the attendees agreed to: who is organising, who is invited,
-  # and when it happens. Everything else may change without anyone
-  # needing to be told — including a `CN`, which the server rewrites
-  # on the way in and which names nobody differently, and the
-  # parameters the server maintains itself. Those last matter here
-  # because this compares a client's body against the stored copy the
-  # server normalised, so counting them makes every write look like a
-  # change.
-  defp scheduling_shape(body) do
-    with {:ok, calendar} <- ICalendar.parse(body),
-         [_ | _] = components <- schedulable(calendar) do
-      for component <- components,
-          property <- component.properties,
-          property.name in ["ATTENDEE", "ORGANIZER" | @significant],
-          into: MapSet.new(),
-          do: {property.name, property.value, comparable(property.parameters)}
-    else
-      _unreadable -> nil
-    end
-  end
-
   # An absent `PARTSTAT` *is* `NEEDS-ACTION` — RFC 5545 says so — and
   # the server writes the default out where a client left it implied.
   # Comparing the two spellings as different made every write look
@@ -251,8 +231,6 @@ defmodule Dav.Cal.Scheduling do
     |> Map.drop(["CN" | @maintained])
     |> Map.put_new("PARTSTAT", "NEEDS-ACTION")
   end
-
-  defp kept_tag(resource, options), do: stored_schedule_tag(resource, options)
 
   defp fresh_tag(body), do: ~s("#{:erlang.phash2({body, System.unique_integer()})}")
 
@@ -453,7 +431,15 @@ defmodule Dav.Cal.Scheduling do
       # everyone else.
       recipients = Enum.reject(attendees_of(components), &(&1 in addresses))
 
-      send_to(recipients, "CANCEL", components, zones, options, every(components))
+      # The reference server numbers this in two steps — worth naming,
+      # because the result looks arbitrary from outside. The remove
+      # itself bumps the calendar ("CANCEL always bumps sequence",
+      # `implicit.py`), and `generateCancel` then adds one more on the
+      # way out, assuming the value it was handed is not final. An
+      # event deleted while unnumbered is withdrawn at `SEQUENCE:2`.
+      cancelled = components |> bumped(components) |> Enum.map(&outgoing/1)
+
+      send_to(recipients, "CANCEL", cancelled, zones, options, every(cancelled))
     else
       # An attendee removing their copy is declining. The reply carries
       # their own line with `PARTSTAT=DECLINED`, which is how the
@@ -569,7 +555,19 @@ defmodule Dav.Cal.Scheduling do
 
   defp organizer_of(components), do: Enum.find_value(components, &value(&1, "ORGANIZER"))
 
-  defp sequenced(components, %{previous: nil}), do: components
+  # A creation whose body already carries a version is a *restore*: the
+  # organiser deleted the event and is putting it back, and the
+  # attendees may still hold the cancellation, numbered wherever it
+  # was. The reference server (`implicit.py`) forces the sequence "to a
+  # new value that is significantly higher than the highest one
+  # present" — `maxseq + 1000` — so the restored invitation outranks
+  # any cancellation in flight, and this does the same.
+  defp sequenced(components, %{previous: nil}) do
+    case Enum.max(Enum.map(components, &sequence_number/1)) do
+      0 -> components
+      maxseq -> Enum.map(components, &restored(&1, maxseq + 1000))
+    end
+  end
 
   defp sequenced(components, %{previous: previous}) do
     case ICalendar.parse(previous) do
@@ -594,6 +592,28 @@ defmodule Dav.Cal.Scheduling do
   end
 
   defp bumped(components, held), do: Enum.map(components, &raise_sequence(&1, held))
+
+  # `generateCancel`'s own `seq + 1`, unconditional — unlike
+  # `bumped/2`, which defers to a client that already raised the
+  # number. Only the *delete* path wants it: there the reference
+  # server generates the message from the copy it has just bumped, so
+  # the two increments stack. A cancellation sent during a modify is
+  # generated from the *old* copy, and its `old + 1` equals the number
+  # the accompanying invitation already carries — applying this there
+  # over-counts, measured −9.
+  defp outgoing(%{name: "VTIMEZONE"} = zone), do: zone
+  defp outgoing(component), do: restored(component, sequence_number(component) + 1)
+
+  defp restored(%{name: "VTIMEZONE"} = zone, _sequence), do: zone
+
+  defp restored(component, sequence) do
+    stated = %{name: "SEQUENCE", parameters: %{}, value: "#{sequence}"}
+
+    properties =
+      Enum.reject(component.properties, &(&1.name == "SEQUENCE")) ++ [stated]
+
+    %{component | properties: properties}
+  end
 
   # A client that numbers its own revisions is left alone. `SEQUENCE`
   # belongs to the organiser, and their client is entitled to raise it
@@ -790,9 +810,13 @@ defmodule Dav.Cal.Scheduling do
 
       recipients =
         if delivering? do
-          components
-          |> attendees_of()
-          |> Enum.reject(&(&1 in addresses or declined?(components, &1)))
+          # Somebody who declined but *kept* the event still hears when
+          # the organiser edits it: the copy is on their calendar and
+          # should stay current — they are entitled to know the thing
+          # they turned down has been renamed or moved. Somebody who
+          # declined by deleting their copy has taken it off their
+          # calendar, and sending the edit would put it back.
+          Enum.reject(attendees_of(components), &(&1 in addresses))
         else
           []
         end
@@ -801,7 +825,15 @@ defmodule Dav.Cal.Scheduling do
       # An organiser adjusting their own alarm would otherwise put a
       # fresh invitation in every attendee's Inbox, asking them to
       # look at an event that is exactly as they left it.
-      told = notified(recipients, change, options)
+      #
+      # The no-copy decliners are dropped from *delivery* only:
+      # `recipients` still names them, so the organiser's copy stamps
+      # them `SCHEDULE-STATUS=1.2` like everyone else — the reference
+      # does the same, holding their copy hidden rather than gone.
+      told =
+        recipients
+        |> Enum.reject(&(declined?(components, &1) and not still_holds?(&1, components, options)))
+        |> notified(change, options)
 
       # And the version rises exactly when somebody is told. Raised
       # here and not before, because `SEQUENCE` is the organiser's own
@@ -1140,22 +1172,40 @@ defmodule Dav.Cal.Scheduling do
     recurrence = value(component, "RECURRENCE-ID")
 
     case Enum.find(held, &(value(&1, "RECURRENCE-ID") == recurrence)) do
-      nil -> false
-      before -> shape([component], @rescheduled) != shape([before], @rescheduled)
+      nil ->
+        false
+
+      before ->
+        shape([component], @rescheduled) != shape([before], @rescheduled) or
+          rescheduled_rule?(component, before)
+    end
+  end
+
+  # An `RRULE` change re-asks everyone — unless it only truncates or
+  # extends the series. The reference (`attendeeNeedsAction` in
+  # `icaldiff.py`) strips `COUNT` and `UNTIL` before comparing: a
+  # meeting that now ends two weeks earlier is the same meeting, and
+  # the occurrences that remain are ones the attendees already
+  # answered. Adding or removing the rule outright is a reschedule.
+  defp rescheduled_rule?(component, before) do
+    unbounded_rule(component) != unbounded_rule(before)
+  end
+
+  defp unbounded_rule(component) do
+    case value(component, "RRULE") do
+      nil ->
+        nil
+
+      rule ->
+        rule
+        |> String.split(";")
+        |> Enum.reject(&(String.starts_with?(&1, "COUNT=") or String.starts_with?(&1, "UNTIL=")))
+        |> Enum.sort()
     end
   end
 
   defp restore_participation(component, existing) do
-    known =
-      for old <- existing,
-          value(old, "RECURRENCE-ID") == value(component, "RECURRENCE-ID"),
-          property <- old.properties,
-          property.name == "ATTENDEE",
-          status = Map.get(property.parameters, "PARTSTAT"),
-          not is_nil(status),
-          into: %{},
-          do: {property.value, status}
-
+    known = answers_for(component, existing)
     organizer = value(component, "ORGANIZER")
 
     %{
@@ -1164,6 +1214,31 @@ defmodule Dav.Cal.Scheduling do
           component.properties
           |> Enum.map(&participating(&1, known, organizer))
     }
+  end
+
+  defp answers_for(component, existing) do
+    case stated(existing, value(component, "RECURRENCE-ID")) do
+      answered when map_size(answered) > 0 -> answered
+      _none_of_its_own -> if in_place?(component), do: stated(existing, nil), else: %{}
+    end
+  end
+
+  defp in_place?(component) do
+    case {value(component, "RECURRENCE-ID"), value(component, "DTSTART")} do
+      {recurrence, start} when is_binary(recurrence) and is_binary(start) -> recurrence == start
+      _no_override -> true
+    end
+  end
+
+  defp stated(existing, recurrence) do
+    for old <- existing,
+        value(old, "RECURRENCE-ID") == recurrence,
+        property <- old.properties,
+        property.name == "ATTENDEE",
+        status = Map.get(property.parameters, "PARTSTAT"),
+        not is_nil(status),
+        into: %{},
+        do: {property.value, status}
   end
 
   # `NEEDS-ACTION` is the one answer an organiser may give on someone
@@ -1366,6 +1441,18 @@ defmodule Dav.Cal.Scheduling do
   # attendee is waiting to hear it; and the parameters the server
   # maintains because they record what became of past messages rather
   # than anything this one carries.
+  defp still_holds?(address, components, options) do
+    uid = Enum.find_value(components, &value(&1, "UID"))
+
+    with %Resource{} = home <- home_of(address, options),
+         %Resource{} = calendar <- collection(home, &Cal.calendar?/1, options),
+         %Resource{} <- object_with(calendar, uid, options) do
+      true
+    else
+      _no_copy_of_their_own -> false
+    end
+  end
+
   defp shared(body, options) do
     allowed = extensions(options)
 
@@ -2165,9 +2252,21 @@ defmodule Dav.Cal.Scheduling do
   # the other attendees have since answered is the organiser's to say,
   # and keeping this copy's stale view of them would tell each
   # attendee that everyone else is still undecided.
+  # The answer restored is the one given for *this occurrence* — an
+  # attendee who accepted the series and declined one Friday said two
+  # different things, and pouring every held answer into one map let
+  # whichever came last speak for both. An occurrence with no stored
+  # counterpart falls back to the master's answer: they answered the
+  # series, and a new exception does not withdraw that.
   defp carry_over(component, recipient, existing) do
+    recurrence = value(component, "RECURRENCE-ID")
+
+    held =
+      Enum.find(existing, &(value(&1, "RECURRENCE-ID") == recurrence)) ||
+        Enum.find(existing, &is_nil(value(&1, "RECURRENCE-ID")))
+
     kept =
-      for old <- existing,
+      for old <- List.wrap(held),
           property <- old.properties,
           property.name == "ORGANIZER" or property.value == recipient,
           property.name in ~w(ATTENDEE ORGANIZER),

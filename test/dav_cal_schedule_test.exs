@@ -440,7 +440,7 @@ defmodule Dav.Cal.ScheduleTest do
   end
 
   describe "Schedule-Tag" do
-    test "does not change when a non-scheduling detail changes", context do
+    test "changes on every explicit client write", context do
       base = fn description ->
         Enum.join(
           [
@@ -464,10 +464,14 @@ defmodule Dav.Cal.ScheduleTest do
       second = DavPlug.call(conn("PUT", "/alice/calendar/t.ics", base.("Two")), context.options)
       [after_edit] = Conn.get_resp_header(second, "schedule-tag")
 
-      # A client holding only an ETag resynchronises the whole event
-      # every time anyone touches anything. This second validator
-      # exists so it does not have to.
-      assert before == after_edit
+      # The reference server's rule (`processScheduleTags` in
+      # CalendarServer's `txdav/caldav/datastore/sql.py`): an explicit
+      # client change always takes a fresh `Schedule-Tag`; only the
+      # *server's* own update to the organiser's copy — applying an
+      # attendee's reply — leaves it standing. The tag distinguishes
+      # "somebody edited this" from "somebody answered this", not
+      # "something scheduling-significant changed".
+      refute before == after_edit
     end
 
     test "changes when the timing changes", context do

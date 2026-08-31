@@ -107,6 +107,7 @@ defmodule Dav.Cal.Object do
          :ok <- attendee_allowed(calendar, collection, path, options),
          :ok <- organizer_allowed(calendar, collection, options),
          :ok <- organizer_kept(calendar, path, options),
+         :ok <- theirs_to_change(calendar, collection, path, options),
          :ok <- attendee_kept(calendar, collection, path, options),
          :ok <- agent_unchanged(calendar, collection, path, options),
          :ok <- same_organizer(calendar, path, options) do
@@ -512,6 +513,118 @@ defmodule Dav.Cal.Object do
     if organizer in addresses and orphaned?(calendar),
       do: {:error, precondition("organizer-allowed")},
       else: :ok
+  end
+
+  # A sharee with write access may edit the events in a calendar
+  # shared with them — that is what write access is. An event with an
+  # `ORGANIZER` is different: it belongs to that organiser and the
+  # people invited, and a sharee who is neither may keep their own
+  # view of it — per the reference server's `PerUserDataFilter`, that
+  # is `TRANSP`, alarms, and `X-` data — and nothing more. They may
+  # not rename somebody's meeting, nor answer on an attendee's
+  # behalf. Accepting the write and keeping only the parts they were
+  # allowed to change is worse than refusing it: the client believes
+  # the rename took, and shows a title nobody else can see.
+  defp theirs_to_change(calendar, collection, path, options) do
+    with {organizer, _parameters} when not is_nil(organizer) <- organizer_of(calendar),
+         %Resource{} = held <- collection,
+         owner when is_binary(owner) <- held_owner(held, options),
+         who when is_binary(who) and who != owner <- Map.get(options, :principal),
+         false <- involved?(calendar, who, options),
+         %{} = before <- stored(path, options),
+         false <- shared_part(before, options) == shared_part(calendar, options) do
+      {:error, {Xml.dav(), "need-privileges"}}
+    else
+      _their_own_event_or_unchanged -> :ok
+    end
+  end
+
+  # Whose calendar this really is. A calendar shared into somebody's
+  # home is a *view* of the sharer's: the collection at that path is
+  # owned by the invitee, and asking it who owns the events in it
+  # gives the wrong answer.
+  defp held_owner(collection, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :origin),
+         real when real != collection.path <- store.origin(collection.path, context),
+         {:ok, %Resource{owner: owner}} <- store.resolve(real, context) do
+      owner
+    else
+      _not_a_link -> collection.owner
+    end
+  end
+
+  # Whether the writer is the organiser or one of the attendees, in
+  # which case the scheduling rules govern the write rather than this
+  # one.
+  defp involved?(calendar, who, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :addresses),
+         {:ok, addresses} <- store.addresses(who, context) do
+      {organizer, _parameters} = organizer_of(calendar)
+
+      organizer in addresses or Enum.any?(attendee_values(calendar), &(&1 in addresses))
+    else
+      _no_lookup -> false
+    end
+  end
+
+  # The object with the per-user parts taken out — what a sharee is
+  # not free to change. The reference's `PerUserDataFilter`: `TRANSP`,
+  # every `X-` property, and `VALARM` and `X-` subcomponents belong to
+  # one user's view. `DTSTAMP` moves on every save and says nothing.
+  # Compared in canonical form, because the two sides never share a
+  # spelling: the client writes `mailto:` where the store holds
+  # `urn:x-uid:`, and the stored copy carries the parameters the
+  # server itself added — `EMAIL`, `SCHEDULE-STATUS`, the written-out
+  # `PARTSTAT` default. None of those differences are the sharee's
+  # doing.
+  defp shared_part(calendar, options) do
+    for component <- calendar.components,
+        component.name != "VALARM",
+        not String.starts_with?(component.name, "X-"),
+        property <- shared_component(component, options),
+        into: MapSet.new(),
+        do: property
+  end
+
+  defp shared_component(component, options) do
+    for property <- component.properties, not per_user_property?(property) do
+      {component.name, value_of(component, property.name), addressed(property, options),
+       comparable_parameters(property)}
+    end
+  end
+
+  defp value_of(component, "RECURRENCE-ID"), do: recurrence_of(component)
+  defp value_of(_component, _name), do: nil
+
+  defp recurrence_of(component) do
+    Enum.find_value(component.properties, &(&1.name == "RECURRENCE-ID" and &1.value))
+  end
+
+  defp addressed(%{name: name, value: value}, %{store: store, context: context})
+       when name in ~w(ATTENDEE ORGANIZER) do
+    if Store.supports?(store, :canonical_address) do
+      case store.canonical_address(value, context) do
+        {:ok, canonical} -> {name, canonical}
+        _unknown -> {name, value}
+      end
+    else
+      {name, value}
+    end
+  end
+
+  defp addressed(%{name: name, value: value}, _options), do: {name, value}
+
+  defp comparable_parameters(%{name: name, parameters: parameters})
+       when name in ~w(ATTENDEE ORGANIZER) do
+    parameters
+    |> Map.drop(~w(CN EMAIL SCHEDULE-STATUS SCHEDULE-AGENT RSVP))
+    |> Map.put_new("PARTSTAT", "NEEDS-ACTION")
+  end
+
+  defp comparable_parameters(%{parameters: parameters}), do: parameters
+
+  defp per_user_property?(%{name: name}) do
+    name in ~w(TRANSP DTSTAMP) or String.starts_with?(name, "X-")
   end
 
   # RFC 6638 section 3.2.1: the `ORGANIZER` of a scheduling object is
