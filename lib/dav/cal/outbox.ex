@@ -77,6 +77,7 @@ defmodule Dav.Cal.Outbox do
          :ok <- media_type(conn),
          :ok <- readable(body),
          {:ok, calendar, component} <- scheduling_message(body),
+         :ok <- bounded_in_utc(component),
          {:ok, recipients} <- recipients(conn, component),
          :ok <- attendee_allowed(kind, calendar, component, resource, options),
          :ok <- organizer_allowed(kind, component, resource, options) do
@@ -102,6 +103,23 @@ defmodule Dav.Cal.Outbox do
     |> put_resp_content_type("application/xml", "utf-8")
     |> send_resp(403, Xml.error(condition))
   end
+
+  # RFC 4791 section 9.9, applied to the iTIP request too: a
+  # free-busy window is bounded by dates with UTC times. A floating or
+  # all-day bound names no instant, and answering it would mean
+  # picking a zone for the asker.
+  defp bounded_in_utc(%{name: "VFREEBUSY"} = component) do
+    stated =
+      for property <- component.properties,
+          property.name in ~w(DTSTART DTEND),
+          do: property.value
+
+    if Enum.all?(stated, &Regex.match?(~r/^\d{8}T\d{6}Z$/, &1)),
+      do: :ok,
+      else: {:error, caldav("valid-calendar-data")}
+  end
+
+  defp bounded_in_utc(_component), do: :ok
 
   defp media_type(conn) do
     type = conn |> get_req_header("content-type") |> List.first() || "text/calendar"
