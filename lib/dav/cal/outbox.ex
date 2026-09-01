@@ -604,14 +604,38 @@ defmodule Dav.Cal.Outbox do
   # answer a scheduler must not give.
   defp calendars_of(attendee, options) do
     case principal(attendee, options) do
-      nil ->
-        []
+      nil -> []
+      home -> selected_calendars(home, options)
+    end
+  end
 
-      home ->
+  # RFC 4791 section 6.2.1: an Inbox carrying
+  # `CALDAV:calendar-free-busy-set` names exactly the calendars the
+  # owner's free-busy consults — wherever they sit in the home. With
+  # nothing stated, every opaque calendar directly in the home is.
+  defp selected_calendars(home, %{store: store, context: context} = options) do
+    case free_busy_selection(home, options) do
+      nil ->
         home
         |> children(options)
         |> Enum.filter(&Cal.calendar?/1)
         |> Enum.reject(&FreeBusy.transparent?(&1, options))
+
+      hrefs ->
+        for href <- hrefs,
+            {:ok, %Resource{} = calendar} <- [store.resolve(Store.segments(href), context)],
+            do: calendar
+    end
+  end
+
+  defp free_busy_selection(home, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :properties),
+         %Resource{} = inbox <- Enum.find(children(home, options), &Schedule.inbox?/1),
+         %{} = properties <- store.properties(inbox, context),
+         {:hrefs, hrefs} <- Map.get(properties, {Xml.caldav(), "calendar-free-busy-set"}) do
+      hrefs
+    else
+      _unstated -> nil
     end
   end
 
@@ -639,7 +663,7 @@ defmodule Dav.Cal.Outbox do
 
         calendar
         |> children(options)
-        |> Enum.reject(& &1.collection?)
+        |> Enum.reject(&(&1.collection? or Delegation.busy_excluded?(&1, options)))
         |> Enum.map(&periods(&1, range, borrowed, address, organiser, options))
       end)
       |> Enum.reduce({[], []}, fn {periods, events}, {all_periods, all_events} ->

@@ -25,6 +25,7 @@ defmodule Dav.Web.Grant do
   import Plug.Conn
 
   alias Dav.Cal.Delegation
+  alias Dav.Web.Acl
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -55,7 +56,7 @@ defmodule Dav.Web.Grant do
          {:ok, resource} <- resolve(path, options),
          :ok <- settable_target(resource, options),
          :ok <- settable_by_caller(resource, options),
-         {:ok, aces} <- parsed(body),
+         {:ok, aces} <- parsed(body, resource, options),
          :ok <- store.patch(resource, [{:set, {Xml.dav(), "acl"}, stored(aces)}], context) do
       send_resp(conn, 200, "")
     else
@@ -139,41 +140,144 @@ defmodule Dav.Web.Grant do
 
   defp settable_by_caller(%Resource{}, _options), do: :ok
 
-  defp parsed(body) do
+  defp parsed(body, resource, options) do
     with {:ok, document} <- Xml.parse(body),
          {_namespace, "acl"} <- document.name do
-      aces(document)
+      aces(document, resource, options)
     else
       _not_an_acl -> {:error, :malformed}
     end
   end
 
-  defp aces(document) do
+  defp aces(document, resource, options) do
     document.children
     |> Enum.filter(&named?(&1, "ace"))
     |> Enum.reduce_while({:ok, []}, fn ace, {:ok, held} ->
-      case one(ace) do
+      case one(ace, resource, options) do
         {:ok, entry} -> {:cont, {:ok, held ++ [entry]}}
         refusal -> {:halt, refusal}
       end
     end)
+    |> ordered()
   end
 
-  @supported_privileges ~w(read write read-acl read-current-user-privilege-set read-free-busy)
+  # RFC 3744 section 8.1.3, as the reference enforces it: the grants
+  # come first, and a deny sitting ahead of a grant is refused with
+  # the ordering precondition rather than reordered silently.
+  defp ordered({:ok, aces}) do
+    kinds = Enum.map(aces, &elem(&1, 0))
 
-  defp one(ace) do
+    case Enum.split_while(kinds, &(&1 == :grant)) do
+      {_grants, denies} ->
+        if :grant in denies,
+          do: {:error, {Xml.dav(), "deny-before-grant"}},
+          else: {:ok, aces}
+    end
+  end
+
+  defp ordered(refusal), do: refusal
+
+  # `write-acl` may be denied — that is how a list says "and nobody
+  # else changes this" — but never granted through the method: the
+  # owner and the administrators hold it, and an ACL cannot mint more
+  # of them.
+  @granted_privileges ~w(read write read-acl read-current-user-privilege-set read-free-busy
+                         bind unbind write-properties write-content)
+  @denied_privileges ~w(write-acl all) ++ @granted_privileges
+
+  defp one(ace, resource, options) do
     principal = ace.children |> Enum.find(&named?(&1, "principal"))
     side = Enum.find(ace.children, &(named?(&1, "grant") or named?(&1, "deny")))
 
-    with %{name: {_namespace, kind}} <- side,
+    with :ok <- unadorned(ace),
+         %{name: {_namespace, kind}} <- side,
+         kind = if(kind == "deny", do: :deny, else: :grant),
          {:ok, who} <- principal_of(principal),
-         {:ok, privileges} <- privileges_of(side) do
-      {:ok, {String.to_existing_atom(kind), who, privileges}}
+         :ok <- placed(who, options),
+         :ok <- changeable(kind, who, resource, options),
+         {:ok, privileges} <- privileges_of(side, kind) do
+      {:ok, {kind, who, privileges}}
     else
       nil -> {:error, {Xml.dav(), "recognized-principal"}}
       refusal -> refusal
     end
   end
+
+  # RFC 3744 section 8.1.1: `DAV:protected` and `DAV:inherited` are
+  # the server's own marks on aces it computed, and a client restating
+  # either is asking to set what cannot be set.
+  defp unadorned(ace) do
+    if Enum.any?(ace.children, &(named?(&1, "protected") or named?(&1, "inherited"))),
+      do: {:error, {Xml.dav(), "no-ace-conflict"}},
+      else: :ok
+  end
+
+  # An ace names a principal this server can place: an href that
+  # resolves to a principal, spelled canonically — the same rule the
+  # proxy grants apply — or the abstract `DAV:authenticated`.
+  defp placed(:authenticated, _options), do: :ok
+
+  # An administrator is a principal by declaration — the deployment
+  # named them in `:administrators` — whether or not the store holds a
+  # resource at their URL.
+  defp placed({:href, href}, %{store: store, context: context} = options) do
+    if href in Map.get(options, :administrators, []) do
+      :ok
+    else
+      resolved_principal(href, store, context)
+    end
+  end
+
+  defp resolved_principal(href, store, context) do
+    case store.resolve(Store.segments(href), context) do
+      {:ok, %Resource{} = found} ->
+        if Acl.principal?(found) and canonical_spelling?(found, href),
+          do: :ok,
+          else: {:error, {Xml.dav(), "recognized-principal"}}
+
+      _unknown ->
+        {:error, {Xml.dav(), "recognized-principal"}}
+    end
+  end
+
+  defp canonical_spelling?(%Resource{owner: owner}, href) when is_binary(owner),
+    do: owner == href
+
+  defp canonical_spelling?(%Resource{}, _href), do: true
+
+  # A deny against an administrator tries to change a protected ace;
+  # one against the resource's owner tries to change an inherited one.
+  # Both are the server's aces, refused with the conflict each names.
+  defp changeable(:grant, _who, _resource, _options), do: :ok
+  defp changeable(:deny, :authenticated, _resource, _options), do: :ok
+
+  defp changeable(:deny, {:href, href}, resource, options) do
+    cond do
+      href in Map.get(options, :administrators, []) ->
+        {:error, {Xml.dav(), "no-protected-ace-conflict"}}
+
+      href == owner_above(resource, options) ->
+        {:error, {Xml.dav(), "no-inherited-ace-conflict"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  # An object states no owner of its own; the calendar or home above
+  # it does, and that is whose rights an ace here would be fighting.
+  defp owner_above(%Resource{owner: owner}, _options) when is_binary(owner), do: owner
+
+  defp owner_above(%Resource{path: [_head | _tail] = path}, options) do
+    %{store: store, context: context} = options
+
+    case store.resolve(Enum.drop(path, -1), context) do
+      {:ok, parent} -> owner_above(parent, options)
+      _missing -> nil
+    end
+  end
+
+  defp owner_above(_resource, _options), do: nil
 
   defp principal_of(nil), do: {:error, {Xml.dav(), "recognized-principal"}}
 
@@ -187,14 +291,16 @@ defmodule Dav.Web.Grant do
     end
   end
 
-  defp privileges_of(side) do
+  defp privileges_of(side, kind) do
     named =
       for privilege <- side.children,
           named?(privilege, "privilege"),
           %{name: {_namespace, local}} <- privilege.children,
           do: local
 
-    if Enum.all?(named, &(&1 in @supported_privileges)),
+    allowed = if kind == :deny, do: @denied_privileges, else: @granted_privileges
+
+    if Enum.all?(named, &(&1 in allowed)),
       do: {:ok, named},
       else: {:error, {Xml.dav(), "not-supported-privilege"}}
   end
@@ -216,7 +322,9 @@ defmodule Dav.Web.Grant do
       for line <- String.split(stored, "\n", trim: true),
           [kind, who, privileges] <- [String.split(line, " ", parts: 3)],
           kind in ~w(grant deny),
-          do: {String.to_existing_atom(kind), addressed(who), String.split(privileges, ",")}
+          do:
+            {if(kind == "deny", do: :deny, else: :grant), addressed(who),
+             String.split(privileges, ",")}
 
     {:ok, entries}
   end

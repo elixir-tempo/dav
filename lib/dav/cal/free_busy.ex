@@ -64,6 +64,7 @@ defmodule Dav.Cal.FreeBusy do
 
   @behaviour Dav.Web.Report
 
+  alias Dav.Cal.Delegation
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
   alias Dav.Cal.TimeRange
@@ -100,6 +101,7 @@ defmodule Dav.Cal.FreeBusy do
       periods =
         collection
         |> objects(depth, options)
+        |> Enum.reject(fn {object, _floating} -> Delegation.busy_excluded?(object, options) end)
         |> Enum.flat_map(fn {object, floating} -> busy(object, range, floating, options) end)
         |> coalesce()
 

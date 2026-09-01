@@ -68,6 +68,7 @@ defmodule Dav.CalDAVTester.Scenario do
               %{
                 content_type: String.t(),
                 filepath: String.t() | nil,
+                generate?: boolean(),
                 substitutions: [{String.t(), String.t()}]
               }
               | nil,
@@ -295,6 +296,9 @@ defmodule Dav.CalDAVTester.Scenario do
     %{
       content_type: Document.text(element, "content-type"),
       filepath: Document.text(element, "filepath"),
+      # `generate="yes"` marks a fixture whose identity is minted per
+      # use — upstream writes a fresh UID into it on every send.
+      generate?: Map.get(element.attributes, "generate") == "yes",
       # A request may rewrite names inside the file it sends —
       # `<substitute>` maps a placeholder to a value, which may itself
       # be a substitution.

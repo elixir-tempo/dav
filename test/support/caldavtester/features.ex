@@ -137,7 +137,10 @@ defmodule Dav.CalDAVTester.Features do
                 # RFC 3744 section 8.1 in `Dav.Web.Grant`: grants and
                 # denies of `DAV:read`/`DAV:write`, enforced through
                 # `Dav.Cal.Delegation`.
-                "ACL Method"
+                "ACL Method",
+                # Access lists on individual calendar objects,
+                # consulted object by object inside reports.
+                "per-object-ACLs"
               ]
 
   @doc """

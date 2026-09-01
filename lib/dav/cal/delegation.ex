@@ -298,6 +298,31 @@ defmodule Dav.Cal.Delegation do
     end
   end
 
+  @doc """
+  Disclose a body only to a caller who may read the resource.
+
+  ### Arguments
+
+  * `resource` is the object being read.
+
+  * `body` is the stored body, passed through untouched.
+
+  * `options` carries `:store`, `:context`, `:principal` and
+    `:administrators`.
+
+  ### Returns
+
+  * `{:ok, body}`, or `{:error, :forbidden}` — the same answer
+    `readable/2` gives, applied where reports and rollups read
+    members one by one.
+
+  """
+  @impl Dav.Web.Hook
+  @spec disclosed(Resource.t(), binary(), map()) :: {:ok, binary()} | {:error, :forbidden}
+  def disclosed(%Resource{} = resource, body, options) do
+    with :ok <- readable(resource, options), do: {:ok, body}
+  end
+
   defp allowed_reader(owner, resource, options) do
     caller = Map.get(options, :principal)
     owner = identified(owner, options)
@@ -325,36 +350,77 @@ defmodule Dav.Cal.Delegation do
   defp listed_path_with?(path, caller, privilege, %{store: store, context: context} = options) do
     mine = identified(caller, options)
 
-    Enum.reduce_while(lineage(path), false, fn ancestors, _nothing_yet ->
-      case store.resolve(ancestors, context) do
-        {:ok, %Resource{} = held} -> consulted(held, ancestors == path, mine, privilege, options)
-        _absent -> {:cont, false}
-      end
-    end)
+    decisions =
+      for ancestors <- lineage(path),
+          {:ok, %Resource{} = held} <- [store.resolve(ancestors, context)],
+          ancestors == path or Cal.calendar?(held),
+          do: stated(held, mine, privilege, options)
+
+    :granted in decisions and :denied not in decisions
   end
 
-  # A resource's own list always speaks for it; an ancestor's only
-  # when the ancestor is a calendar — the reference inherits a
-  # calendar's aces onto its objects and leaves a regular collection's
-  # members to their own lists.
-  defp consulted(held, own?, mine, privilege, options) do
-    if own? or Cal.calendar?(held),
-      do: stated(held, mine, privilege, options),
-      else: {:cont, false}
-  end
-
-  # What the nearest access list with an opinion says — RFC 3744's
-  # rule that the first matching ace decides, applied up the tree: a
-  # deny on the calendar is not outvoted by a grant on the home.
+  # The reference's traversal rule, over the resource's own list and
+  # every calendar above it (a regular collection's list stops at its
+  # own door): within one list the first matching ace decides, and
+  # across the levels a denial anywhere refuses — an object-level
+  # grant does not tunnel into a calendar its reader cannot enter.
   defp stated(held, mine, privilege, options) do
-    name = Atom.to_string(privilege)
+    names = covering(privilege)
 
     Grant.entries(held, options)
-    |> Enum.find_value({:cont, false}, fn {kind, who, privileges} ->
-      if name in privileges and addressed_to?(who, mine, options),
-        do: {:halt, kind == :grant},
-        else: nil
-    end)
+    |> Enum.find_value(:unstated, &verdict(&1, names, mine, options))
+  end
+
+  defp verdict({kind, who, privileges}, names, mine, options) do
+    if Enum.any?(names, &(&1 in privileges)) and addressed_to?(who, mine, options),
+      do: if(kind == :grant, do: :granted, else: :denied),
+      else: nil
+  end
+
+  # RFC 3744 section 3: a privilege is held through any aggregate that
+  # contains it — `CALDAV:read-free-busy` sits inside `DAV:read`, and
+  # everything sits inside `DAV:all`.
+  defp covering(:read), do: ~w(read all)
+  defp covering(:write), do: ~w(write all)
+  defp covering(:read_free_busy), do: ~w(read-free-busy read all)
+
+  @doc """
+  Whether an access list along the path refuses this object's busy
+  time to the caller.
+
+  ### Arguments
+
+  * `resource` is the calendar object contributing busy time.
+
+  * `options` carries `:store`, `:context` and `:principal`.
+
+  ### Returns
+
+  * `true` only when an ace along the path denies the caller
+    `CALDAV:read-free-busy` (directly or through an aggregate).
+    Everything else — no lists, no matching ace, an anonymous caller
+    — contributes as free-busy always has.
+
+  """
+  @spec busy_excluded?(Resource.t(), map()) :: boolean()
+  def busy_excluded?(%Resource{path: path}, options) do
+    %{store: store, context: context} = options
+
+    case Map.get(options, :principal) do
+      nil ->
+        false
+
+      caller ->
+        mine = identified(caller, options)
+
+        decisions =
+          for ancestors <- lineage(path),
+              {:ok, %Resource{} = held} <- [store.resolve(ancestors, context)],
+              ancestors == path or Cal.calendar?(held),
+              do: stated(held, mine, :read_free_busy, options)
+
+        :denied in decisions
+    end
   end
 
   defp addressed_to?(:authenticated, _mine, _options), do: true

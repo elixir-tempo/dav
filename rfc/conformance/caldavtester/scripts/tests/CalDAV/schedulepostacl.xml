@@ -249,8 +249,8 @@
 					<callback>dataString</callback>
 					<arg>
 						<name>contains</name>
-						<value>FREEBUSY;FBTYPE=BUSY:20060101T060000Z/PT1H,20060101T100000Z/PT1H,20060101T
- 180000Z/PT1H,20060101T220000Z/PT1H</value>
+						<value>FREEBUSY;FBTYPE=BUSY:$now.year.1:0101T060000Z/PT1H,$now.year.1:0101T100000Z/PT1H,$now.year.1:0101T
+ 180000Z/PT1H,$now.year.1:0101T220000Z/PT1H</value>
 					</arg>
 				</verify>
 			</request>

@@ -847,12 +847,23 @@ defmodule Dav.CalDAVTester.Runner do
     case File.read(Path.join(@root, filepath)) do
       {:ok, contents} ->
         contents
+        |> generated(Map.get(data, :generate?, false))
         |> substituted(Map.get(data, :substitutions, []), substitutions)
         |> ServerInfo.expand(substitutions)
 
       _missing ->
         ""
     end
+  end
+
+  # Upstream's `generate="yes"`: the fixture's identity is minted per
+  # send, so two PUTs of "the same" file never collide on `UID`.
+  defp generated(contents, false), do: contents
+
+  defp generated(contents, true) do
+    fresh = "generated-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+
+    Regex.replace(~r/^UID:.*$/m, contents, "UID:" <> fresh)
   end
 
   # The request's own `<substitute>` pairs run first: they name things

@@ -2,7 +2,7 @@
 # `Dav.CalDAVTester.Runner`. Regenerate with `mix run priv/baseline.exs`
 # after a change that legitimately improves or reduces coverage.
 %{
-  "acl.xml" => 42,
+  "acl.xml" => 52,
   "aclreports.xml" => 2,
   "add-member.xml" => 4,
   "alarm-dismissal.xml" => 9,
@@ -22,7 +22,7 @@
   "default-alarms.xml" => 0,
   "delete.xml" => 3,
   "depthreports.xml" => 24,
-  "depthreportsacl.xml" => 0,
+  "depthreportsacl.xml" => 3,
   "directory.xml" => 0,
   "dropbox.xml" => 0,
   "duplicate_uids.xml" => 0,
@@ -124,7 +124,7 @@
   "scheduleimplicit-compatability.xml" => 6,
   "schedulenomore.xml" => 0,
   "schedulepost.xml" => 27,
-  "schedulepostacl.xml" => 0,
+  "schedulepostacl.xml" => 1,
   "schedulepostmaskuid.xml" => 14,
   "scheduleprops.xml" => 12,
   "server-info.xml" => 0,
