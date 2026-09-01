@@ -436,7 +436,14 @@ defmodule Dav.Cal.Outbox do
   defp respond(conn, request, options) do
     range = {property(request, "DTSTART"), property(request, "DTEND")}
     organiser = property(request, "ORGANIZER")
-    options = Map.put(options, :mask_uid, property(request, "X-CALENDARSERVER-MASK-UID"))
+
+    options =
+      options
+      |> Map.put(:mask_uid, property(request, "X-CALENDARSERVER-MASK-UID"))
+      |> Map.put(
+        :extended_freebusy,
+        property(request, "X-CALENDARSERVER-EXTENDED-FREEBUSY") == "T"
+      )
 
     # The reference caps a free-busy request at thirty calendar users
     # including the organiser (`LimitFreeBusyAttendees`): expanding a
@@ -483,7 +490,56 @@ defmodule Dav.Cal.Outbox do
         end
 
       calendars ->
-        {attendee, @success, busy(calendars, {attendee, parameters}, organiser, range, options)}
+        {attendee, @success,
+         busy(calendars, {attendee, parameters}, organiser, range, detailed(attendee, options))}
+    end
+  end
+
+  # Apple's `X-CALENDARSERVER-EXTENDED-FREEBUSY`: the asker gets the
+  # events themselves, not only the times — for the calendars they
+  # could read anyway: their own, and those they hold a proxy grant
+  # on. Anyone else's answer stays times alone.
+  defp detailed(attendee, %{store: store, context: context} = options) do
+    privileged? =
+      own_home?(attendee, store, context, options) or
+        readable_home?(attendee, store, context, options)
+
+    include? =
+      Map.get(options, :extended_freebusy, false) and
+        (privileged? or public_schedule?(attendee, store, context))
+
+    options
+    |> Map.put(:detailed_freebusy, include?)
+    |> Map.put(:freebusy_privileged, privileged?)
+    |> Map.put(:freebusy_self, own_home?(attendee, store, context, options))
+  end
+
+  # A room or a projector has no privacy to keep: where it is booked
+  # is exactly what anybody asking wants to know.
+  defp public_schedule?(attendee, store, context) do
+    Store.supports?(store, :unattended?) and store.unattended?(attendee, context)
+  end
+
+  defp readable_home?(attendee, store, context, options) do
+    with true <- function_exported?(store, :principal, 2),
+         {:ok, %Resource{owner: owner}} when is_binary(owner) <-
+           store.principal(attendee, context) do
+      Delegation.authorized_reader?(Map.get(options, :principal), owner, options)
+    else
+      _unplaced -> false
+    end
+  end
+
+  defp own_home?(attendee, store, context, options) do
+    with caller when is_binary(caller) <- Map.get(options, :principal),
+         true <- function_exported?(store, :principal, 2),
+         {:ok, %Resource{owner: owner}} when is_binary(owner) <-
+           store.principal(attendee, context),
+         {:ok, %Resource{owner: caller_owner}} when is_binary(caller_owner) <-
+           store.resolve(Store.segments(caller), context) do
+      caller_owner == owner
+    else
+      _unplaced -> false
     end
   end
 
@@ -555,20 +611,25 @@ defmodule Dav.Cal.Outbox do
   end
 
   defp busy(calendars, {address, _parameters} = attendee, organiser, range, options) do
-    periods =
-      Enum.flat_map(calendars, fn calendar ->
+    {periods, events} =
+      calendars
+      |> Enum.flat_map(fn calendar ->
         borrowed = borrowed?(calendar, options)
 
         calendar
         |> children(options)
         |> Enum.reject(& &1.collection?)
-        |> Enum.flat_map(&periods(&1, range, borrowed, address, organiser, options))
+        |> Enum.map(&periods(&1, range, borrowed, address, organiser, options))
+      end)
+      |> Enum.reduce({[], []}, fn {periods, events}, {all_periods, all_events} ->
+        {all_periods ++ periods, all_events ++ events}
       end)
 
     FreeBusy.vfreebusy(periods, range,
       attendee: attendee,
       organizer: organiser,
-      method: "REPLY"
+      method: "REPLY",
+      events: events
     )
   end
 
@@ -588,10 +649,59 @@ defmodule Dav.Cal.Outbox do
         |> kept(borrowed?)
         |> unmasked(address, organiser, options)
 
-      FreeBusy.periods_of(%{calendar | components: components}, range)
+      trimmed = %{calendar | components: components}
+
+      {FreeBusy.periods_of(trimmed, range), shown(trimmed, range, options)}
     else
-      _unreadable -> []
+      _unreadable -> {[], []}
     end
+  end
+
+  # The events an extended answer shows: the ones whose time actually
+  # lands in the window, alarms left out — they are the owner's, not
+  # the asker's business.
+  defp shown(calendar, range, options) do
+    if Map.get(options, :detailed_freebusy, false) do
+      for component <- calendar.components,
+          component.name == "VEVENT",
+          not hidden?(calendar, component, options),
+          FreeBusy.periods_of(%{calendar | components: [component]}, range) != [],
+          do: presentable(component, options)
+    else
+      []
+    end
+  end
+
+  # A private event's *time* is busy like any other; the event itself
+  # shows only to its own calendar's owner. The access mark may sit on
+  # the calendar or the component — clients write both.
+  defp hidden?(calendar, component, options) do
+    stated =
+      property(component, "X-CALENDARSERVER-ACCESS") ||
+        property(calendar, "X-CALENDARSERVER-ACCESS")
+
+    stated in ~w(PRIVATE CONFIDENTIAL RESTRICTED) and
+      not Map.get(options, :freebusy_self, false)
+  end
+
+  # A room's schedule is public, but the bookings on it are only
+  # public in outline: when it is, who booked it, and nothing more.
+  # An asker holding a grant on the scanned calendar — its owner, an
+  # administrator, a proxy — sees the events whole.
+  @outline ~w(UID DTSTART DTEND DURATION DTSTAMP RECURRENCE-ID RRULE RDATE EXDATE
+              TRANSP ORGANIZER ATTENDEE)
+
+  defp presentable(component, options) do
+    properties =
+      if Map.get(options, :freebusy_privileged, false),
+        do: component.properties,
+        else: Enum.filter(component.properties, &(&1.name in @outline))
+
+    %{
+      component
+      | properties: properties,
+        components: Enum.reject(component.components, &(&1.name == "VALARM"))
+    }
   end
 
   # Apple's `X-CALENDARSERVER-MASK-UID`: the event being rescheduled

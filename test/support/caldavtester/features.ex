@@ -127,7 +127,11 @@ defmodule Dav.CalDAVTester.Features do
                 # Apple's calendar-user-proxy draft: per-principal
                 # read/write proxy groups, granted by PROPPATCHing
                 # `DAV:group-member-set`.
-                "proxy"
+                "proxy",
+                # Apple's extended free-busy, in `Dav.Cal.Outbox`: an
+                # asker holding a proxy grant gets the events, not
+                # only the times.
+                "extended-freebusy"
               ]
 
   @doc """

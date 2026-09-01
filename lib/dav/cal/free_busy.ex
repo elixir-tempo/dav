@@ -452,6 +452,9 @@ defmodule Dav.Cal.FreeBusy do
 
   ### Options
 
+  * `:events` is a list of components to carry inside the calendar
+    beside the `VFREEBUSY` — an extended answer's events.
+
   * `:attendee` names the calendar user the report is about, for a
     scheduling response.
 
@@ -497,9 +500,13 @@ defmodule Dav.Cal.FreeBusy do
         Enum.map(periods, &freebusy/1) ++
         ["END:VFREEBUSY", "END:VCALENDAR"]
 
-    lines
-    |> Enum.map(&[ICalendar.fold(&1), "\r\n"])
-    |> IO.iodata_to_binary()
+    folded = Enum.map(lines, &[ICalendar.fold(&1), "\r\n"])
+
+    IO.iodata_to_binary([
+      Enum.drop(folded, -1),
+      Enum.map(Keyword.get(options, :events, []), &ICalendar.write/1),
+      List.last(folded)
+    ])
   end
 
   defp bound(_name, nil), do: []

@@ -29,7 +29,7 @@
   "encodedURIs.xml" => 23,
   "errors.xml" => 64,
   "expandproperty.xml" => 14,
-  "extended-freebusy.xml" => 0,
+  "extended-freebusy.xml" => 16,
   "floating.xml" => 14,
   "freebusy-url.xml" => 0,
   "freebusy.xml" => 4,

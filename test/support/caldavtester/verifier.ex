@@ -441,21 +441,35 @@ defmodule Dav.CalDAVTester.Verifier do
   # — an answer that reports the right times for the wrong person is
   # not a lesser failure than reporting the wrong times.
   defp post_free_busy(document, args) do
-    calendars =
+    entries =
       for response <- elements(document, "response"),
           data <- elements(response, "calendar-data"),
           {:ok, calendar} <- [ICalendar.parse(data.text)],
           component <- calendar.components,
           component.name == "VFREEBUSY",
-          do: component
+          do: {component, Enum.count(calendar.components, &(&1.name == "VEVENT"))}
 
-    each(Map.get(args, "attendee", []), &attendee_busy(&1, calendars, args))
+    each(Map.get(args, "attendee", []), &attendee_busy(&1, entries, args))
   end
 
-  defp attendee_busy(attendee, calendars, args) do
-    case Enum.find(calendars, &attends?(&1, attendee)) do
-      nil -> {:failed, "no VFREEBUSY for #{attendee}"}
-      component -> free_busy_matches(periods_by_type(component), args)
+  defp attendee_busy(attendee, entries, args) do
+    case Enum.find(entries, fn {component, _events} -> attends?(component, attendee) end) do
+      nil ->
+        {:failed, "no VFREEBUSY for #{attendee}"}
+
+      {component, events} ->
+        with :passed <- free_busy_matches(periods_by_type(component), args) do
+          counted_events(events, args)
+        end
+    end
+  end
+
+  # An extended answer carries the events themselves beside the
+  # periods — as many as the asker is entitled to see.
+  defp counted_events(events, args) do
+    case Map.get(args, "events") do
+      [expected] -> compare(Integer.to_string(events), expected, "VEVENTs")
+      _uncounted -> :passed
     end
   end
 

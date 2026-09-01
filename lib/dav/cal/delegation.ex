@@ -346,6 +346,34 @@ defmodule Dav.Cal.Delegation do
   end
 
   @doc """
+  Whether the caller may read what the owner holds.
+
+  ### Arguments
+
+  * `caller` is the calling principal URL, or `nil` for nobody.
+
+  * `owner` is the principal URL whose things are read, in any
+    spelling.
+
+  * `options` carries `:store`, `:context` and `:administrators`.
+
+  ### Returns
+
+  * `true` for the owner themselves, an administrator, or a holder of
+    either of the owner's proxy grants.
+
+  """
+  @spec authorized_reader?(String.t() | nil, String.t(), map()) :: boolean()
+  def authorized_reader?(caller, owner, options) when is_binary(caller) and is_binary(owner) do
+    owner = identified(owner, options)
+
+    identified(caller, options) == owner or administrator?(caller, options) or
+      proxy_of?(caller, owner, :read, options)
+  end
+
+  def authorized_reader?(_caller, _owner, _options), do: false
+
+  @doc """
   Whether the caller may write on the owner's behalf.
 
   ### Arguments

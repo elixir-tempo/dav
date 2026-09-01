@@ -48,13 +48,13 @@ Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests 
 
 CalDAVTester gates 850 of its own blocks on `<require-feature>`, read against a `serverinfo.xml` describing *the server under test*. Apple's file declares 84 features because Apple's server implements 84; running this server against that list asks it thousands of questions it never claimed to answer, and a server is not non-conformant for lacking a feature it does not advertise.
 
-`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, `auto-accept`, `auto-accept-modes`, `query-extended`, the RFC 7240 `prefer` family, RFC 5995 `add-member`, `managed-attachments`, `ctag`, `well-known`, `brief`, `resource-id`, `maskuid`, and `proxy`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
+`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, `auto-accept`, `auto-accept-modes`, `query-extended`, the RFC 7240 `prefer` family, RFC 5995 `add-member`, `managed-attachments`, `ctag`, `well-known`, `brief`, `resource-id`, `maskuid`, `proxy`, and `extended-freebusy`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
 
-Against that declaration the suite puts **3,883 tests**, of which:
+Against that declaration the suite puts **3,899 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 3,862 | 99.5% |
+| passed | 3,878 | 99.5% |
 | failed | 19 | 0.5% |
 | skipped | 2 | 0.1% |
 

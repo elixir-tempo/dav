@@ -105,6 +105,8 @@ Apple's calendar-user-proxy extension, in `Dav.Cal.Delegation` (`proxy` declared
 
 * **A proxy acts as the delegator.** Writes through a view attribute per-user data — alarms, transparency — to the view's home owner, not the caller, and `DAV:principal-match` `self` matches the caller's principal plus every group whose `group-member-set` names them (RFC 3744 section 9.3), one level into the principal tree so proxy groups are found.
 
+* **Extended free-busy** (`extended-freebusy` declared): `X-CALENDARSERVER-EXTENDED-FREEBUSY:T` on a free-busy `POST` embeds the events beside the periods, per attendee. A privileged asker — the calendar's owner, an administrator, a proxy — sees them whole; a room's schedule is public but only in outline (timing, organizer, attendees — no summary); anyone else gets times alone. An `X-CALENDARSERVER-ACCESS`-restricted event contributes its busy time and shows to nobody but its own calendar's owner.
+
 * **Per-proxy properties**: `calendar-color`/`calendar-order` written by a non-owner land in a per-principal overlay the owner never sees; `DAV:acl` answers only where `read-acl` would be granted — the owner and the administrators.
 
 * Two harness repairs mattered: the admin account (and room principals) resolved to the *first user* through the numbered-account fallback, invisible until access control told callers apart; and bare ancestry placeholders shadowed room-principal resources, so their `owner` never resolved canonically.
