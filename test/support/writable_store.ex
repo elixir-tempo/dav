@@ -522,7 +522,8 @@ defmodule Dav.Test.WritableStore do
   end
 
   # Both are the same operation over the subtree; a move also forgets
-  # where it came from.
+  # where it came from — except the identities, which are the point:
+  # `DAV:resource-id` names the resource wherever it is bound.
   defp transplant(state, from, to, source) do
     depth = length(from)
     under = fn path -> Enum.take(path, depth) == from end
@@ -530,6 +531,8 @@ defmodule Dav.Test.WritableStore do
 
     copied = for r <- state.resources, under.(r.path), do: %{r | path: rebase.(r.path)}
     bodies = for {p, b} <- state.bodies, under.(p), into: %{}, do: {rebase.(p), b}
+
+    state = identities_carried(state, source, under, rebase)
 
     kept =
       case source do
@@ -550,6 +553,56 @@ defmodule Dav.Test.WritableStore do
       | resources: copied ++ Enum.reject(kept, &(&1.path in landing)),
         bodies: Map.merge(kept_bodies, bodies)
     }
+  end
+
+  defp identities_carried(state, :keep, _under, _rebase), do: state
+
+  defp identities_carried(state, :drop, under, rebase) do
+    moved =
+      for {p, id} <- Map.get(state, :identities, %{}),
+          into: %{},
+          do: {if(under.(p), do: rebase.(p), else: p), id}
+
+    Map.put(state, :identities, moved)
+  end
+
+  # A principal's identity is its stable uid; anything else gets one
+  # minted the first time somebody asks, and keeps it across `MOVE`.
+  @impl Dav.Web.Store
+  def resource_id(%Resource{} = resource, agent) do
+    case principal_identity(resource) do
+      identity when is_binary(identity) -> identity
+      nil -> minted_identity(resource, agent)
+    end
+  end
+
+  defp principal_identity(%Resource{owner: owner}) when is_binary(owner) do
+    case owner |> String.trim("/") |> String.split("/") do
+      ["principals", "__uids__", guid] -> "urn:x-uid:" <> guid
+      _other_shape -> nil
+    end
+  end
+
+  defp principal_identity(_resource), do: nil
+
+  defp minted_identity(%Resource{path: path}, agent) do
+    held = underlying(agent, path)
+
+    Agent.get_and_update(pid(agent), fn state ->
+      identities = Map.get(state, :identities, %{})
+
+      case Map.fetch(identities, held) do
+        {:ok, identity} ->
+          {identity, state}
+
+        :error ->
+          identity =
+            "urn:x-dav:" <>
+              Integer.to_string(:erlang.phash2({held, map_size(identities)}, 4_294_967_296))
+
+          {identity, Map.put(state, :identities, Map.put(identities, held, identity))}
+      end
+    end)
   end
 
   @impl Dav.Web.Store

@@ -29,8 +29,10 @@ defmodule Dav.Cal.ICalendar do
   """
 
   # RFC 5545 section 3.1: "Lines of text SHOULD NOT be longer than
-  # 75 octets, excluding the line break."
-  @limit 75
+  # 75 octets, excluding the line break." The reference server folds
+  # a character earlier — 74 octets on the first line — and the
+  # conformance fixtures compare folded bytes, so this matches it.
+  @limit 74
 
   # Properties whose values are iCalendar TEXT, and so carry escapes.
   # Everything else — RRULE, EXDATE, GEO, FREEBUSY — uses `;` and `,`
@@ -153,7 +155,7 @@ defmodule Dav.Cal.ICalendar do
       ...> |> Dav.Cal.ICalendar.fold()
       ...> |> String.split("\\r\\n ")
       ...> |> Enum.map(&byte_size/1)
-      [75, 74, 51]
+      [74, 73, 53]
 
   """
   @spec fold(binary()) :: binary()

@@ -239,6 +239,7 @@ defmodule Dav.Web.Store do
           | :changes
           | :auto_schedule_mode
           | :auto_accept_group
+          | :resource_id
         ) :: boolean()
   def supports?(store, capability) do
     Code.ensure_loaded?(store) and function_exported?(store, capability, arity(capability))
@@ -263,6 +264,7 @@ defmodule Dav.Web.Store do
   defp arity(:changes), do: 4
   defp arity(:auto_schedule_mode), do: 2
   defp arity(:auto_accept_group), do: 2
+  defp arity(:resource_id), do: 2
 
   @doc """
   A resource's dead properties.
@@ -564,6 +566,27 @@ defmodule Dav.Web.Store do
               | :none
 
   @doc """
+  The stable identity of a resource.
+
+  Optional. RFC 5842 section 3.1: `DAV:resource-id` is an opaque URI
+  that names the resource itself rather than any path it is bound at,
+  and it holds across `MOVE`. A store that cannot promise that
+  answers `nil`, and the property is not reported.
+
+  ### Arguments
+
+  * `resource` is the resource being asked about.
+
+  * `context` is the store's context.
+
+  ### Returns
+
+  * The identity as a URI, or `nil`.
+
+  """
+  @callback resource_id(resource :: Resource.t(), context()) :: String.t() | nil
+
+  @doc """
   The calendar user addresses allowed to book this auto-managed user.
 
   Optional. Apple's `AutoAcceptGroup`: a room restricted to a group
@@ -671,5 +694,6 @@ defmodule Dav.Web.Store do
                       sync_token: 2,
                       changes: 4,
                       auto_schedule_mode: 2,
-                      auto_accept_group: 2
+                      auto_accept_group: 2,
+                      resource_id: 2
 end

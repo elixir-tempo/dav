@@ -1523,6 +1523,19 @@ defmodule Dav.Web.Plug do
     current_user(options)
     |> Map.merge(hook_properties(resource, collection, options))
     |> Map.merge(synced(resource, options))
+    |> Map.merge(identified(resource, options))
+  end
+
+  # RFC 5842: the identity that names the resource itself, wherever
+  # it is bound — only where the store can promise one.
+  defp identified(resource, %{store: store, context: context}) do
+    case Store.supports?(store, :resource_id) and store.resource_id(resource, context) do
+      identity when is_binary(identity) ->
+        %{{Xml.dav(), "resource-id"} => {:hrefs, [identity]}}
+
+      _unidentified ->
+        %{}
+    end
   end
 
   # RFC 6578: a synchronised collection reports the token a client

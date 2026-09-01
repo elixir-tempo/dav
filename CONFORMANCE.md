@@ -103,6 +103,10 @@ RFC 6638 auto-scheduling for rooms and resources, in `Dav.Cal.Scheduling` with t
 
 * Apple's `Brief: t` header (`brief`): the pre-RFC 7240 spelling of `return=minimal`, folded into the same preference.
 
+* RFC 5842's `DAV:resource-id` (`resource-id`): the identity that names the resource itself wherever it is bound, via the `c:Dav.Web.Store.resource_id/2` seam — a principal answers its stable uid, everything else what the store mints and keeps across `MOVE`.
+
+* Apple's `X-CALENDARSERVER-MASK-UID` on free-busy `POST` (`maskuid`): the event being rescheduled is left out of its own conflict check — but only the asker's own meeting hides: the masked event's organizer must be the request's, or an organizer-less event must sit in the request organizer's own calendar. Landing it also aligned iCalendar line folding with the reference (74 octets on the first line, not 75) — the fixtures compare folded bytes.
+
 ## Preferences and the extended query grammar
 
 Two smaller features landed after the auto-scheduling drive, both full passes:

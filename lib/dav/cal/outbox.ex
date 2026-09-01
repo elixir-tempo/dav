@@ -416,6 +416,7 @@ defmodule Dav.Cal.Outbox do
   defp respond(conn, request, options) do
     range = {property(request, "DTSTART"), property(request, "DTEND")}
     organiser = property(request, "ORGANIZER")
+    options = Map.put(options, :mask_uid, property(request, "X-CALENDARSERVER-MASK-UID"))
 
     # The reference caps a free-busy request at thirty calendar users
     # including the organiser (`LimitFreeBusyAttendees`): expanding a
@@ -533,7 +534,7 @@ defmodule Dav.Cal.Outbox do
     end
   end
 
-  defp busy(calendars, attendee, organiser, range, options) do
+  defp busy(calendars, {address, _parameters} = attendee, organiser, range, options) do
     periods =
       Enum.flat_map(calendars, fn calendar ->
         borrowed = borrowed?(calendar, options)
@@ -541,7 +542,7 @@ defmodule Dav.Cal.Outbox do
         calendar
         |> children(options)
         |> Enum.reject(& &1.collection?)
-        |> Enum.flat_map(&periods(&1, range, borrowed, options))
+        |> Enum.flat_map(&periods(&1, range, borrowed, address, organiser, options))
       end)
 
     FreeBusy.vfreebusy(periods, range,
@@ -551,13 +552,61 @@ defmodule Dav.Cal.Outbox do
     )
   end
 
-  defp periods(object, range, borrowed?, %{store: store, context: context}) do
+  defp periods(
+         object,
+         range,
+         borrowed?,
+         address,
+         organiser,
+         %{store: store, context: context} = options
+       ) do
     with true <- Store.supports?(store, :read),
          {:ok, data} <- store.read(object, context),
          {:ok, calendar} <- ICalendar.parse(IO.iodata_to_binary(data)) do
-      FreeBusy.periods_of(%{calendar | components: kept(calendar.components, borrowed?)}, range)
+      components =
+        calendar.components
+        |> kept(borrowed?)
+        |> unmasked(address, organiser, options)
+
+      FreeBusy.periods_of(%{calendar | components: components}, range)
     else
       _unreadable -> []
+    end
+  end
+
+  # Apple's `X-CALENDARSERVER-MASK-UID`: the event being rescheduled
+  # is left out of the report, so it does not read as a conflict with
+  # itself. Only the asker's own meeting hides — the event's organizer
+  # must be the request's, or, for an event with no organizer at all,
+  # the calendar it sits in must be the request organizer's own.
+  defp unmasked(components, address, organiser, %{mask_uid: mask} = options)
+       when is_binary(mask) do
+    Enum.reject(components, fn component ->
+      component.name != "VTIMEZONE" and property(component, "UID") == mask and
+        hidden_from?(component, address, organiser, options)
+    end)
+  end
+
+  defp unmasked(components, _address, _organiser, _options), do: components
+
+  defp hidden_from?(component, address, organiser, options) do
+    case property(component, "ORGANIZER") do
+      nil -> same_user?(address, organiser, options)
+      owner -> same_user?(owner, organiser, options)
+    end
+  end
+
+  defp same_user?(one, other, options) when is_binary(one) and is_binary(other),
+    do: canonical_spelling(one, options) == canonical_spelling(other, options)
+
+  defp same_user?(one, other, _options), do: one == other
+
+  defp canonical_spelling(address, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :canonical_address),
+         {:ok, spelled} <- store.canonical_address(address, context) do
+      String.downcase(spelled)
+    else
+      _unknown -> String.downcase(address)
     end
   end
 

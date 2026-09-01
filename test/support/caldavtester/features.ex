@@ -115,7 +115,15 @@ defmodule Dav.CalDAVTester.Features do
                 # accept-always, decline-always, accept-if-free,
                 # decline-if-busy, automatic — via
                 # `c:Dav.Web.Store.auto_schedule_mode/2`.
-                "auto-accept-modes"
+                "auto-accept-modes",
+                # RFC 5842's `DAV:resource-id`, via
+                # `c:Dav.Web.Store.resource_id/2`: the identity that
+                # names the resource itself, held across `MOVE`.
+                "resource-id",
+                # Apple's `X-CALENDARSERVER-MASK-UID` on a free-busy
+                # `POST`, in `Dav.Cal.Outbox`: the event being
+                # rescheduled is left out of its own conflict check.
+                "maskuid"
               ]
 
   @doc """
