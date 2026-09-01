@@ -3199,12 +3199,29 @@ defmodule Dav.Cal.Scheduling do
     %{component | properties: properties}
   end
 
+  # Still being asked: `RSVP` travels, and an implied `NEEDS-ACTION`
+  # keeps the client's spelling — the absent parameter *is* the value.
   defp answer_parameters(parameters, "NEEDS-ACTION", true) do
-    parameters |> Map.put("PARTSTAT", "NEEDS-ACTION") |> Map.put("RSVP", "TRUE")
+    if Map.get(parameters, "PARTSTAT", "NEEDS-ACTION") == "NEEDS-ACTION",
+      do: Map.put(parameters, "RSVP", "TRUE"),
+      else: parameters |> Map.put("PARTSTAT", "NEEDS-ACTION") |> Map.put("RSVP", "TRUE")
   end
 
+  # No longer being asked — an occurrence already over: the question
+  # is withdrawn with the answer left open.
+  defp answer_parameters(parameters, "NEEDS-ACTION", false) do
+    if Map.get(parameters, "PARTSTAT", "NEEDS-ACTION") == "NEEDS-ACTION",
+      do: Map.delete(parameters, "RSVP"),
+      else: parameters |> Map.put("PARTSTAT", "NEEDS-ACTION") |> Map.delete("RSVP")
+  end
+
+  # Re-affirming what the line already says changes nothing — a
+  # client's `RSVP=TRUE` echo beside its restated answer survives the
+  # judging. Only an answer that *moves* the line consumes the asking.
   defp answer_parameters(parameters, answer, _had_rsvp) do
-    parameters |> Map.put("PARTSTAT", answer) |> Map.delete("RSVP")
+    if Map.get(parameters, "PARTSTAT") == answer,
+      do: parameters,
+      else: parameters |> Map.put("PARTSTAT", answer) |> Map.delete("RSVP")
   end
 
   # A derived override says what the rule alone said, at one moment —
@@ -3440,7 +3457,8 @@ defmodule Dav.Cal.Scheduling do
     if value in recipients do
       %{
         property
-        | parameters: property.parameters |> Map.put("SCHEDULE-STATUS", "1.2") |> awaiting()
+        | parameters:
+            property.parameters |> Map.put("SCHEDULE-STATUS", "1.2") |> asked_if_unanswered()
       }
     else
       property
@@ -3448,6 +3466,15 @@ defmodule Dav.Cal.Scheduling do
   end
 
   defp delivered(property, _recipients), do: property
+
+  # The delivery adds the asking where an answer is still wanted, but
+  # takes nothing away: a client that spelled `RSVP=TRUE` beside an
+  # answer it was restating keeps its echo.
+  defp asked_if_unanswered(parameters) do
+    if Map.get(parameters, "PARTSTAT", "NEEDS-ACTION") == "NEEDS-ACTION",
+      do: Map.put(parameters, "RSVP", "TRUE"),
+      else: parameters
+  end
 
   # The VTIMEZONEs the event refers to. A delivered copy without them
   # names a zone the recipient's client cannot resolve, and RFC 4791
@@ -4775,7 +4802,40 @@ defmodule Dav.Cal.Scheduling do
       |> Enum.reject(&(&1.name != "VTIMEZONE" and utc_rid(&1) in rids))
       |> Enum.map(&excluding(&1, rids, components))
 
+    # A copy held as one series — master and overrides together —
+    # renumbers as one object; a copy of individually invited
+    # instances holds each at its own version.
+    serial? = Enum.any?(kept, &(&1.name != "VTIMEZONE" and is_nil(utc_rid(&1))))
+    kept = Enum.map(kept, &numbered_if_risen(&1, components, serial?))
+
     %{stored | components: kept}
+  end
+
+  # The withdrawal carries the organiser's version and the quiet copy
+  # takes it — upward only, and for the master even when the message
+  # names no master: an instance-only cancellation still numbers the
+  # round it closed.
+  defp numbered_if_risen(%{name: "VTIMEZONE"} = zone, _sent, _serial?), do: zone
+
+  defp numbered_if_risen(component, sent, serial?) do
+    offered =
+      case Enum.find(sent, &(&1.name != "VTIMEZONE" and utc_rid(&1) == utc_rid(component))) do
+        %{} = counterpart ->
+          sequence_of(counterpart)
+
+        nil when serial? ->
+          sent
+          |> Enum.reject(&(&1.name == "VTIMEZONE"))
+          |> Enum.map(&sequence_of/1)
+          |> Enum.max(fn -> 0 end)
+
+        nil ->
+          0
+      end
+
+    if offered == sequence_of(component) + 1,
+      do: restored(component, offered),
+      else: component
   end
 
   defp excluding(component, rids, sent) do

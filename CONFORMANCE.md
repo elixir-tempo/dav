@@ -9,11 +9,11 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | Class | Failing | Meaning |
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
-| Apple/interop | 12 | the open tail of the room auto-scheduling work — see below |
+| Apple/interop | 7 | the open tail of the room auto-scheduling work — see below |
 | Incidental | 15 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 
-Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately, twice. Declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 12 still fail on fine detail — the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules across rounds, a few `SEQUENCE` propagation cases, and parts of the `accept-if-free` delegate flow in `implicitauto10`. Declaring `managed-attachments` brought the attachment files in (about 315 tests), and all five — core, recurrence, implicit scheduling, sharing and the legacy dropbox restrictions — now pass in full; see the attachments model below. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
+Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately, twice. Declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 7 still fail: the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules across rounds (`implicitauto9`, `implicitautopast`) and parts of the `accept-if-free` delegate flow in `implicitauto10`. These need the reference's two-phase delivery — an attendee's reply re-delivering the organizer's updated copy to the other attendees — which this engine's single-pass organizer-side answering does not reproduce; the `SEQUENCE` propagation cases that used to sit beside them were closed by the quiet-copy adoption rule below. Declaring `managed-attachments` brought the attachment files in (about 315 tests), and all five — core, recurrence, implicit scheduling, sharing and the legacy dropbox restrictions — now pass in full; see the attachments model below. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
 
 ## How the drive was run
 
@@ -64,6 +64,12 @@ Apple's calendarserver-sharing, in `Dav.Cal.Sharing` and the store:
 * `DAV:displayname` is never synthesised from the URL leaf — absent until somebody sets it.
 
 ## The auto-scheduling model
+
+Two rules landed after the attachments drive closed the earlier `SEQUENCE` cases:
+
+* **A withdrawal numbers the quiet copy it lands on.** When an instance-cancellation reaches an auto-managed recipient, each surviving component adopts the message's version — rid-matched where the message names it, and for a copy held as one series (master present) the highest number offered — but only when that number is exactly one above the component's own: the contiguous round it closed. A copy of individually invited instances (no master) renumbers only rid-matched components, and nothing ever moves by more than one step at once.
+
+* **Re-affirming an answer changes nothing.** The per-occurrence judge writing the answer a line already carries leaves the parameters exactly as the client spelled them — `RSVP=TRUE` echoes included — and the delivery mark (`SCHEDULE-STATUS=1.2`) adds the asking only to still-unanswered lines, never taking an echo away. An occurrence already over keeps `NEEDS-ACTION` with the question withdrawn (`RSVP` dropped), and an implied `NEEDS-ACTION` keeps the client's spelling — the absent parameter is the value.
 
 RFC 6638 auto-scheduling for rooms and resources, in `Dav.Cal.Scheduling` with the `auto-accept` feature declared. The model is the reference's `checkAttendeeAutoReply`, implemented organiser-side since every copy is stored here:
 
