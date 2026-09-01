@@ -445,7 +445,7 @@ defmodule Dav.Cal.TimeRange do
   # parsed value, and an alarm's trigger is commonly negative — it
   # fires *before* the thing it warns about.
   defp shifted(instant, duration) do
-    with {:ok, parsed} <- Tempo.from_iso8601(duration),
+    with {:ok, parsed} <- Tempo.from_iso8601(tolerated(duration)),
          %Tempo{} = moved <- Tempo.shift(instant, parsed) do
       moved
     else
@@ -828,15 +828,21 @@ defmodule Dav.Cal.TimeRange do
     end
   end
 
+  # `P1DT` — a date part and then a `T` announcing time components
+  # that never come — is malformed, and Apple's parser reads it as
+  # though the `T` were not there. Real clients wrote it, so the
+  # tolerance is part of interop.
+  defp tolerated(duration), do: String.replace_suffix(duration, "T", "")
+
   defp positive?(duration) do
-    case Tempo.from_iso8601(duration) do
+    case Tempo.from_iso8601(tolerated(duration)) do
       {:ok, value} -> not String.contains?(inspect(value), "PT0S") and duration != "PT0S"
       _unreadable -> false
     end
   end
 
   defp shift(moment, duration) do
-    case Tempo.from_iso8601(duration) do
+    case Tempo.from_iso8601(tolerated(duration)) do
       {:ok, amount} -> Tempo.shift(moment, amount)
       _unreadable -> moment
     end

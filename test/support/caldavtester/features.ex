@@ -99,7 +99,23 @@ defmodule Dav.CalDAVTester.Features do
                 # (`Dav.Cal.Object`'s `timezones_present/1` resolves
                 # known zones), so the strict-inclusion error test
                 # excludes itself.
-                "timezones-by-reference"
+                "timezones-by-reference",
+                # Apple's `CS:getctag`, in `Dav.Cal.Scheduling`'s
+                # `collection_tag/2`: the calendar's change tag, moved
+                # by every write.
+                "ctag",
+                # RFC 6764 bootstrapping, in `Dav.Web.Plug`:
+                # `/.well-known/caldav` answers `301` to the service,
+                # before any credentials.
+                "well-known",
+                # Apple's `Brief: t` header, the pre-RFC 7240 spelling
+                # of `return=minimal`, honoured in `Dav.Web.Plug`.
+                "brief",
+                # The per-resource answering modes — none,
+                # accept-always, decline-always, accept-if-free,
+                # decline-if-busy, automatic — via
+                # `c:Dav.Web.Store.auto_schedule_mode/2`.
+                "auto-accept-modes"
               ]
 
   @doc """

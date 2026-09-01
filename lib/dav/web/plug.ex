@@ -96,7 +96,8 @@ defmodule Dav.Web.Plug do
       authentication: Keyword.get(options, :authentication, :optional),
       extensions: Keyword.get(options, :extensions),
       compliance: Keyword.get(options, :compliance, []),
-      methods: Map.new(Keyword.get(options, :methods, []))
+      methods: Map.new(Keyword.get(options, :methods, [])),
+      well_known: Map.new(Keyword.get(options, :well_known, []))
     }
   end
 
@@ -134,9 +135,48 @@ defmodule Dav.Web.Plug do
 
   @impl Plug
   def call(%Plug.Conn{} = conn, %{} = options) do
-    if authenticated?(options) or anonymous_endpoint?(conn, options),
-      do: dispatch(conn.method, conn, scoped(options)),
-      else: challenge(conn)
+    case Store.segments(conn.request_path) do
+      # RFC 6764: `/.well-known/caldav` is how a client holding only a
+      # hostname finds the service — and it happens before anyone has
+      # credentials, so no challenge stands in front of it.
+      [".well-known" | service] ->
+        discovered(conn, service, options)
+
+      _elsewhere ->
+        if authenticated?(options) or anonymous_endpoint?(conn, options),
+          do: dispatch(conn.method, conn, scoped(options)),
+          else: challenge(conn)
+    end
+  end
+
+  # The `.well-known` collection itself answers as an empty place: a
+  # `GET` has nothing to show and a `PROPFIND` one resource to name.
+  # A registered service under it answers `301` to where the service
+  # actually lives.
+  defp discovered(conn, [], _options) do
+    case conn.method do
+      "GET" ->
+        send_resp(conn, 200, "")
+
+      "PROPFIND" ->
+        {:ok, _body, conn} = read_body(conn)
+
+        row = {"/.well-known/", [{"HTTP/1.1 200 OK", [{{Xml.dav(), "resourcetype"}, nil}]}]}
+
+        conn
+        |> put_resp_content_type("application/xml", "utf-8")
+        |> send_resp(207, Xml.multistatus([row]))
+
+      _other ->
+        send_resp(conn, 405, "")
+    end
+  end
+
+  defp discovered(conn, [service | _below], options) do
+    case Map.get(options.well_known, service) do
+      nil -> send_resp(conn, 404, "")
+      target -> conn |> put_resp_header("location", target) |> send_resp(301, "")
+    end
   end
 
   # A server-to-server receiver takes messages from *other servers*,
@@ -1004,10 +1044,18 @@ defmodule Dav.Web.Plug do
       |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
 
     %{
-      minimal: "return=minimal" in stated,
+      minimal: "return=minimal" in stated or brief?(conn),
       noroot: "depth-noroot" in stated,
       representation: "return=representation" in stated
     }
+  end
+
+  # Apple's `Brief: t` predates RFC 7240 and asks for the same thing
+  # `return=minimal` does; its clients still send it.
+  defp brief?(conn) do
+    conn
+    |> get_req_header("brief")
+    |> Enum.any?(&(String.downcase(String.trim(&1)) == "t"))
   end
 
   defp minimal?(conn), do: preferences(conn).minimal
@@ -1071,7 +1119,7 @@ defmodule Dav.Web.Plug do
       {:error, :no_destination} -> send_resp(conn, 400, "")
       {:error, :entity_tag} -> send_resp(conn, 412, "")
       {:error, :schedule_tag} -> send_resp(conn, 412, "")
-      {:error, :not_found} -> send_resp(conn, 404, "")
+      {:error, :not_found} -> missing_source(conn, kind, options)
       {:error, :same} -> send_resp(conn, 403, "")
       {:error, :would_overwrite} -> send_resp(conn, 412, "")
       {:error, :no_parent} -> send_resp(conn, 409, "")
@@ -1079,6 +1127,20 @@ defmodule Dav.Web.Plug do
       {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
     end
   end
+
+  # A `MOVE` whose source is gone and whose destination is taken is
+  # wrong at both ends, and the reference answers for the destination:
+  # it refuses the overwrite before it goes looking for the source.
+  defp missing_source(conn, :move, %{store: store, context: context}) do
+    with {:ok, destination} <- destination(conn),
+         {:ok, _held} <- store.resolve(destination, context) do
+      send_resp(conn, 403, "")
+    else
+      _vacant -> send_resp(conn, 404, "")
+    end
+  end
+
+  defp missing_source(conn, _kind, _options), do: send_resp(conn, 404, "")
 
   # RFC 6638 section 3: a scheduling object resource belongs to the
   # calendar of a user who is its organiser or one of its attendees.

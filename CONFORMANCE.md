@@ -9,11 +9,11 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | Class | Failing | Meaning |
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
-| Apple/interop | 7 | the open tail of the room auto-scheduling work — see below |
+| Apple/interop | 6 | the open tail of the room auto-scheduling work — see below |
 | Incidental | 15 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 
-Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately, twice. Declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 7 still fail: the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules across rounds (`implicitauto9`, `implicitautopast`) and parts of the `accept-if-free` delegate flow in `implicitauto10`. These need the reference's two-phase delivery — an attendee's reply re-delivering the organizer's updated copy to the other attendees — which this engine's single-pass organizer-side answering does not reproduce; the `SEQUENCE` propagation cases that used to sit beside them were closed by the quiet-copy adoption rule below. Declaring `managed-attachments` brought the attachment files in (about 315 tests), and all five — core, recurrence, implicit scheduling, sharing and the legacy dropbox restrictions — now pass in full; see the attachments model below. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
+Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately, twice. Declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 6 still fail: the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules across rounds (`implicitauto9`, `implicitautopast`) and parts of the `accept-if-free` delegate flow in `implicitauto10`. These need the reference's two-phase delivery — an attendee's reply re-delivering the organizer's updated copy to the other attendees — which this engine's single-pass organizer-side answering does not reproduce; the `SEQUENCE` propagation cases that used to sit beside them were closed by the quiet-copy adoption rule below. Declaring `managed-attachments` brought the attachment files in (about 315 tests), and all five — core, recurrence, implicit scheduling, sharing and the legacy dropbox restrictions — now pass in full; see the attachments model below. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
 
 ## How the drive was run
 
@@ -65,6 +65,18 @@ Apple's calendarserver-sharing, in `Dav.Cal.Sharing` and the store:
 
 ## The auto-scheduling model
 
+Declaring `auto-accept-modes` brought `implicitautomodes.xml` (126 tests) and `implicitautogroup.xml` (32) into the corpus, and both pass in full. The mode machinery already existed for `accept-if-free`; what the drive added:
+
+* **Mode `none` is a resource somebody manages by hand.** Its invitations queue in its Inbox like anyone else's, nothing answers on its behalf, and none of the quiet-copy tidying applies — the mode gates `auto_managed?` and every unattended-recipient rule.
+
+* **A group-restricted room declines outsiders outright.** `c:Dav.Web.Store.auto_accept_group/2` names who may book; a member's invitation is answered by the room's own mode, anyone else's is declined whatever the calendar says.
+
+* **A mixed answer keeps the message in the Inbox.** When some occurrences answered and an active one stayed `NEEDS-ACTION` — accept-if-free while busy, decline-if-busy while free — the message is not consumed: the pending part is what a delegate has to see.
+
+* **Derived overrides are spelled from the answered master.** The reference resets the master first and derives from the result, so a derived line that then changes again carries an explicit `PARTSTAT` rather than an implied one.
+
+* **`P1DT` is read as `P1D`.** A trailing `T` announcing time components that never come is malformed, Apple's parser tolerates it, and real clients wrote it — `Dav.Cal.TimeRange` strips it before parsing, which is also what `put.xml`'s relaxed-parsing suite checks.
+
 Two rules landed after the attachments drive closed the earlier `SEQUENCE` cases:
 
 * **A withdrawal numbers the quiet copy it lands on.** When an instance-cancellation reaches an auto-managed recipient, each surviving component adopts the message's version — rid-matched where the message names it, and for a copy held as one series (master present) the highest number offered — but only when that number is exactly one above the component's own: the contiguous round it closed. A copy of individually invited instances (no master) renumbers only rid-matched components, and nothing ever moves by more than one step at once.
@@ -82,6 +94,14 @@ RFC 6638 auto-scheduling for rooms and resources, in `Dav.Cal.Scheduling` with t
 * A declined booking is still delivered: the room's calendar records what it turned down, transparent. A room's kept components take the message's `SEQUENCE` per occurrence (`sequenceInSync`), which people's copies do not.
 
 * Later refinements, each measured against the whole corpus: per-occurrence answers restricted to components that name the room; all-day (date-valued) occurrences spelled correctly in derived overrides; `TRANSP` forced to match the answer on every processed component; a room's freshly declined booking written down where a stale refusal is not recreated; a copy a cancellation leaves empty — or holding nothing the room still accepts — deleted; the master's `SEQUENCE` following only when the room's own line was re-answered, an override's only when the client renumbered it; exclusion-cancellations delivered to whoever held the withdrawn instances. The open tail (12 tests, classified `:apple`): the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules, a few `SEQUENCE` cases, and parts of the delegate flow in `implicitauto10`. `implicitautomodes` and `implicitautogroup` stay excluded — they drive the deployment's mode switches through CalDAVTester's `control-api`, which the harness does not model.
+
+## Small features from the same drive
+
+* `CS:getctag` (`ctag` declared): already implemented as the sync token's twin; `ctag.xml` needed the harness's `propfindItems` to honour its `only` argument, and one Apple quirk — a `MOVE` whose source is gone and whose destination is taken answers `403` for the destination rather than `404` for the source.
+
+* RFC 6764 `/.well-known/caldav` (`well-known`): answers `301` to the service before any credentials — discovery happens pre-auth, so no challenge stands in front of it.
+
+* Apple's `Brief: t` header (`brief`): the pre-RFC 7240 spelling of `return=minimal`, folded into the same preference.
 
 ## Preferences and the extended query grammar
 

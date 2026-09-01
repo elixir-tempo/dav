@@ -238,6 +238,7 @@ defmodule Dav.Web.Store do
           | :sync_token
           | :changes
           | :auto_schedule_mode
+          | :auto_accept_group
         ) :: boolean()
   def supports?(store, capability) do
     Code.ensure_loaded?(store) and function_exported?(store, capability, arity(capability))
@@ -261,6 +262,7 @@ defmodule Dav.Web.Store do
   defp arity(:sync_token), do: 2
   defp arity(:changes), do: 4
   defp arity(:auto_schedule_mode), do: 2
+  defp arity(:auto_accept_group), do: 2
 
   @doc """
   A resource's dead properties.
@@ -554,7 +556,34 @@ defmodule Dav.Web.Store do
 
   """
   @callback auto_schedule_mode(address :: String.t(), context :: term()) ::
-              :automatic | :accept_always | :decline_always | :accept_if_free | :decline_if_busy
+              :automatic
+              | :accept_always
+              | :decline_always
+              | :accept_if_free
+              | :decline_if_busy
+              | :none
+
+  @doc """
+  The calendar user addresses allowed to book this auto-managed user.
+
+  Optional. Apple's `AutoAcceptGroup`: a room restricted to a group
+  answers a group member's invitation by its answering mode, and
+  declines everybody else's outright.
+
+  ### Arguments
+
+  * `address` is the auto-managed calendar user's address.
+
+  * `context` is the store's context.
+
+  ### Returns
+
+  * The list of addresses allowed to book, or `nil` when booking is
+    open to everyone.
+
+  """
+  @callback auto_accept_group(address :: String.t(), context :: term()) ::
+              [String.t()] | nil
 
   @doc """
   The synchronisation token a collection currently carries.
@@ -641,5 +670,6 @@ defmodule Dav.Web.Store do
                       unattended?: 2,
                       sync_token: 2,
                       changes: 4,
-                      auto_schedule_mode: 2
+                      auto_schedule_mode: 2,
+                      auto_accept_group: 2
 end

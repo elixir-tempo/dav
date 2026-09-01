@@ -20,7 +20,8 @@ defmodule Dav.Test.SchedulingStore do
         canonical \\ %{},
         aliases \\ %{},
         unattended \\ MapSet.new(),
-        auto_modes \\ %{}
+        auto_modes \\ %{},
+        auto_groups \\ %{}
       ) do
     agent = WritableStore.start(resources)
 
@@ -31,6 +32,7 @@ defmodule Dav.Test.SchedulingStore do
       |> Map.put(:aliases, aliases)
       |> Map.put(:unattended, unattended)
       |> Map.put(:auto_modes, auto_modes)
+      |> Map.put(:auto_groups, auto_groups)
     end)
 
     agent
@@ -43,6 +45,12 @@ defmodule Dav.Test.SchedulingStore do
   def auto_schedule_mode(address, agent) do
     Agent.get(WritableStore.pid(agent), &Map.get(&1, :auto_modes, %{}))
     |> Map.get(String.downcase(address || ""), :automatic)
+  end
+
+  @impl Dav.Web.Store
+  def auto_accept_group(address, agent) do
+    Agent.get(WritableStore.pid(agent), &Map.get(&1, :auto_groups, %{}))
+    |> Map.get(String.downcase(address || ""))
   end
 
   @impl Dav.Web.Store

@@ -896,7 +896,11 @@ defmodule Dav.CalDAVTester.Verifier do
   defp propfind_items(args, responses) do
     ok_specs = specifications(args, "okprops")
     bad_specs = specifications(args, "badprops")
-    responses = Enum.reject(responses, &ignored?(&1, args))
+
+    responses =
+      responses
+      |> Enum.reject(&ignored?(&1, args))
+      |> narrowed_to(args)
 
     case single(args, "count") do
       nil -> each(responses, &properties_match(&1, ok_specs, bad_specs))
@@ -912,6 +916,21 @@ defmodule Dav.CalDAVTester.Verifier do
     args
     |> Map.get("ignore", [])
     |> Enum.any?(&(String.trim_trailing(&1, "/") == href))
+  end
+
+  # The counterpart to `ignore`: a test that names the one href it
+  # *is* asking about, and every other row in the multistatus is
+  # somebody else's business.
+  defp narrowed_to(responses, args) do
+    case Map.get(args, "only") do
+      nil ->
+        responses
+
+      onlys ->
+        Enum.filter(responses, fn %{href: href} ->
+          Enum.any?(onlys, &(String.trim_trailing(&1, "/") == href))
+        end)
+    end
   end
 
   # Stops at the first response that does not match, the way upstream

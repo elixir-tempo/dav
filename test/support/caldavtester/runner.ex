@@ -1084,7 +1084,8 @@ defmodule Dav.CalDAVTester.Runner do
       canonical_addresses(people, substitutions),
       aliased_homes(people, substitutions),
       unattended_addresses(rooms, substitutions),
-      auto_modes(rooms, substitutions)
+      auto_modes(rooms, substitutions),
+      auto_groups(substitutions)
     )
   end
 
@@ -1098,16 +1099,42 @@ defmodule Dav.CalDAVTester.Runner do
         do: String.downcase(address)
   end
 
-  # The reference deployment runs `resource08` in `accept-if-free`
-  # mode: it books itself when its calendar is clear and otherwise
-  # queues the invitation for a delegate — what `implicitauto10`
-  # exercises. Everyone else answers automatically.
-  defp auto_modes(rooms, substitutions) do
-    held_back = Enum.filter(rooms, fn {index, _home} -> index == 8 end)
+  # The reference deployment gives each resource its answering mode —
+  # `implicitautomodes` walks the whole set, and `implicitauto10`
+  # exercises `resource08`'s accept-if-free delegate flow. Resources
+  # not named here answer `automatic`.
+  @resource_modes %{
+    5 => :none,
+    6 => :accept_always,
+    7 => :decline_always,
+    8 => :accept_if_free,
+    9 => :decline_if_busy,
+    10 => :automatic
+  }
 
-    for {address, _home} <- located(held_back, ~w(rcuaddr rcuaddrurn rcuaddralt), substitutions),
+  # The reference deployment restricts `resource11` to a group whose
+  # members include `user03` — `implicitautogroup` books it as
+  # `user03` (answered by mode) and as `user02` (declined outright).
+  defp auto_groups(substitutions) do
+    allowed =
+      for key <- ~w(cuaddr1 cuaddrurn1 cuaddralt1 cuaddr3 cuaddrurn3 cuaddralt3),
+          address = substitutions["$#{key}:"],
+          is_binary(address),
+          do: address
+
+    for {address, _home} <- located([{11, nil}], ~w(rcuaddr rcuaddrurn rcuaddralt), substitutions),
         into: %{},
-        do: {String.downcase(address), :accept_if_free}
+        do: {String.downcase(address), allowed}
+  end
+
+  defp auto_modes(rooms, substitutions) do
+    held_back = Enum.filter(rooms, fn {index, _home} -> Map.has_key?(@resource_modes, index) end)
+
+    for {index, _home} <- held_back,
+        {address, _home} <-
+          located([{index, nil}], ~w(rcuaddr rcuaddrurn rcuaddralt), substitutions),
+        into: %{},
+        do: {String.downcase(address), Map.fetch!(@resource_modes, index)}
   end
 
   # Apple's calendar-user-proxy draft: every principal has two child
@@ -1411,6 +1438,7 @@ defmodule Dav.CalDAVTester.Runner do
       validators: [Cal.Object, Cal.Attachments],
       hooks: [Cal.Scheduling, Cal.Sharing, Cal.Attachments],
       authentication: :required,
+      well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],
       compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling
            calendarserver-home-sync calendar-query-extended calendar-managed-attachments),

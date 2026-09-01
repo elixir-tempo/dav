@@ -100,7 +100,6 @@
   {"attachments.xml", "Too many"} => {:apple, "deployment attachment-count limit"},
   {"duplicate_uids.xml", nil} =>
     {:apple, "cross-calendar UID refusal for non-scheduling objects"},
-  {"put.xml", "PUT with relaxed parsing"} => {:apple, "acceptance of malformed durations"},
   {"implicitscenario1.xml", "Alarms"} => {:apple, "per-user alarm filtering"},
   {"implicitscenario1.xml", "Recurring Alarms"} => {:apple, "per-user alarm filtering"},
   {"implicitscenario1.xml", "No X- properties"} => {:apple, "deployment X- property allowlist"},

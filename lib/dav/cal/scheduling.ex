@@ -2988,6 +2988,7 @@ defmodule Dav.Cal.Scheduling do
           property <- component.properties,
           property.name == "ATTENDEE",
           unattended?(property.parameters) or auto_managed?(property.value, options),
+          auto_schedule_mode(property.value, options) != :none,
           uniq: true,
           do: property.value
 
@@ -3010,7 +3011,14 @@ defmodule Dav.Cal.Scheduling do
     with {_from, _to} = window <- conflict_window(master || List.first(events)),
          busy when is_list(busy) <- room_busy(address, events, window, options),
          rows when rows != [] <-
-           judged(master, overrides, address, window, busy, auto_schedule_mode(address, options)),
+           judged(
+             master,
+             overrides,
+             address,
+             window,
+             busy,
+             effective_mode(address, components, options)
+           ),
          true <- Enum.any?(rows, & &1.active) do
       before = master && line_partstat(master, address)
       updated = apply_answers(components, master, rows, address)
@@ -3111,6 +3119,32 @@ defmodule Dav.Cal.Scheduling do
 
   defp answer_row(row, _busy, _mode), do: row
 
+  # A room restricted to a group — the reference's `AutoAcceptGroup` —
+  # answers a member's invitation by its own mode, and declines
+  # everybody else's outright.
+  defp effective_mode(address, components, options) do
+    if booked_by_outsider?(address, components, options),
+      do: :decline_always,
+      else: auto_schedule_mode(address, options)
+  end
+
+  defp booked_by_outsider?(address, components, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :auto_accept_group),
+         allowed when is_list(allowed) <-
+           store.auto_accept_group(canonical_address(address, options), context),
+         organizer when is_binary(organizer) <- organizer_of(schedulable_only(components)) do
+      canonical_address(organizer, options) not in Enum.map(
+        allowed,
+        &canonical_address(&1, options)
+      )
+    else
+      _open_to_everyone -> false
+    end
+  end
+
+  defp schedulable_only(components),
+    do: Enum.reject(components, &(&1.name == "VTIMEZONE"))
+
   # The deployment states each auto-managed user's answering mode —
   # the reference's `AutoScheduleMode` — and `automatic` is the
   # default: accept when free, decline when busy.
@@ -3144,12 +3178,18 @@ defmodule Dav.Cal.Scheduling do
 
     asked_before? = master != nil and had_rsvp?(master, address)
 
+    # Derived from the master *as answered*: the reference resets the
+    # master first and derives from the result, so a derived line that
+    # then changes again is spelled out rather than left implied.
+    answered_master = master && set_answer(master, address, chosen, false)
+
     derived =
       for %{source: :master, partstat: answer, at: at} <- rows,
           answer != chosen,
           spelled = spelled_instant(at),
           is_binary(spelled),
-          do: master |> override_at(spelled) |> set_answer(address, answer, asked_before?)
+          do:
+            answered_master |> override_at(spelled) |> set_answer(address, answer, asked_before?)
 
     Enum.map(components, &answered_component(&1, rows, address, chosen)) ++ derived
   end
@@ -3961,9 +4001,13 @@ defmodule Dav.Cal.Scheduling do
     end)
   end
 
+  # A resource in mode `none` is a resource somebody manages by hand:
+  # its invitations queue like anyone else's, and nothing answers or
+  # tidies on its behalf.
   defp auto_managed?(recipient, %{store: store, context: context} = options) do
     Store.supports?(store, :unattended?) and
-      store.unattended?(canonical_address(recipient, options), context)
+      store.unattended?(canonical_address(recipient, options), context) and
+      auto_schedule_mode(recipient, options) != :none
   end
 
   defp delivered_to(home, recipient, method, components, told, zones, uid, options) do
@@ -4029,8 +4073,25 @@ defmodule Dav.Cal.Scheduling do
   defp consumed?(recipient, method, components, options) do
     is_binary(recipient) and auto_managed?(recipient, options) and
       (method == "CANCEL" or
-         answered_in?(components, recipient, options) or
+         (answered_in?(components, recipient, options) and
+            not pending_for?(components, recipient, options)) or
          not Enum.any?(components, &(&1.name != "VTIMEZONE" and future_occurrence?(&1))))
+  end
+
+  # An occurrence still to come whose line is still unanswered — the
+  # part of a mixed answer a delegate has to see, so the message stays
+  # in the Inbox rather than being consumed with the rest.
+  defp pending_for?(components, recipient, options) do
+    address = canonical_address(recipient, options)
+
+    Enum.any?(components, fn component ->
+      component.name != "VTIMEZONE" and future_occurrence?(component) and
+        Enum.any?(component.properties, fn property ->
+          property.name == "ATTENDEE" and
+            canonical_address(property.value, options) == address and
+            Map.get(property.parameters, "PARTSTAT", "NEEDS-ACTION") == "NEEDS-ACTION"
+        end)
+    end)
   end
 
   defp write_request(calendar, recipient, components, told, zones, uid, options) do
@@ -4787,10 +4848,11 @@ defmodule Dav.Cal.Scheduling do
   # Nobody reads a room's calendar for strikethroughs. An auto-managed
   # recipient takes the exclusion directly — the reference's
   # `autoprocessing` branch — freeing the time without ceremony.
-  defp unattended_recipient?(components, recipient, %{store: store, context: context}) do
-    Enum.any?(components, fn component ->
-      Enum.any?(component.properties, &room?(&1, recipient))
-    end) or (Store.supports?(store, :unattended?) and store.unattended?(recipient, context))
+  defp unattended_recipient?(components, recipient, %{store: store, context: context} = options) do
+    (Enum.any?(components, fn component ->
+       Enum.any?(component.properties, &room?(&1, recipient))
+     end) or (Store.supports?(store, :unattended?) and store.unattended?(recipient, context))) and
+      auto_schedule_mode(recipient, options) != :none
   end
 
   defp excluded_quietly(stored, withdrawn, components) do
