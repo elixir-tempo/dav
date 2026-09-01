@@ -1392,7 +1392,7 @@ defmodule Dav.CalDAVTester.Runner do
       authentication: :required,
       compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling
-           calendarserver-home-sync),
+           calendarserver-home-sync calendar-query-extended),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness

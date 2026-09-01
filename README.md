@@ -48,17 +48,17 @@ Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests 
 
 CalDAVTester gates 850 of its own blocks on `<require-feature>`, read against a `serverinfo.xml` describing *the server under test*. Apple's file declares 84 features because Apple's server implements 84; running this server against that list asks it thousands of questions it never claimed to answer, and a server is not non-conformant for lacking a feature it does not advertise.
 
-`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, and `auto-accept`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
+`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, `auto-accept`, `query-extended`, and the RFC 7240 `prefer` family. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
 
-Against that declaration the suite puts **3,164 tests**, of which:
+Against that declaration the suite puts **3,210 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 3,138 | 99.2% |
-| failed | 24 | 0.8% |
+| passed | 3,183 | 99.2% |
+| failed | 25 | 0.8% |
 | skipped | 2 | 0.1% |
 
-Every failure is classified and cited: none are against RFC-required behaviour. Twelve are the open tail of the room auto-scheduling work — delivery-mark and version bookkeeping still being driven down — and the remaining fourteen (failed plus skipped) are expectations the vendored, archived fixtures cannot support on principle. Each has its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).
+Every failure is classified and cited: none are against RFC-required behaviour. Twelve are the open tail of the room auto-scheduling work — delivery-mark and version bookkeeping still being driven down — and the remaining fifteen (failed plus skipped) are expectations the vendored, archived fixtures cannot support on principle. Each has its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).
 
 Fourteen verifiers are ported — `statusCode`, `header`, `multistatusItems`, `propfindItems`, `propfindValues`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlDataMatch`, `xmlElementMatch`, `prepostcondition`, `freeBusy` and `postFreeBusy` — along with the suite's compound directives (`DELETEALL`, `GETNEW`, `WAITCOUNT`, `GETCONTAINS`) and the `grab` elements that carry a value from one response into a later request. A check the harness cannot make is reported skipped, never counted as a pass.
 

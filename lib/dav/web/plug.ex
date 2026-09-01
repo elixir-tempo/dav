@@ -276,18 +276,60 @@ defmodule Dav.Web.Plug do
 
       settled = settled(resource, path, options)
 
-      conn
-      |> etag(settled)
-      |> contributed_headers(settled, options)
-      |> send_resp(if(outcome == :created, do: 201, else: 204), "")
+      conn = conn |> etag(settled) |> contributed_headers(settled, options)
+
+      # RFC 7240 `return=representation`: the answer carries what was
+      # actually stored — which the hooks may have rewritten — so the
+      # client need not fetch it back to learn what its write became.
+      written_response(conn, settled, outcome, options)
     else
       {:error, :unsupported} -> refuse(conn, options)
-      {:error, :schedule_tag} -> send_resp(conn, 412, "")
-      {:error, :entity_tag} -> send_resp(conn, 412, "")
+      {:error, :schedule_tag} -> refused_write(conn, path, options)
+      {:error, :entity_tag} -> refused_write(conn, path, options)
       # A missing parent is a conflict, not an invitation to create it.
       {:error, :conflict} -> send_resp(conn, 409, "")
       {:error, :collection} -> send_resp(conn, 403, "")
       {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
+    end
+  end
+
+  # A conditional write that failed still answers `return=representation`
+  # — with the copy that *won*: the client's next move needs the current
+  # state, and this spares it the `GET`.
+  defp written_response(conn, settled, outcome, options) do
+    if preferences(conn).representation do
+      represented(conn, settled, outcome, options)
+    else
+      send_resp(conn, if(outcome == :created, do: 201, else: 204), "")
+    end
+  end
+
+  defp refused_write(conn, path, %{store: store, context: context} = options) do
+    with true <- preferences(conn).representation,
+         {:ok, current} <- store.resolve(path, context),
+         true <- Store.supports?(store, :read),
+         {:ok, data} <- store.read(current, context) do
+      conn
+      |> etag(current)
+      |> contributed_headers(current, options)
+      |> put_resp_header("content-location", Resource.href(current))
+      |> put_resp_content_type(current.content_type || "text/calendar", "utf-8")
+      |> send_resp(412, IO.iodata_to_binary(data))
+    else
+      _plain_refusal -> send_resp(conn, 412, "")
+    end
+  end
+
+  defp represented(conn, settled, outcome, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :read),
+         {:ok, data} <- store.read(settled, context) do
+      conn
+      |> put_resp_header("content-location", Resource.href(settled))
+      |> put_resp_header("preference-applied", "return=representation")
+      |> put_resp_content_type(settled.content_type || "text/calendar", "utf-8")
+      |> send_resp(if(outcome == :created, do: 201, else: 200), IO.iodata_to_binary(data))
+    else
+      _unreadable -> send_resp(conn, if(outcome == :created, do: 201, else: 204), "")
     end
   end
 
@@ -712,7 +754,14 @@ defmodule Dav.Web.Plug do
          {:ok, resource} <- resolve(conn, options),
          :ok <- changed_since(conn, resource),
          {:ok, resources} <- gather(resource, depth, options) do
-      conn |> stamped(resource) |> respond(resources, request, options)
+      prefer = preferences(conn)
+
+      resources =
+        if prefer.noroot and depth > 0 and length(resources) > 1,
+          do: tl(resources),
+          else: resources
+
+      conn |> stamped(resource) |> respond(resources, request, options, prefer)
     else
       {:error, :malformed} -> send_resp(conn, 400, "")
       {:error, :bad_depth} -> send_resp(conn, 400, "")
@@ -868,15 +917,46 @@ defmodule Dav.Web.Plug do
     |> send_resp(@multistatus, Xml.multistatus(responses, trailing))
   end
 
-  defp answer(conn, responses) when is_list(responses), do: multistatus(conn, responses)
+  defp answer(conn, responses) when is_list(responses) do
+    multistatus(conn, trimmed_missing(responses, minimal?(conn)))
+  end
 
-  # RFC 7240 with RFC 6578 section 3.2: a client preferring a minimal
-  # answer is spared the `404` propstats naming what it asked for and
-  # the resource lacks.
-  defp minimal?(conn) do
-    conn
-    |> get_req_header("prefer")
-    |> Enum.any?(&String.contains?(String.downcase(&1), "return=minimal"))
+  # RFC 7240: the `Prefer` header carries comma-separated preferences,
+  # and ones this server does not recognise are ignored rather than
+  # refused. `return=minimal` spares the client the `404` propstats
+  # naming what it asked for and the resource lacks; `depth-noroot`
+  # spares it the target's own response in a `Depth: 1` listing;
+  # `return=representation` answers a write with the stored result.
+  defp preferences(conn) do
+    stated =
+      conn
+      |> get_req_header("prefer")
+      |> Enum.flat_map(&String.split(&1, ","))
+      |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+
+    %{
+      minimal: "return=minimal" in stated,
+      noroot: "depth-noroot" in stated,
+      representation: "return=representation" in stated
+    }
+  end
+
+  defp minimal?(conn), do: preferences(conn).minimal
+
+  # What `return=minimal` trims: the `404` propstats. The response
+  # itself stays — the client asked about the resource, not about the
+  # missing properties.
+  defp trimmed_missing(responses, false), do: responses
+
+  defp trimmed_missing(responses, true) do
+    Enum.map(responses, fn
+      {href, propstats} when is_list(propstats) ->
+        {href,
+         Enum.reject(propstats, fn {status, _properties} -> String.contains?(status, "404") end)}
+
+      response ->
+        response
+    end)
   end
 
   defp handler(name, %{reports: reports}) do
@@ -1133,11 +1213,24 @@ defmodule Dav.Web.Plug do
     with :ok <- capable(options, :patch),
          {:ok, instructions} <- Xml.parse_proppatch(body),
          {:ok, resource} <- resolve(conn, options) do
-      multistatus(conn, [applied(resource, instructions, options)])
+      patched(conn, applied(resource, instructions, options))
     else
       {:error, :unsupported} -> refuse(conn, options)
       {:error, :malformed} -> send_resp(conn, 400, "")
       {:error, :not_found} -> send_resp(conn, 404, "")
+    end
+  end
+
+  # RFC 7240: a `PROPPATCH` that succeeded in full has nothing a
+  # minimal answer needs to say — a bare `200` says it all.
+  defp patched(conn, {_href, propstats} = outcome) do
+    succeeded? =
+      Enum.all?(propstats, fn {status, _properties} -> String.contains?(status, "200") end)
+
+    if preferences(conn).minimal and succeeded? do
+      send_resp(conn, 200, "")
+    else
+      multistatus(conn, [outcome])
     end
   end
 
@@ -1209,14 +1302,14 @@ defmodule Dav.Web.Plug do
     |> send_resp(@multistatus, Xml.multistatus(responses))
   end
 
-  defp respond(conn, resources, request, options) do
-    multistatus(
-      conn,
+  defp respond(conn, resources, request, options, prefer) do
+    responses =
       Enum.map(
         resources,
         &response(typed(&1, options), request, advertised(&1, options), dead(&1, options))
       )
-    )
+
+    multistatus(conn, trimmed_missing(responses, prefer.minimal))
   end
 
   # `DAV:supported-report-set` answers for the resource it is read on.

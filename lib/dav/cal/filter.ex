@@ -54,6 +54,7 @@ defmodule Dav.Cal.Filter do
             undefined?: false,
             time_range: nil,
             text_match: nil,
+            test: :allof,
             children: []
 
   # RFC 4791 section 9.7.1. A `comp-filter` describes where a
@@ -129,6 +130,7 @@ defmodule Dav.Cal.Filter do
       undefined?: Enum.any?(element.children, &local?(&1, "is-not-defined")),
       time_range: time_range(element),
       text_match: text_match(element),
+      test: if(Map.get(element.attributes, "test") == "anyof", do: :anyof, else: :allof),
       children: nested(element)
     }
   end
@@ -161,7 +163,8 @@ defmodule Dav.Cal.Filter do
         %{
           value: element.text,
           collation: Map.get(element.attributes, "collation", "i;ascii-casemap"),
-          negate?: Map.get(element.attributes, "negate-condition", "no") == "yes"
+          negate?: Map.get(element.attributes, "negate-condition", "no") == "yes",
+          match: Map.get(element.attributes, "match-type", "contains")
         }
     end
   end
@@ -241,7 +244,20 @@ defmodule Dav.Cal.Filter do
 
   defp satisfied?(%__MODULE__{} = filter, component, options) do
     in_range?(filter, component, options) and
-      Enum.all?(filter.children, &child_satisfied?(&1, component, options))
+      combined(filter, component, options)
+  end
+
+  # The `test` attribute — CalDAV's extended query grammar: `allof`
+  # is RFC 4791's own conjunction, `anyof` asks whether *any* child
+  # condition holds instead.
+  defp combined(%__MODULE__{children: []}, _subject, _options), do: true
+
+  defp combined(%__MODULE__{test: :anyof} = filter, subject, options) do
+    Enum.any?(filter.children, &child_satisfied?(&1, subject, options))
+  end
+
+  defp combined(%__MODULE__{} = filter, subject, options) do
+    Enum.all?(filter.children, &child_satisfied?(&1, subject, options))
   end
 
   # A child filter is satisfied by *any* matching child, or — when it
@@ -320,19 +336,28 @@ defmodule Dav.Cal.Filter do
   defp property_satisfied?(%__MODULE__{} = filter, property, options) do
     matches_text?(filter.text_match, property.value) and
       in_range?(filter, property, options) and
-      Enum.all?(filter.children, &child_satisfied?(&1, property, options))
+      combined(filter, property, options)
   end
 
   defp matches_text?(nil, _value), do: true
 
-  # `text-match` is a substring test, not equality, and
-  # `negate-condition` inverts the whole result rather than the
-  # comparison. The default collation is case-insensitive ASCII.
-  defp matches_text?(%{value: wanted, collation: collation, negate?: negate?}, value) do
-    found? =
+  # `text-match` is a substring test by default, and `negate-condition`
+  # inverts the whole result rather than the comparison. The default
+  # collation is case-insensitive ASCII; the extended grammar's
+  # `match-type` narrows the comparison to equality or an anchor.
+  defp matches_text?(%{value: wanted, collation: collation, negate?: negate?} = stated, value) do
+    {value, wanted} =
       case collation do
-        "i;octet" -> String.contains?(value, wanted)
-        _case_insensitive -> String.contains?(String.downcase(value), String.downcase(wanted))
+        "i;octet" -> {value, wanted}
+        _case_insensitive -> {String.downcase(value), String.downcase(wanted)}
+      end
+
+    found? =
+      case Map.get(stated, :match, "contains") do
+        "equals" -> value == wanted
+        "starts-with" -> String.starts_with?(value, wanted)
+        "ends-with" -> String.ends_with?(value, wanted)
+        _contains -> String.contains?(value, wanted)
       end
 
     if negate?, do: not found?, else: found?

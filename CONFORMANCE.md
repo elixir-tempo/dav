@@ -10,7 +10,7 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
 | Apple/interop | 12 | the open tail of the room auto-scheduling work — see below |
-| Incidental | 14 | expectations that cannot be met on principle, each cited below and in the classification file |
+| Incidental | 15 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 
 Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately: declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 12 still fail on fine detail — the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules across rounds, a few `SEQUENCE` propagation cases, and parts of the `accept-if-free` delegate flow in `implicitauto10`. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
@@ -76,6 +76,14 @@ RFC 6638 auto-scheduling for rooms and resources, in `Dav.Cal.Scheduling` with t
 * A declined booking is still delivered: the room's calendar records what it turned down, transparent. A room's kept components take the message's `SEQUENCE` per occurrence (`sequenceInSync`), which people's copies do not.
 
 * Later refinements, each measured against the whole corpus: per-occurrence answers restricted to components that name the room; all-day (date-valued) occurrences spelled correctly in derived overrides; `TRANSP` forced to match the answer on every processed component; a room's freshly declined booking written down where a stale refusal is not recreated; a copy a cancellation leaves empty — or holding nothing the room still accepts — deleted; the master's `SEQUENCE` following only when the room's own line was re-answered, an override's only when the client renumbered it; exclusion-cancellations delivered to whoever held the withdrawn instances. The open tail (12 tests, classified `:apple`): the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules, a few `SEQUENCE` cases, and parts of the delegate flow in `implicitauto10`. `implicitautomodes` and `implicitautogroup` stay excluded — they drive the deployment's mode switches through CalDAVTester's `control-api`, which the harness does not model.
+
+## Preferences and the extended query grammar
+
+Two smaller features landed after the auto-scheduling drive, both full passes:
+
+* RFC 7240 `Prefer`, in `Dav.Web.Plug` (`prefer`, `prefer-minimal`, `prefer-noroot`, `prefer-representation` declared; `prefer.xml` 28/28). `return=minimal` trims the `404` propstats from `PROPFIND` and report answers and turns an all-successful `PROPPATCH` into a bare `200`; `depth-noroot` drops the target's own response from a `Depth: 1` listing; `return=representation` answers a `PUT` with what was actually stored — hooks' rewrites included — plus `Content-Location`, and a failed conditional write answers with the copy that won, sparing the client the `GET` either way.
+
+* The extended query grammar (`query-extended`, with `calendar-query-extended` advertised): `test="anyof"` on `comp-filter`/`prop-filter` in `Dav.Cal.Filter`, and `match-type` (`equals`, `starts-with`, `ends-with`, `contains`) on `text-match`. One `reports.xml` suite is cited incidental: its two verify variants assume either a single combined events-and-tasks calendar or the full `split-calendars` feature, and the harness's split layout without the splitting behaviour fits neither.
 
 ## The synchronisation model
 

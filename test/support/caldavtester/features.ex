@@ -69,6 +69,16 @@ defmodule Dav.CalDAVTester.Features do
                 # `Dav.Cal.Scheduling`: an unattended recipient's copy
                 # answers on arrival.
                 "auto-accept",
+                # RFC 7240 preferences, in `Dav.Web.Plug`: minimal
+                # answers, rootless listings, and writes answered with
+                # the stored representation.
+                # The extended query grammar: `test="anyof"` on
+                # `comp-filter` and `prop-filter`, in `Dav.Cal.Filter`.
+                "query-extended",
+                "prefer",
+                "prefer-minimal",
+                "prefer-noroot",
+                "prefer-representation",
                 # RFC 6638 implicit scheduling, in `Dav.Cal.Scheduling`:
                 # storing an event with attendees delivers the
                 # invitations, and an attendee's reply reaches the

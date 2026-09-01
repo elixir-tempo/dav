@@ -32,6 +32,9 @@
   {"implicitautopast.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
 
   # --- incidental: cannot pass as vendored -------------------------------
+  {"reports.xml", "basic query reports"} =>
+    {:incidental,
+     "test 18a's two verify variants assume either one combined events-and-tasks calendar or the full split-calendars feature; the harness provisions the split layout (a separate tasks calendar) without the splitting behaviour, so neither variant's href set fits"},
   {"implicitcopymove.xml", "PUT UID restrictions - ORGANIZER"} =>
     {:incidental, "expected files predate address canonicalisation; see CONFORMANCE.md"},
   {"implicitcopymove.xml", "PUT UID restrictions - ATTENDEE"} =>
