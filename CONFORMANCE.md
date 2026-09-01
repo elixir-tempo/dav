@@ -63,9 +63,25 @@ Apple's calendarserver-sharing, in `Dav.Cal.Sharing` and the store:
 
 * `DAV:displayname` is never synthesised from the URL leaf — absent until somebody sets it.
 
+## The synchronisation model
+
+RFC 6578 collection synchronisation, in `Dav.Web.Sync` and the store seams `c:Dav.Web.Store.sync_token/2` and `c:Dav.Web.Store.changes/4`. Driven after the main drive closed, against `sync-report.xml` (100/100), `sharing-sync.xml` and `sharing-notification-sync.xml` (both full passes), with both `sync-report` and `sync-report-home` declared.
+
+* Tokens are `data:,<revision>` on the store's write clock. Calendars, the scheduling Inbox, notification collections and the calendar home are synchronised; the container above the homes is not, and advertises neither the report nor the property. `DAV:supported-report-set` is filtered per resource on the same condition.
+
+* `DAV:sync-level` `1` reports a collection's own members, `infinity` everything beneath; the reference server also accepts the pre-RFC spelling `infinite`, and a request without the element reads the `Depth` header instead. A home at level 1 reports which child collections changed — a property change counts, so `PROPPATCH` stamps the resource (and, through a share link, the origin, so both parties' homes move).
+
+* An initial synchronisation reports the collection itself along with its members, and the collection answers `DAV:getetag` (the version its token names) and `DAV:getcontenttype` the way the reference server's collections do. A difference reports only the delta. Deletions come back as bare `404` responses — including a member created *and* deleted since the token — but a collection deleted and remade answers only for its new life, and the reference server's attachment `dropbox` is answered `404` in an initial home report to say it is not synchronised here.
+
+* Two refusals: a token the store never issued (or `null`) is `DAV:valid-sync-token`, and a `DAV:limit` is `DAV:number-of-matches-within-limits` since truncation is never silent. A third, subtler one: an `infinity` home difference across a share link that *appeared* since the token is `DAV:valid-sync-token` — the linked collection's history is not expressible against the old view of the home, so the client is sent back for an initial synchronisation. The link's *birth* gates this, not its last change.
+
+* Sync propstats answer from live properties, then the store's dead properties, then the hook-contributed ones — `CALDAV:schedule-calendar-transp` defaults to `opaque` through the scheduling hook exactly as in `PROPFIND`. `Prefer: return=minimal` drops the `404` propstats.
+
+* The harness grew the reference deployment's remaining home members — a `tasks` calendar (declared `VTODO`-only and transparent, so free-busy and default-calendar selection skip it; scheduling's delivery fallback now requires an event-capable calendar), a `freebusy` resource, and the `dropbox`. It also grew `basename($var:)` grab variables, bracketed `[-,...]` href lists (`-` is the request URI), summed multi-value counts, and duplicate-slash collapse in expected hrefs.
+
 ## Hook seams added for conformance
 
-Optional callbacks on `Dav.Web.Hook`, each added when a behaviour had no seam to live in: `patchable/3` (semantic PROPPATCH validation — free-busy-set hrefs must exist, the default-calendar URL must be an owned calendar), `removable/3` (delete authorisation beyond access control), `relocated/3` (repairing pointers after a MOVE), `inherited/3` (property floors for shared views). On `Dav.Web.Store`: `unattended?/2` (which addresses are auto-managed).
+Optional callbacks on `Dav.Web.Hook`, each added when a behaviour had no seam to live in: `patchable/3` (semantic PROPPATCH validation — free-busy-set hrefs must exist, the default-calendar URL must be an owned calendar), `removable/3` (delete authorisation beyond access control), `relocated/3` (repairing pointers after a MOVE), `inherited/3` (property floors for shared views). On `Dav.Web.Store`: `unattended?/2` (which addresses are auto-managed), `sync_token/2` and `changes/4` (RFC 6578 change history).
 
 ## The incidental class
 

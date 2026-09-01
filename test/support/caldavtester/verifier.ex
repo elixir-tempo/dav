@@ -806,6 +806,7 @@ defmodule Dav.CalDAVTester.Verifier do
   end
 
   defp hrefs(args, ok, bad, conn) do
+    args = Map.new(args, fn {name, values} -> {name, unbracketed(values, conn)} end)
     prefix = prefix(args, conn)
     expected_ok = href_set(args, "okhrefs", prefix)
     expected_bad = href_set(args, "badhrefs", prefix)
@@ -837,6 +838,28 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
+  # A bracketed value is a list — serverinfo's
+  # `$calendar_sync_extra_items:` is `[-]`, and the home variant names
+  # several items. Upstream's `processHrefSubstitutions` splits them
+  # out, with `-` standing for the request URI itself.
+  defp unbracketed(values, conn) do
+    Enum.flat_map(values, &listed_hrefs(&1, conn))
+  end
+
+  defp listed_hrefs(value, conn) do
+    if String.starts_with?(value, "[") and String.ends_with?(value, "]") do
+      value
+      |> String.slice(1..-2//1)
+      |> String.split(",", trim: true)
+      |> Enum.map(fn
+        "-" -> conn.request_path
+        item -> item
+      end)
+    else
+      [value]
+    end
+  end
+
   # `src/utils.processHrefSubstitutions` is not vendored. From its use
   # here it makes a relative href absolute against the request URI, or
   # against an explicit `prefix` argument, where `-` means none.
@@ -859,6 +882,9 @@ defmodule Dav.CalDAVTester.Verifier do
       |> then(&if String.starts_with?(&1, "/"), do: &1, else: Path.join(prefix, &1))
       |> URI.decode()
       |> String.trim_trailing("/")
+      # A scenario building `$grabbed:/name` around an href grabbed
+      # with its trailing slash writes `//`; one path, one slash.
+      |> String.replace(~r{/+}, "/")
     end
   end
 
@@ -1050,16 +1076,22 @@ defmodule Dav.CalDAVTester.Verifier do
 
   defp clark({namespace, local}), do: "{" <> namespace <> "}" <> local
 
+  # A count argument may carry several values — upstream sums them, so
+  # `0` plus `$calendar_sync_extra_count:` is the total expected.
   defp single(args, name) do
-    case single_value(args, name) do
-      nil ->
+    case Map.get(args, name, []) do
+      [] ->
         nil
 
-      value ->
-        case summed(value) do
-          {:ok, number} -> number
-          :error -> nil
-        end
+      values ->
+        Enum.reduce_while(values, 0, &counted/2)
+    end
+  end
+
+  defp counted(value, acc) do
+    case summed(value) do
+      {:ok, number} -> {:cont, acc + number}
+      :error -> {:halt, nil}
     end
   end
 

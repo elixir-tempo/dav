@@ -147,4 +147,10 @@ defmodule Dav.Test.SchedulingStore do
 
   @impl Dav.Web.Store
   defdelegate mkcalendar(path, agent), to: WritableStore
+
+  @impl Dav.Web.Store
+  defdelegate sync_token(collection, agent), to: WritableStore
+
+  @impl Dav.Web.Store
+  defdelegate changes(collection, token, scope, agent), to: WritableStore
 end

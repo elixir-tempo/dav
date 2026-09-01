@@ -86,7 +86,10 @@ defmodule Dav.CalDAVTesterTest do
     # Declared because `Dav.Cal.Scheduling` implements it. Declaring a
     # feature that is not built is what turns this figure into a claim.
     assert MapSet.member?(declared, "implicit-scheduling")
-    refute MapSet.member?(declared, "sync-report")
+    # Declared because `Dav.Web.Sync` implements RFC 6578, for
+    # calendars and for the home.
+    assert MapSet.member?(declared, "sync-report")
+    assert MapSet.member?(declared, "sync-report-home")
     assert MapSet.size(declared) < 20
     assert map_size(context.results) == 162
   end

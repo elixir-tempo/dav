@@ -98,9 +98,9 @@
                Module Macro Code Enum Access Base Exception Kernel
              )
            ]},
-          # Disabled: TODO/FIXME work is tracked in TODO.md, the system
-          # of record — inline tags are intentional pointers, not debt
-          # for Credo to flag.
+          # Disabled: inline TODO/FIXME tags are intentional pointers,
+          # not debt for Credo to flag; the conformance record lives in
+          # CONFORMANCE.md.
           {Credo.Check.Design.TagFIXME, false},
           {Credo.Check.Design.TagTODO, false},
 

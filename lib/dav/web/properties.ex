@@ -187,7 +187,10 @@ defmodule Dav.Web.Properties do
     {:ok, Integer.to_string(length)}
   end
 
-  def fetch(%Resource{collection?: true}, {"DAV:", "getcontenttype"}), do: :error
+  def fetch(%Resource{collection?: true, content_type: nil}, {"DAV:", "getcontenttype"}) do
+    :error
+  end
+
   def fetch(%Resource{content_type: nil}, {"DAV:", "getcontenttype"}), do: :error
   def fetch(%Resource{content_type: type}, {"DAV:", "getcontenttype"}), do: {:ok, type}
 

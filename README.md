@@ -36,7 +36,9 @@ HTTP                    RFC 9110/9111/9112
 
 `Dav.Cal.Scheduling` implements CalDAV scheduling — RFC 6638, which is Standards Track and **updates RFC 4791**, so it is a requirement rather than an extension. Storing an event with attendees delivers the invitations, an attendee's save replies to the organiser, cancellations and reschedules travel as iTIP messages, free-busy is answered from the Outbox, auto-managed rooms accept on arrival, and the `Schedule-Tag` weak-`ETag` ledger of section 3.2.10 governs conditional writes. `Dav.Cal.Sharing` implements Apple's calendar-sharing extension — invitations, notifications, per-sharee views and per-user data. The behavioural record of how both were driven to conformance, model by model, is the [conformance record](https://hexdocs.pm/dav/conformance.html).
 
-Not built yet: `Dav.Card`, collection synchronisation (RFC 6578), and ACL enforcement (RFC 3744) beyond the principal reports.
+`Dav.Web.Sync` implements collection synchronisation — RFC 6578. Calendars, the scheduling Inbox, notification collections and the calendar home all answer the `DAV:sync-collection` report and carry a `DAV:sync-token`, so a polling client fetches what changed rather than everything, and the home tells it which calendars to look in.
+
+Not built yet: `Dav.Card` and ACL enforcement (RFC 3744) beyond the principal reports.
 
 ## Measured against the conformance suite
 
@@ -46,14 +48,14 @@ Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests 
 
 CalDAVTester gates 850 of its own blocks on `<require-feature>`, read against a `serverinfo.xml` describing *the server under test*. Apple's file declares 84 features because Apple's server implements 84; running this server against that list asks it thousands of questions it never claimed to answer, and a server is not non-conformant for lacking a feature it does not advertise.
 
-`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, and `timezones-by-reference`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
+`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, and `sync-report-home`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
 
-Against that declaration the suite puts **2,541 tests**, of which:
+Against that declaration the suite puts **2,747 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 2,527 | 99.4% |
-| failed | 12 | 0.5% |
+| passed | 2,733 | 99.5% |
+| failed | 12 | 0.4% |
 | skipped | 2 | 0.1% |
 
 Every failure is classified and cited: none are against RFC-required or Apple-interop behaviour — the remaining fourteen (failed plus skipped) are expectations the vendored, archived fixtures cannot support on principle, each with its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).

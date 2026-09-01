@@ -56,6 +56,15 @@ defmodule Dav.CalDAVTester.Features do
                 "REPORT principal-property-search",
                 "REPORT principal-search-property-set",
                 "expand-property",
+                # RFC 6578 collection synchronisation, in
+                # `Dav.Web.Sync`: calendars and the Inbox answer the
+                # `DAV:sync-collection` report and carry a
+                # `DAV:sync-token`, and so does the calendar home —
+                # at `DAV:sync-level` 1 the home reports which child
+                # collections changed, at `infinity` also what changed
+                # inside them.
+                "sync-report",
+                "sync-report-home",
                 # RFC 6638 implicit scheduling, in `Dav.Cal.Scheduling`:
                 # storing an event with attendees delivers the
                 # invitations, and an attendee's reply reaches the

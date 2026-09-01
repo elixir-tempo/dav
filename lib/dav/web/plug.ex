@@ -808,6 +808,7 @@ defmodule Dav.Web.Plug do
 
   defp report(conn, options) do
     {:ok, body, conn} = read_body(conn)
+    options = Map.put(options, :minimal, minimal?(conn))
 
     with {:ok, name} <- Xml.report_name(body),
          {:ok, depth} <- depth(conn, {:ok, 0}),
@@ -859,7 +860,24 @@ defmodule Dav.Web.Plug do
     |> send_resp(200, body)
   end
 
+  # A `sync-collection` answer carries the new token on the root
+  # element itself, beside the responses rather than within one.
+  defp answer(conn, {:multistatus, responses, trailing}) do
+    conn
+    |> put_resp_content_type("application/xml", "utf-8")
+    |> send_resp(@multistatus, Xml.multistatus(responses, trailing))
+  end
+
   defp answer(conn, responses) when is_list(responses), do: multistatus(conn, responses)
+
+  # RFC 7240 with RFC 6578 section 3.2: a client preferring a minimal
+  # answer is spared the `404` propstats naming what it asked for and
+  # the resource lacks.
+  defp minimal?(conn) do
+    conn
+    |> get_req_header("prefer")
+    |> Enum.any?(&String.contains?(String.downcase(&1), "return=minimal"))
+  end
 
   defp handler(name, %{reports: reports}) do
     case Map.fetch(reports, name) do
@@ -1192,12 +1210,29 @@ defmodule Dav.Web.Plug do
   end
 
   defp respond(conn, resources, request, options) do
-    reports = Map.keys(options.reports)
-
     multistatus(
       conn,
-      Enum.map(resources, &response(typed(&1, options), request, reports, dead(&1, options)))
+      Enum.map(
+        resources,
+        &response(typed(&1, options), request, advertised(&1, options), dead(&1, options))
+      )
     )
+  end
+
+  # `DAV:supported-report-set` answers for the resource it is read on.
+  # `DAV:sync-collection` appears only where the store keeps a history
+  # to report — advertising it on a collection whose changes cannot be
+  # asked for would send a client somewhere the report will refuse it.
+  defp advertised(resource, options) do
+    reports = Map.keys(options.reports)
+
+    if synchronised?(resource, options),
+      do: reports,
+      else: List.delete(reports, {Xml.dav(), "sync-collection"})
+  end
+
+  defp synchronised?(resource, %{store: store, context: context}) do
+    Store.supports?(store, :sync_token) and store.sync_token(resource, context) != nil
   end
 
   # What a resource *is*, once the extensions have had their say. A
@@ -1261,7 +1296,18 @@ defmodule Dav.Web.Plug do
   defp contributed(resource, options) do
     collection = parent(resource.path, options)
 
-    Map.merge(current_user(options), hook_properties(resource, collection, options))
+    current_user(options)
+    |> Map.merge(hook_properties(resource, collection, options))
+    |> Map.merge(synced(resource, options))
+  end
+
+  # RFC 6578: a synchronised collection reports the token a client
+  # would hold after seeing the collection as it stands now.
+  defp synced(resource, %{store: store, context: context}) do
+    case Store.supports?(store, :sync_token) and store.sync_token(resource, context) do
+      token when is_binary(token) -> %{{Xml.dav(), "sync-token"} => token}
+      _not_synchronised -> %{}
+    end
   end
 
   # "Who am I", answered from the authenticated principal rather than

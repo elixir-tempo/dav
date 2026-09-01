@@ -11,6 +11,8 @@ defmodule Dav.Test.WritableStore do
 
   alias Dav.Cal
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.Schedule
+  alias Dav.Cal.Sharing
   alias Dav.Web.Resource
 
   @sharing "http://calendarserver.org/ns/"
@@ -21,7 +23,11 @@ defmodule Dav.Test.WritableStore do
   @epoch ~U[2020-01-01 00:00:00Z]
 
   def start(resources) do
-    {:ok, agent} = Agent.start_link(fn -> %{resources: resources, bodies: %{}, dead: %{}} end)
+    {:ok, agent} =
+      Agent.start_link(fn ->
+        %{resources: resources, bodies: %{}, dead: %{}, graveyard: %{}}
+      end)
+
     agent
   end
 
@@ -341,9 +347,25 @@ defmodule Dav.Test.WritableStore do
     {:ok, if(existed?, do: :replaced, else: :created), resource}
   end
 
+  # A member addressed through a share link is the sharer's resource:
+  # deleting it deletes the original. The link itself is the sharee's
+  # own — deleting a shared calendar's view removes the view, and the
+  # sharer's calendar stays where it was.
   @impl Dav.Web.Store
   def delete(%Resource{path: path}, agent) do
+    path = if view?(agent, path), do: path, else: underlying(agent, path)
+    stamp = DateTime.diff(written(agent), @epoch)
+
     Agent.update(pid(agent), fn state ->
+      # What a deletion removes, synchronisation must still be able to
+      # name: a client holding an older token is told which members
+      # are gone, not left to notice their absence.
+      buried =
+        for resource <- state.resources,
+            beneath?(resource.path, path),
+            into: Map.get(state, :graveyard, %{}),
+            do: {resource.path, stamp}
+
       # Dead properties die with the resource. A share is recorded as
       # one — a `CS:shared-url` naming what the link points at — so
       # leaving them behind means a sharee who deletes a shared
@@ -353,7 +375,8 @@ defmodule Dav.Test.WritableStore do
         state
         | resources: Enum.reject(state.resources, &beneath?(&1.path, path)),
           bodies: Map.reject(state.bodies, fn {held, _body} -> beneath?(held, path) end),
-          dead: Map.reject(state.dead, fn {held, _properties} -> beneath?(held, path) end)
+          dead: Map.reject(state.dead, fn {held, _properties} -> beneath?(held, path) end),
+          graveyard: buried
       }
     end)
 
@@ -377,10 +400,25 @@ defmodule Dav.Test.WritableStore do
   # scheduling reads the owner to decide which way a message goes, so
   # an ownerless calendar accepts invitations and delivers none.
   defp create(agent, path) do
-    resource = %Resource{path: path, collection?: true, owner: inherited(agent, path)}
-    Agent.update(pid(agent), &%{&1 | resources: &1.resources ++ [resource]})
+    resource = %Resource{
+      path: path,
+      collection?: true,
+      owner: inherited(agent, path),
+      modified_at: written(agent)
+    }
+
+    Agent.update(pid(agent), &born(&1, resource))
     {:ok, resource}
   end
+
+  # A collection's birth is not its last change: a property write
+  # moves its revision and leaves its birth alone.
+  defp born(state, resource) do
+    %{state | resources: state.resources ++ [resource]}
+    |> Map.put(:births, Map.put(births(state), resource.path, revision(resource)))
+  end
+
+  defp births(state), do: Map.get(state, :births, %{})
 
   defp inherited(agent, path) do
     parent = Enum.drop(path, -1)
@@ -419,8 +457,25 @@ defmodule Dav.Test.WritableStore do
         {:remove, name}, acc -> Map.delete(acc, name)
       end)
 
-    Agent.update(pid(agent), &%{&1 | dead: Map.put(&1.dead, path, updated)})
+    # A property change is a change: a client synchronising a home is
+    # told which calendar was renamed or newly shared, not only which
+    # gained a member.
+    stamp = written(agent)
+    origin = underlying(agent, path)
+
+    Agent.update(pid(agent), fn state ->
+      %{
+        state
+        | dead: Map.put(state.dead, path, updated),
+          resources: Enum.map(state.resources, &touched(&1, [path, origin], stamp))
+      }
+    end)
+
     :ok
+  end
+
+  defp touched(%Resource{} = resource, paths, stamp) do
+    if resource.path in paths, do: %{resource | modified_at: stamp}, else: resource
   end
 
   @impl Dav.Web.Store
@@ -515,11 +570,226 @@ defmodule Dav.Test.WritableStore do
       path: path,
       collection?: true,
       types: [Cal.calendar()],
-      owner: inherited(agent, path)
+      owner: inherited(agent, path),
+      modified_at: written(agent)
     }
 
-    Agent.update(pid(agent), &%{&1 | resources: &1.resources ++ [resource]})
+    Agent.update(pid(agent), &born(&1, resource))
     {:ok, resource}
+  end
+
+  @impl Dav.Web.Store
+  def sync_token(%Resource{} = collection, agent) do
+    if synchronised?(collection, agent) do
+      "data:," <> Integer.to_string(Agent.get(pid(agent), &Map.get(&1, :written, 0)))
+    end
+  end
+
+  @impl Dav.Web.Store
+  def changes(%Resource{} = collection, nil, scope, agent) do
+    {:ok, sync_token(collection, agent), altered(collection, -1, scope, agent),
+     unsynced(collection, agent)}
+  end
+
+  def changes(%Resource{} = collection, token, scope, agent) do
+    with {:ok, since} <- since(token, agent),
+         :ok <- syncable_across(collection, since, scope, agent) do
+      {:ok, sync_token(collection, agent), altered(collection, since, scope, agent),
+       buried_since(collection, since, scope, agent)}
+    else
+      _stale_or_crossed -> {:error, :invalid_sync_token}
+    end
+  end
+
+  @dropbox {@sharing, "dropbox-home"}
+
+  # The reference server keeps the attachment dropbox out of home
+  # synchronisation, and answers `404` for it in an initial report so
+  # a client learns not to sync it here rather than inferring it from
+  # absence. A difference stays quiet about it — the client was
+  # already told.
+  defp unsynced(%Resource{} = collection, agent) do
+    {:ok, members} = children(collection, agent)
+    for member <- members, @dropbox in member.types, do: member.path
+  end
+
+  # The reference server refuses a `:tree` difference across a share
+  # link that appeared since the token: the linked collection's history
+  # is not expressible against the old view of the home, and the client
+  # is sent back for an initial synchronisation instead.
+  defp syncable_across(%Resource{} = collection, since, :tree, agent) do
+    {:ok, members} = children(collection, agent)
+
+    crossed? =
+      home?(collection, agent) and
+        Enum.any?(members, fn member ->
+          member.collection? and view?(agent, member.path) and born_after?(member, since, agent)
+        end)
+
+    if crossed?, do: :crossed, else: :ok
+  end
+
+  defp syncable_across(_collection, _since, _scope, _agent), do: :ok
+
+  defp view?(agent, path) do
+    Agent.get(pid(agent), &linked(&1.dead, path)) != nil
+  end
+
+  defp born_after?(%Resource{path: path} = member, since, agent) do
+    Agent.get(pid(agent), &Map.get(births(&1), path, revision(member))) > since
+  end
+
+  # The collections whose membership this store keeps a history for:
+  # calendars, the scheduling Inbox, the notification collection, and
+  # the home that holds them — the collections a calendar client polls.
+  defp synchronised?(%Resource{collection?: true} = collection, agent) do
+    Cal.calendar?(collection) or Schedule.inbox() in collection.types or
+      Sharing.notification() in collection.types or home?(collection, agent)
+  end
+
+  defp synchronised?(_resource, _agent), do: false
+
+  # A home is known by what it holds: the collection whose immediate
+  # members include a calendar. The container *above* the homes holds
+  # only other containers, and is not synchronised.
+  defp home?(%Resource{path: path}, agent) do
+    held = underlying(agent, path)
+    depth = length(held) + 1
+
+    Agent.get(pid(agent), fn state ->
+      Enum.any?(state.resources, fn resource ->
+        length(resource.path) == depth and
+          Enum.take(resource.path, length(held)) == held and
+          Cal.calendar() in resource.types
+      end)
+    end)
+  end
+
+  # A member that changed since the token. An object answers for
+  # itself; a collection answers for its subtree — a home reports the
+  # calendar something changed *in*, and at `:tree` scope also what
+  # changed inside it.
+  defp altered(%Resource{} = collection, since, scope, agent) do
+    {:ok, members} = children(collection, agent)
+    Enum.flat_map(members, &altered_member(&1, since, scope, agent))
+  end
+
+  defp altered_member(member, since, scope, agent) do
+    cond do
+      @dropbox in member.types ->
+        []
+
+      not member.collection? ->
+        if revision(member) > since, do: [member], else: []
+
+      scope == :tree ->
+        named(member, since, agent) ++ altered(member, since, scope, agent)
+
+      true ->
+        named(member, since, agent)
+    end
+  end
+
+  defp named(%Resource{} = collection, since, agent) do
+    if subtree_revision(collection, agent) > since, do: [collection], else: []
+  end
+
+  defp subtree_revision(%Resource{} = collection, agent) do
+    {:ok, members} = children(collection, agent)
+
+    below =
+      for member <- members,
+          do: if(member.collection?, do: subtree_revision(member, agent), else: revision(member))
+
+    Enum.max(
+      [revision(collection), origin_revision(collection, agent) | below] ++
+        stamps_under(collection, agent)
+    )
+  end
+
+  # A view answers for the collection it points at: a property the
+  # sharer changed on the original moves the view's revision too.
+  defp origin_revision(%Resource{path: path}, agent) do
+    case underlying(agent, path) do
+      ^path ->
+        0
+
+      held ->
+        Agent.get(pid(agent), fn state ->
+          Enum.find(state.resources, &(&1.path == held))
+        end)
+        |> case do
+          %Resource{} = original -> revision(original)
+          nil -> 0
+        end
+    end
+  end
+
+  # Deletions count as changes to the collection they emptied.
+  defp stamps_under(%Resource{path: path}, agent) do
+    held = underlying(agent, path)
+
+    for {buried_path, stamp} <- Agent.get(pid(agent), &Map.get(&1, :graveyard, %{})),
+        Enum.take(buried_path, length(held)) == held,
+        buried_path != held,
+        do: stamp
+  end
+
+  defp buried_since(%Resource{} = collection, since, scope, agent) do
+    {:ok, members} = children(collection, agent)
+
+    nested =
+      if scope == :tree do
+        for member <- members,
+            member.collection?,
+            gone <- buried_since(member, since, scope, agent),
+            do: gone
+      else
+        []
+      end
+
+    buried(collection, since, members, agent) ++ nested
+  end
+
+  # A token this store issued names a point on its write clock. One it
+  # never issued — or one from a future it has not reached — is not a
+  # point to diff against.
+  defp since("data:," <> digits, agent) do
+    case Integer.parse(digits) do
+      {count, ""} ->
+        if count <= Agent.get(pid(agent), &Map.get(&1, :written, 0)),
+          do: {:ok, count},
+          else: :error
+
+      _not_a_count ->
+        :error
+    end
+  end
+
+  defp since(_token, _agent), do: :error
+
+  defp revision(%Resource{modified_at: %DateTime{} = at}), do: DateTime.diff(at, @epoch)
+  defp revision(_resource), do: 0
+
+  # The members deleted since the token, by the name they had here. A
+  # member deleted and then written again is alive, and reported among
+  # the changed rather than the removed. A collection deleted and then
+  # made again answers only for its new life: the members that died
+  # with the old one were never in this collection.
+  defp buried(%Resource{path: path} = collection, since, members, agent) do
+    held = underlying(agent, path)
+    alive = MapSet.new(members, & &1.path)
+    graveyard = Agent.get(pid(agent), &Map.get(&1, :graveyard, %{}))
+    rebirth = Map.get(graveyard, held, -1)
+
+    for {buried_path, stamp} <- graveyard,
+        length(buried_path) == length(held) + 1,
+        Enum.take(buried_path, length(held)) == held,
+        stamp > since,
+        stamp > rebirth,
+        renamed = collection.path ++ [List.last(buried_path)],
+        renamed not in alive,
+        do: renamed
   end
 
   defp calendar?(_agent, []), do: false

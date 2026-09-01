@@ -214,6 +214,11 @@ defmodule Dav.Xml do
     `{t:qname/0, t:value/0}` pair. A `nil` value writes an empty
     element, which is how a `404` propstat names what was missing.
 
+  * `trailing` is a list of `{t:qname/0, t:value/0}` pairs written as
+    children of the root element itself, after the responses. RFC 6578
+    needs it: a `sync-collection` answer carries the new
+    `DAV:sync-token` beside the responses, not within one.
+
   ### Returns
 
   * The XML document as `t:iodata/0`.
@@ -228,9 +233,12 @@ defmodule Dav.Xml do
       true
 
   """
-  @spec multistatus([{String.t(), [{String.t(), [{qname(), value()}]}]}]) :: iolist()
-  def multistatus(responses) when is_list(responses) do
-    prefixes = prefixes(responses)
+  @spec multistatus(
+          [{String.t(), [{String.t(), [{qname(), value()}]}]}],
+          [{qname(), value()}]
+        ) :: iolist()
+  def multistatus(responses, trailing \\ []) when is_list(responses) do
+    prefixes = prefixes(responses ++ [{"", [{"", trailing}]}])
 
     declarations =
       Enum.map(prefixes, fn {namespace, prefix} ->
@@ -247,6 +255,7 @@ defmodule Dav.Xml do
       declarations,
       ">",
       Enum.map(responses, &response(&1, prefixes, root)),
+      Enum.map(trailing, &property(&1, prefixes)),
       "</",
       root,
       ":multistatus>"

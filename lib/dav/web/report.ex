@@ -44,7 +44,9 @@ defmodule Dav.Web.Report do
 
   * `body` is the raw request body, for this report's own parser.
 
-  * `depth` is the `Depth` header, already validated as `0` or `1`.
+  * `depth` is the `Depth` header, already validated as `0`, `1` or
+    `:infinity` — most reports ignore it, and `sync-collection` reads
+    its scope from `DAV:sync-level` instead.
 
   * `options` carries the `:store` and its `:context`. Both are passed
     explicitly — a report routinely needs to read a collection's
@@ -58,6 +60,10 @@ defmodule Dav.Web.Report do
   * `{:ok, {:body, content_type, body}}` to be sent as a `200`, for
     the reports that compute one value rather than a fact about each
     resource — `free-busy-query` returns a single iCalendar object;
+
+  * `{:ok, {:multistatus, responses, trailing}}` for a `207` whose
+    root element carries children of its own beside the responses —
+    `sync-collection` answers with the new `DAV:sync-token` there;
 
   * `{:error, :malformed}` when the body does not match this report's
     grammar, which becomes a `400`; or
@@ -81,7 +87,10 @@ defmodule Dav.Web.Report do
   @typedoc "A report that answers with one value rather than a multistatus."
   @type body :: {:body, content_type :: String.t(), iodata()}
 
-  @callback run(Resource.t(), body :: binary(), depth :: 0 | 1, options()) ::
-              {:ok, [response()] | body()}
+  @typedoc "A multistatus carrying elements on the root itself."
+  @type trailed :: {:multistatus, [response()], [{Xml.qname(), Xml.value()}]}
+
+  @callback run(Resource.t(), body :: binary(), depth :: 0 | 1 | :infinity, options()) ::
+              {:ok, [response()] | body() | trailed()}
               | {:error, :malformed | :forbidden | Xml.qname()}
 end

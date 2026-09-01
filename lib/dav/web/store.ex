@@ -235,6 +235,8 @@ defmodule Dav.Web.Store do
           | :canonical_address
           | :origin
           | :unattended?
+          | :sync_token
+          | :changes
         ) :: boolean()
   def supports?(store, capability) do
     Code.ensure_loaded?(store) and function_exported?(store, capability, arity(capability))
@@ -255,6 +257,8 @@ defmodule Dav.Web.Store do
   defp arity(:addresses), do: 2
   defp arity(:canonical_address), do: 2
   defp arity(:unattended?), do: 2
+  defp arity(:sync_token), do: 2
+  defp arity(:changes), do: 4
 
   @doc """
   A resource's dead properties.
@@ -526,6 +530,74 @@ defmodule Dav.Web.Store do
   """
   @callback unattended?(address :: String.t(), context :: term()) :: boolean()
 
+  @doc """
+  The synchronisation token a collection currently carries.
+
+  Optional. RFC 6578 — a token is an opaque URI that changes whenever
+  the collection's membership does, so a client holding one can ask
+  `c:changes/4` for only what happened since. A store that does not
+  track changes, or a collection it does not track them *for*, answers
+  `nil`, and the server neither reports the `DAV:sync-token` property
+  nor advertises the `DAV:sync-collection` report there.
+
+  ### Arguments
+
+  * `collection` is the collection being asked about.
+
+  * `context` is the store's context.
+
+  ### Returns
+
+  * The token, or `nil` when this collection is not synchronised.
+
+  """
+  @callback sync_token(collection :: Resource.t(), context()) :: String.t() | nil
+
+  @doc """
+  What changed in a collection since a token was issued.
+
+  Optional, and the substance of the `DAV:sync-collection` report.
+  With no token the answer is everything: every current member is
+  changed and nothing is removed — the initial synchronisation. With
+  one, the answer is the difference: members created or modified since,
+  and the paths of members deleted since. A member created *and*
+  deleted since the token is reported among the removed, because the
+  client holding that token may have seen it in between.
+
+  ### Arguments
+
+  * `collection` is the collection being synchronised.
+
+  * `token` is the client's token from a previous answer, or `nil`
+    for an initial synchronisation.
+
+  * `scope` is `:members` for the collection's own members —
+    `DAV:sync-level` `1` — or `:tree` for everything beneath it. The
+    two differ only for a collection holding collections: a calendar
+    home at `:members` reports which child calendars changed, and at
+    `:tree` also the changed objects within them.
+
+  * `context` is the store's context.
+
+  ### Returns
+
+  * `{:ok, token, changed, removed}` — the token the client should
+    hold next, the changed members as resources, and the removed
+    members as paths; or
+
+  * `{:error, :invalid_sync_token}` when the token is not one this
+    store issued for this collection.
+
+  """
+  @callback changes(
+              collection :: Resource.t(),
+              token :: String.t() | nil,
+              scope :: :members | :tree,
+              context()
+            ) ::
+              {:ok, String.t(), [Resource.t()], [[String.t()]]}
+              | {:error, :invalid_sync_token}
+
   @optional_callbacks read: 2,
                       put: 4,
                       delete: 2,
@@ -540,5 +612,7 @@ defmodule Dav.Web.Store do
                       addresses: 2,
                       canonical_address: 2,
                       origin: 2,
-                      unattended?: 2
+                      unattended?: 2,
+                      sync_token: 2,
+                      changes: 4
 end

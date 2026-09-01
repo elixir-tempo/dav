@@ -642,6 +642,17 @@ defmodule Dav.CalDAVTester.Runner do
   # is missing, which crashed five scenarios rather than skipping them.
   defp bind(state, _variable, nil), do: state
 
+  # `basename($name:)` stores the last path segment of what was
+  # grabbed — a scenario that learns a calendar's URL this way then
+  # addresses members inside it by name.
+  defp bind(state, "basename(" <> rest, value) when is_binary(value) do
+    bind(
+      state,
+      String.trim_trailing(rest, ")"),
+      value |> String.trim_trailing("/") |> Path.basename()
+    )
+  end
+
   defp bind(state, variable, value) when is_binary(value) do
     put_in(state.substitutions[variable], value)
   end
@@ -919,7 +930,7 @@ defmodule Dav.CalDAVTester.Runner do
     # separate collection would appear in every listing the suite
     # checks.
     collections =
-      for home <- homes, leaf <- ["calendar"], do: home ++ [leaf]
+      for home <- homes, leaf <- ["calendar", "tasks"], do: home ++ [leaf]
 
     owners = Map.merge(owned(people, substitutions), owned_rooms(rooms, substitutions))
 
@@ -944,6 +955,23 @@ defmodule Dav.CalDAVTester.Runner do
             collection?: true,
             types: [Cal.calendar()],
             owner: owner_of(path, owners)
+          }
+
+    # The other standing members of a reference-deployment home: the
+    # `freebusy` resource a client reads busy time from, and the
+    # `dropbox` attachment collection — which home synchronisation
+    # deliberately answers `404` for.
+    fixtures =
+      for home <- homes,
+          {leaf, collection?, types} <- [
+            {"freebusy", false, []},
+            {"dropbox", true, [{"http://calendarserver.org/ns/", "dropbox-home"}]}
+          ],
+          do: %Resource{
+            path: home ++ [leaf],
+            collection?: collection?,
+            types: types,
+            owner: owner_of(home, owners)
           }
 
     # RFC 6638: the Inbox and Outbox are ordinary collections
@@ -1021,6 +1049,7 @@ defmodule Dav.CalDAVTester.Runner do
       resources ++
         calendars ++
         scheduling ++
+        fixtures ++
         notifications ++
         tree ++
         ancestry(room_principals(rooms, substitutions)) ++
@@ -1028,7 +1057,9 @@ defmodule Dav.CalDAVTester.Runner do
         room_principals(rooms, substitutions) ++
         proxies(principals) ++ receiver ++ group_principals(substitutions),
       addresses,
-      Map.merge(principal_properties(people, substitutions), group_properties(substitutions)),
+      principal_properties(people, substitutions)
+      |> Map.merge(group_properties(substitutions))
+      |> Map.merge(tasks_properties(homes)),
       canonical_addresses(people, substitutions),
       aliased_homes(people, substitutions),
       unattended_addresses(rooms, substitutions)
@@ -1281,6 +1312,20 @@ defmodule Dav.CalDAVTester.Runner do
     is_binary(href) and href in within
   end
 
+  # The reference deployment's tasks calendar holds to-dos and stays
+  # out of free-busy: it declares `VTODO` as its only component and is
+  # transparent, which keeps it off `CALDAV:calendar-free-busy-set`
+  # and out of the running when scheduling picks a default calendar.
+  defp tasks_properties(homes) do
+    for home <- homes, into: %{} do
+      {home ++ ["tasks"],
+       %{
+         {Xml.caldav(), "schedule-calendar-transp"} => {:names, [{Xml.caldav(), "transparent"}]},
+         {Xml.caldav(), "supported-calendar-component-set"} => {:components, ["VTODO"]}
+       }}
+    end
+  end
+
   defp principal_properties(people, substitutions) do
     for {index, home} <- people,
         path = canonical_principal(index, substitutions),
@@ -1333,7 +1378,8 @@ defmodule Dav.CalDAVTester.Runner do
       hooks: [Cal.Scheduling, Cal.Sharing],
       authentication: :required,
       compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
-           calendarserver-sharing calendarserver-sharing-no-scheduling),
+           calendarserver-sharing calendarserver-sharing-no-scheduling
+           calendarserver-home-sync),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness
@@ -1352,6 +1398,7 @@ defmodule Dav.CalDAVTester.Runner do
         {{Xml.dav(), "principal-property-search"}, Principal.PropertySearch},
         {{Xml.dav(), "principal-search-property-set"}, Principal.SearchPropertySet},
         {{Xml.dav(), "expand-property"}, Principal.ExpandProperty},
+        {{Xml.dav(), "sync-collection"}, Dav.Web.Sync},
         {{Xml.caldav(), "calendar-query"}, Cal.Query},
         {{Xml.caldav(), "calendar-multiget"}, Cal.Multiget},
         {{Xml.caldav(), "free-busy-query"}, Cal.FreeBusy}

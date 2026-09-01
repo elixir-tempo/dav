@@ -1625,7 +1625,7 @@ defmodule Dav.Cal.Scheduling do
     with true <- hosted?(organizer, options),
          %Resource{} = home <- home_of(organizer, options),
          scoped = as(home, options),
-         %Resource{} = collection <- collection(home, &Cal.calendar?/1, scoped),
+         %Resource{} = collection <- collection(home, &event_calendar?(&1, scoped), scoped),
          %Resource{} = object <- object_with(collection, uid, scoped),
          {:ok, body} <- read(object, scoped),
          {:ok, stored} <- ICalendar.parse(body) do
@@ -3233,7 +3233,7 @@ defmodule Dav.Cal.Scheduling do
     uid = Enum.find_value(components, &value(&1, "UID"))
 
     with %Resource{} = home <- home_of(address, options),
-         %Resource{} = calendar <- collection(home, &Cal.calendar?/1, options),
+         %Resource{} = calendar <- collection(home, &event_calendar?(&1, options), options),
          %Resource{} <- object_with(calendar, uid, options) do
       true
     else
@@ -3534,7 +3534,9 @@ defmodule Dav.Cal.Scheduling do
     case store.children(home, context) do
       {:ok, children} ->
         calendars = Enum.filter(children, &Cal.calendar?/1)
-        Enum.find(calendars, &object_with(&1, uid, options)) || List.first(calendars)
+
+        Enum.find(calendars, &object_with(&1, uid, options)) ||
+          Enum.find(calendars, &event_calendar?(&1, options))
 
       _nothing ->
         nil
@@ -3552,7 +3554,7 @@ defmodule Dav.Cal.Scheduling do
   defp provisioned("REQUEST", home, %{store: store, context: context} = options) do
     with true <- Store.supports?(store, :mkcalendar),
          {:ok, _made} <- store.mkcalendar(home.path ++ ["calendar"], context) do
-      collection(home, &Cal.calendar?/1, options)
+      collection(home, &event_calendar?(&1, options), options)
     else
       _cannot_provision -> nil
     end
@@ -3737,7 +3739,7 @@ defmodule Dav.Cal.Scheduling do
         address not in answering,
         home = home_of(address, options),
         not is_nil(home),
-        calendar = collection(home, &Cal.calendar?/1, options),
+        calendar = collection(home, &event_calendar?(&1, options), options),
         not is_nil(calendar) do
       restated_for(calendar, uid, address, components, options)
     end
@@ -5177,6 +5179,22 @@ defmodule Dav.Cal.Scheduling do
       {:ok, children} -> Enum.find(children, matches?)
       _nothing -> nil
     end
+  end
+
+  # Where a delivered event may land: a calendar that holds events. A
+  # calendar declaring `CALDAV:supported-calendar-component-set`
+  # without `VEVENT` — the tasks calendar — is not a home for an
+  # invitation, however first it sits in the listing.
+  defp event_calendar?(resource, %{store: store, context: context}) do
+    Cal.calendar?(resource) and
+      case Store.supports?(store, :properties) and
+             Map.get(
+               store.properties(resource, context),
+               {Xml.caldav(), "supported-calendar-component-set"}
+             ) do
+        {:components, names} -> "VEVENT" in names
+        _undeclared -> true
+      end
   end
 
   # A delivered copy is written straight to the store, which is right —
