@@ -61,7 +61,7 @@ defmodule Dav.CalDAVTester.Runner do
   # reported as skipped rather than failed: not answering `POST` is a
   # scope decision, not a defect.
   @implemented ~w(OPTIONS GET HEAD PUT DELETE MKCOL MKCALENDAR PROPFIND PROPPATCH
-                  COPY MOVE REPORT POST)
+                  COPY MOVE REPORT POST ACL)
 
   # Listing a collection's members, for the compound methods.
   # `dofindall` asks for one property, not for all of them. A listing
@@ -1476,16 +1476,23 @@ defmodule Dav.CalDAVTester.Runner do
     DavPlug.init(
       store: SchedulingStore,
       context: context,
-      methods: [{"MKCALENDAR", Cal.Mkcalendar}, {"POST", Cal.Post}],
-      validators: [Cal.Object, Cal.Attachments],
-      hooks: [Cal.Scheduling, Cal.Sharing, Cal.Attachments, Cal.Delegation],
+      methods: [{"MKCALENDAR", Cal.Mkcalendar}, {"POST", Cal.Post}, {"ACL", Dav.Web.Grant}],
+      validators: [Cal.Object, Cal.Attachments, Cal.Access],
+      hooks: [
+        Cal.Scheduling,
+        Cal.Sharing,
+        Cal.Attachments,
+        Cal.Delegation,
+        Cal.Access,
+        Cal.Rollup
+      ],
       authentication: :required,
       well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],
       administrators: [substitutions["$principaluri_admin:"]],
       compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling
            calendarserver-home-sync calendar-query-extended calendar-managed-attachments
-           calendar-proxy),
+           calendar-proxy calendarserver-private-events),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness

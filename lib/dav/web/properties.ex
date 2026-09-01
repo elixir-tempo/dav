@@ -322,6 +322,10 @@ defmodule Dav.Web.Properties do
 
   """
   @spec protected?(Xml.qname()) :: boolean()
+  # `DAV:acl` is written through the `ACL` method alone — RFC 3744
+  # section 5.5 — never through `PROPPATCH`, and what the method
+  # stored is its own record rather than a value to hand out raw.
+  def protected?({"DAV:", "acl"}), do: true
   def protected?({"DAV:", local}), do: local in @protected
 
   # RFC 6638 deprecated `calendar-free-busy-set`; a server that still

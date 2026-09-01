@@ -3444,11 +3444,25 @@ defmodule Dav.Cal.Scheduling do
   defp canonical(%{name: name, value: value} = property, options)
        when name in ~w(ATTENDEE ORGANIZER) do
     address = canonical_address(value, options)
+    parameters = named(property.parameters, address, options)
 
-    %{property | value: address, parameters: named(property.parameters, address, options)}
+    %{property | value: address, parameters: awaiting_reply(name, parameters)}
   end
 
   defp canonical(property, _options), do: property
+
+  # An attendee line with no `PARTSTAT` is an unanswered invitation,
+  # and the reference stores it with `RSVP=TRUE` — the request to
+  # answer is part of the record. A group placeholder is nobody in
+  # particular and is never asked to reply.
+  defp awaiting_reply("ATTENDEE", parameters) do
+    if Map.has_key?(parameters, "PARTSTAT") or Map.has_key?(parameters, "RSVP") or
+         Map.has_key?(parameters, "CUTYPE"),
+       do: parameters,
+       else: Map.put(parameters, "RSVP", "TRUE")
+  end
+
+  defp awaiting_reply(_name, parameters), do: parameters
 
   # The `CN` is the server's to state, not the client's. A client that
   # writes "User 01 Bogus" beside a real address has invented a name
@@ -3461,12 +3475,36 @@ defmodule Dav.Cal.Scheduling do
         name -> Map.put(parameters, "CN", name)
       end
 
+    parameters =
+      case stated_email(address, options) do
+        nil -> parameters
+        email -> Map.put(parameters, "EMAIL", email)
+      end
+
     # Like the `CN`, what kind of calendar user this is comes from the
     # directory, not the client: an auto-managed address is a
     # resource whether or not the invitation said so.
     if auto_managed?(address, options),
       do: Map.put_new(parameters, "CUTYPE", "RESOURCE"),
       else: parameters
+  end
+
+  # A `urn:` canonical address hides where mail for this person goes,
+  # so the reference states it back as an `EMAIL` parameter. A
+  # `mailto:` address already says so itself.
+  defp stated_email(address, %{store: store, context: context}) do
+    with false <- String.starts_with?(String.downcase(address), "mailto:"),
+         true <- function_exported?(store, :principal, 2),
+         {:ok, %Resource{owner: owner}} when is_binary(owner) <-
+           store.principal(address, context),
+         true <- function_exported?(store, :addresses, 2),
+         {:ok, addresses} <- store.addresses(owner, context),
+         "mailto:" <> email <-
+           Enum.find(addresses, &String.starts_with?(String.downcase(&1), "mailto:")) do
+      email
+    else
+      _no_mailto_spelling -> nil
+    end
   end
 
   defp common_name(address, %{store: store, context: context}) do

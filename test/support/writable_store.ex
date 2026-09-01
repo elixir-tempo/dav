@@ -611,28 +611,30 @@ defmodule Dav.Test.WritableStore do
 
     copied = for r <- state.resources, under.(r.path), do: %{r | path: rebase.(r.path)}
     bodies = for {p, b} <- state.bodies, under.(p), into: %{}, do: {rebase.(p), b}
+    dead = for {p, d} <- state.dead, under.(p), into: %{}, do: {rebase.(p), d}
 
     state = identities_carried(state, source, under, rebase)
-
-    kept =
-      case source do
-        :keep -> state.resources
-        :drop -> Enum.reject(state.resources, &under.(&1.path))
-      end
-
-    kept_bodies =
-      case source do
-        :keep -> state.bodies
-        :drop -> Map.reject(state.bodies, fn {p, _b} -> under.(p) end)
-      end
-
+    {kept, kept_bodies, kept_dead} = remaining(state, source, under)
     landing = for r <- copied, do: r.path
 
     %{
       state
       | resources: copied ++ Enum.reject(kept, &(&1.path in landing)),
-        bodies: Map.merge(kept_bodies, bodies)
+        bodies: Map.merge(kept_bodies, bodies),
+        dead: Map.merge(kept_dead, dead)
     }
+  end
+
+  # What the source keeps of itself: everything on a copy, nothing on
+  # a move. Dead properties travel with the resource either way — the
+  # reference copies the property store alongside the body, and an
+  # access mark or attachment reference must not fall off in transit.
+  defp remaining(state, :keep, _under), do: {state.resources, state.bodies, state.dead}
+
+  defp remaining(state, :drop, under) do
+    {Enum.reject(state.resources, &under.(&1.path)),
+     Map.reject(state.bodies, fn {p, _b} -> under.(p) end),
+     Map.reject(state.dead, fn {p, _d} -> under.(p) end)}
   end
 
   defp identities_carried(state, :keep, _under, _rebase), do: state

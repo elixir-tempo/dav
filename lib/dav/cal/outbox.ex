@@ -79,6 +79,7 @@ defmodule Dav.Cal.Outbox do
          :ok <- media_type(conn),
          :ok <- readable(body),
          {:ok, calendar, component} <- scheduling_message(body),
+         :ok <- unrestricted(calendar),
          :ok <- bounded_in_utc(component),
          {:ok, recipients} <- recipients(conn, component),
          :ok <- attendee_allowed(kind, calendar, component, resource, options),
@@ -97,6 +98,26 @@ defmodule Dav.Cal.Outbox do
       {:error, {_namespace, _local} = failed} ->
         precondition(conn, failed)
     end
+  end
+
+  # An access restriction is a mark on a stored copy, not a thing a
+  # scheduling message may carry: the recipients' servers each keep
+  # their own users' privacy.
+  defp unrestricted(calendar) do
+    marked =
+      Enum.find_value(calendar.properties, fn property ->
+        property.name == "X-CALENDARSERVER-ACCESS" && property.value
+      end) ||
+        Enum.find_value(calendar.components, fn component ->
+          component.name != "VTIMEZONE" &&
+            Enum.find_value(component.properties, fn property ->
+              property.name == "X-CALENDARSERVER-ACCESS" && property.value
+            end)
+        end)
+
+    if marked,
+      do: {:error, {"http://calendarserver.org/ns/", "no-access-restrictions"}},
+      else: :ok
   end
 
   # RFC 6638 section 5.2 gives this method its own preconditions, and
@@ -650,8 +671,9 @@ defmodule Dav.Cal.Outbox do
         |> unmasked(address, organiser, options)
 
       trimmed = %{calendar | components: components}
+      level = Dav.Cal.Access.level(object, options)
 
-      {FreeBusy.periods_of(trimmed, range), shown(trimmed, range, options)}
+      {FreeBusy.periods_of(trimmed, range), shown(trimmed, level, range, options)}
     else
       _unreadable -> {[], []}
     end
@@ -660,11 +682,11 @@ defmodule Dav.Cal.Outbox do
   # The events an extended answer shows: the ones whose time actually
   # lands in the window, alarms left out — they are the owner's, not
   # the asker's business.
-  defp shown(calendar, range, options) do
+  defp shown(calendar, level, range, options) do
     if Map.get(options, :detailed_freebusy, false) do
       for component <- calendar.components,
           component.name == "VEVENT",
-          not hidden?(calendar, component, options),
+          not hidden?(calendar, component, level, options),
           FreeBusy.periods_of(%{calendar | components: [component]}, range) != [],
           do: presentable(component, options)
     else
@@ -673,11 +695,13 @@ defmodule Dav.Cal.Outbox do
   end
 
   # A private event's *time* is busy like any other; the event itself
-  # shows only to its own calendar's owner. The access mark may sit on
-  # the calendar or the component — clients write both.
-  defp hidden?(calendar, component, options) do
+  # shows only to its own calendar's owner. The access mark may be
+  # held beside the stored copy, or sit in the body on the calendar or
+  # the component — clients write both.
+  defp hidden?(calendar, component, level, options) do
     stated =
-      property(component, "X-CALENDARSERVER-ACCESS") ||
+      level ||
+        property(component, "X-CALENDARSERVER-ACCESS") ||
         property(calendar, "X-CALENDARSERVER-ACCESS")
 
     stated in ~w(PRIVATE CONFIDENTIAL RESTRICTED) and

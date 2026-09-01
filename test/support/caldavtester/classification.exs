@@ -75,7 +75,6 @@
   {"sharing-replies.xml", nil} => {:apple, "calendarserver-sharing extension"},
   {"sharing-unshare.xml", nil} => {:apple, "calendarserver-sharing extension"},
   {"implicitsharing.xml", nil} => {:apple, "scheduling inside shared calendars"},
-  {"implicitprivateevents.xml", nil} => {:apple, "X-CALENDARSERVER-ACCESS"},
   {"implicitpublicproperties.xml", nil} => {:apple, "X-CALENDARSERVER-ACCESS"},
   {"implicitxdash.xml", nil} => {:apple, "deployment X- property allowlist"},
   {"implicitimip.xml", nil} => {:apple, "iMIP bridging as CalendarServer wires it"},

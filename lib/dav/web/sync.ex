@@ -26,6 +26,7 @@ defmodule Dav.Web.Sync do
 
   @behaviour Dav.Web.Report
 
+  alias Dav.Web.Hook
   alias Dav.Web.Properties
   alias Dav.Web.Resource
   alias Dav.Web.Store
@@ -217,10 +218,12 @@ defmodule Dav.Web.Sync do
   # bodies that changed with a multiget.
   defp held(%Resource{collection?: true}, _wanted, _options), do: ""
 
-  defp held(%Resource{} = member, wanted, %{store: store, context: context} = _options) do
+  defp held(%Resource{} = member, wanted, %{store: store, context: context} = options) do
     if Enum.any?(wanted, &calendar_data?/1) and Store.supports?(store, :read) do
-      case store.read(member, context) do
-        {:ok, data} -> IO.iodata_to_binary(data)
+      with {:ok, data} <- store.read(member, context),
+           {:ok, body} <- Hook.disclosure(member, IO.iodata_to_binary(data), options) do
+        body
+      else
         _unreadable -> ""
       end
     else

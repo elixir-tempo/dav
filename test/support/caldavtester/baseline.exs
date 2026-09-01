@@ -110,7 +110,7 @@
   "prefer.xml" => 31,
   "pretest.xml" => 6,
   "privatecomments.xml" => 0,
-  "privateevents.xml" => 0,
+  "privateevents.xml" => 174,
   "propfind.xml" => 26,
   "proppatch.xml" => 8,
   "proxyauthz.xml" => 0,

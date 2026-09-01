@@ -29,6 +29,7 @@ defmodule Dav.Cal.Multiget do
 
   alias Dav.Cal
   alias Dav.Cal.Selection
+  alias Dav.Web.Hook
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -44,7 +45,10 @@ defmodule Dav.Cal.Multiget do
     with {:ok, document} <- Xml.parse(body),
          :ok <- Selection.supported(calendar_data(document)),
          :ok <- addressable(target, options) do
-      {:ok, Enum.map(hrefs(document), &answer(&1, target, requested(document), options))}
+      selection = Selection.from_element(calendar_data(document))
+
+      {:ok,
+       Enum.map(hrefs(document), &answer(&1, target, requested(document), selection, options))}
     end
   end
 
@@ -89,14 +93,17 @@ defmodule Dav.Cal.Multiget do
     end
   end
 
-  defp answer(href, target, wanted, options) do
+  defp answer(href, target, wanted, selection, options) do
     with {:ok, object} <- resolve(href, target, options),
          {:ok, data} <- read(object, options) do
-      Cal.report_response(object, wanted, data)
+      Cal.report_response(object, wanted, data, selection)
     else
       # Named and not found: the client is told about this href
       # specifically, rather than left to infer it from a short list.
       :error -> {href, {:status, "HTTP/1.1 404 Not Found"}}
+      # Named and withheld: a private event another user asked for by
+      # name is refused for that name alone, not dropped silently.
+      {:error, :forbidden} -> {href, {:status, "HTTP/1.1 403 Forbidden"}}
     end
   end
 
@@ -138,9 +145,10 @@ defmodule Dav.Cal.Multiget do
     end
   end
 
-  defp read(object, %{store: store, context: context}) do
+  defp read(object, %{store: store, context: context} = options) do
     if Store.supports?(store, :read) do
-      with {:ok, data} <- store.read(object, context), do: {:ok, IO.iodata_to_binary(data)}
+      with {:ok, data} <- store.read(object, context),
+           do: Hook.disclosure(object, IO.iodata_to_binary(data), options)
     else
       {:ok, ""}
     end

@@ -47,6 +47,7 @@ defmodule Dav.Cal.Query do
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Selection
   alias Dav.Cal.TimeRange
+  alias Dav.Web.Hook
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -320,9 +321,10 @@ defmodule Dav.Cal.Query do
     end
   end
 
-  defp read(object, %{store: store, context: context}) do
+  defp read(object, %{store: store, context: context} = options) do
     if Store.supports?(store, :read) do
-      with {:ok, data} <- store.read(object, context), do: {:ok, IO.iodata_to_binary(data)}
+      with {:ok, data} <- store.read(object, context),
+           do: Hook.disclosure(object, IO.iodata_to_binary(data), options)
     else
       :error
     end

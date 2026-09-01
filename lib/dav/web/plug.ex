@@ -29,6 +29,7 @@ defmodule Dav.Web.Plug do
   import Plug.Conn
 
   alias Dav.Cal
+  alias Dav.Web.Acl
   alias Dav.Web.Hook
   alias Dav.Web.Properties
   alias Dav.Web.Resource
@@ -306,13 +307,12 @@ defmodule Dav.Web.Plug do
   defp get(method, conn, options) do
     with :ok <- capable(options, :read),
          {:ok, resource} <- resolve(conn, options),
-         :ok <- readable(resource),
          :ok <- permitted(resource, options),
-         {:ok, body} <- options.store.read(resource, options.context) do
+         {:ok, type, body} <- retrieved(resource, options) do
       conn
       |> etag(resource)
       |> contributed_headers(resource, options)
-      |> put_resp_content_type(resource.content_type || "application/octet-stream")
+      |> put_resp_content_type(type)
       |> send_resp(200, if(method == "HEAD", do: "", else: body))
     else
       {:error, :unsupported} ->
@@ -332,8 +332,8 @@ defmodule Dav.Web.Plug do
       {:error, :forbidden} ->
         precondition(conn, {Xml.dav(), "need-privileges"})
 
-      # RFC 4918 leaves GET on a collection to the server. Refusing is
-      # honest; inventing a directory listing is a different product.
+      # RFC 4918 leaves GET on a collection to the server, and no
+      # extension offered a rendering for this one.
       {:error, :is_collection} ->
         send_resp(conn, 405, "")
     end
@@ -833,8 +833,22 @@ defmodule Dav.Web.Plug do
     if Store.supports?(store, capability), do: :ok, else: {:error, :unsupported}
   end
 
-  defp readable(%Resource{collection?: true}), do: {:error, :is_collection}
-  defp readable(%Resource{}), do: :ok
+  # RFC 4918 leaves GET on a collection to the server; an extension
+  # may render one — a calendar rolled up into a single object — and
+  # a collection nothing renders is refused.
+  defp retrieved(%Resource{collection?: true} = collection, options) do
+    case Hook.rendering(collection, options) do
+      {:ok, type, body} -> {:ok, type, body}
+      :skip -> {:error, :is_collection}
+    end
+  end
+
+  defp retrieved(resource, options) do
+    with {:ok, held} <- options.store.read(resource, options.context),
+         {:ok, body} <- Hook.disclosure(resource, IO.iodata_to_binary(held), options) do
+      {:ok, resource.content_type || "application/octet-stream", body}
+    end
+  end
 
   defp no_body(""), do: :ok
   defp no_body(_body), do: {:error, :body}
@@ -1437,19 +1451,29 @@ defmodule Dav.Web.Plug do
   end
 
   defp respond(conn, resources, request, options, prefer) do
-    responses =
-      Enum.map(
-        resources,
-        &response(
-          typed(&1, options),
-          request,
-          advertised(&1, options),
-          dead(&1, options),
-          options
-        )
-      )
+    responses = Enum.map(resources, &listed_response(&1, request, options))
 
     multistatus(conn, trimmed_missing(responses, prefer.minimal))
+  end
+
+  # A listing names every member, but a member an extension withholds
+  # — somebody else's private event — is named with a refusal rather
+  # than described. The target itself was already checked before the
+  # listing began.
+  defp listed_response(resource, request, options) do
+    case permitted(resource, options) do
+      :ok ->
+        response(
+          typed(resource, options),
+          request,
+          advertised(resource, options),
+          dead(resource, options),
+          options
+        )
+
+      {:error, :forbidden} ->
+        {Resource.href(resource), {:status, "HTTP/1.1 403 Forbidden"}}
+    end
   end
 
   # `DAV:supported-report-set` answers for the resource it is read on.
@@ -1647,7 +1671,15 @@ defmodule Dav.Web.Plug do
     end
   end
 
-  defp listed({stored, contributed}), do: Map.to_list(Map.merge(stored, contributed))
+  # A protected name in the dead store is an implementation's own
+  # record — the access list an `ACL` stored, say — and never a value
+  # `allprop` may hand out raw.
+  defp listed({stored, contributed}) do
+    stored
+    |> Map.reject(fn {qname, _value} -> Properties.protected?(qname) end)
+    |> Map.merge(contributed)
+    |> Map.to_list()
+  end
 
   # RFC 3744 section 5.5: reading `DAV:acl` takes the `read-acl`
   # privilege, which belongs to the owner and the administrators — a
@@ -1658,7 +1690,36 @@ defmodule Dav.Web.Plug do
       else: :error
   end
 
+  # `DAV:owner` names the person the resource belongs to. A principal
+  # is nobody's property, so it states none (the reference does the
+  # same); an object inside a calendar belongs to whoever the calendar
+  # does, whether or not the store said so on the object itself.
+  defp live(resource, {"DAV:", "owner"} = qname, options) do
+    cond do
+      Acl.principal?(resource) ->
+        :error
+
+      match?({:ok, _value}, Properties.fetch(resource, qname)) ->
+        Properties.fetch(resource, qname)
+
+      true ->
+        inherited_owner(resource, options)
+    end
+  end
+
   defp live(resource, qname, _options), do: Properties.fetch(resource, qname)
+
+  defp inherited_owner(%Resource{path: [_head | _tail] = path}, options) do
+    %{store: store, context: context} = options
+
+    case store.resolve(Enum.drop(path, -1), context) do
+      {:ok, %Resource{owner: owner}} when is_binary(owner) -> {:ok, {:hrefs, [owner]}}
+      {:ok, parent} -> inherited_owner(parent, options)
+      _missing -> :error
+    end
+  end
+
+  defp inherited_owner(_resource, _options), do: :error
 
   defp acl_readable?(%Resource{owner: owner}, options) when is_binary(owner) do
     caller = Map.get(options, :principal)

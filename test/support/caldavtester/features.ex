@@ -131,7 +131,11 @@ defmodule Dav.CalDAVTester.Features do
                 # Apple's extended free-busy, in `Dav.Cal.Outbox`: an
                 # asker holding a proxy grant gets the events, not
                 # only the times.
-                "extended-freebusy"
+                "extended-freebusy",
+                # Apple's private-events model plus RFC 3744's ACL
+                # method in its grant-only core, in `Dav.Web.Grant`
+                # and `Dav.Cal.Access`.
+                "private-events"
               ]
 
   @doc """

@@ -355,6 +355,111 @@ defmodule Dav.Web.Hook do
               options :: map()
             ) :: :ok | {:error, :forbidden} | {:error, :method_not_allowed}
 
+  @doc """
+  Present a resource's body to the caller.
+
+  Consulted wherever calendar data is handed out — `GET`, the
+  reports, synchronisation. An extension that keeps part of a body
+  from some readers filters it here, or refuses the read outright.
+
+  ### Arguments
+
+  * `resource` is the resolved resource.
+
+  * `body` is the stored body, possibly already filtered by an
+    earlier hook.
+
+  * `options` carries `:store`, `:context` and `:principal`.
+
+  ### Returns
+
+  * `{:ok, body}` — as given or filtered — or `{:error, :forbidden}`.
+
+  """
+  @callback disclosed(resource :: Resource.t(), body :: binary(), options :: map()) ::
+              {:ok, binary()} | {:error, :forbidden}
+
+  @doc """
+  Run every hook's `c:disclosed/3` over a body.
+
+  ### Arguments
+
+  * `resource` is the resolved resource.
+
+  * `body` is the stored body.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `{:ok, body}` after every hook had its say, or the first
+    `{:error, :forbidden}`.
+
+  """
+  @spec disclosure(Resource.t(), binary(), map()) :: {:ok, binary()} | {:error, :forbidden}
+  def disclosure(resource, body, options) do
+    options
+    |> Map.get(:hooks, [])
+    |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :disclosed, 3)))
+    |> Enum.reduce_while({:ok, body}, fn hook, {:ok, held} ->
+      case hook.disclosed(resource, held, options) do
+        {:ok, presented} -> {:cont, {:ok, presented}}
+        refusal -> {:halt, refusal}
+      end
+    end)
+  end
+
+  @doc """
+  Render a collection as a document of its own, for `GET`.
+
+  RFC 4918 leaves `GET` on a collection to the server. An extension
+  that can present one — a calendar rolled up into a single iCalendar
+  object, say — answers here; every other collection is refused with
+  `405` as before.
+
+  ### Arguments
+
+  * `collection` is the resolved collection.
+
+  * `options` carries `:store`, `:context` and `:principal`.
+
+  ### Returns
+
+  * `{:ok, content_type, body}`, or `:skip` when this hook does not
+    render this collection.
+
+  """
+  @callback rendered(collection :: Resource.t(), options :: map()) ::
+              {:ok, String.t(), binary()} | :skip
+
+  @doc """
+  The first rendering any hook offers for a collection.
+
+  ### Arguments
+
+  * `collection` is the resolved collection.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `{:ok, content_type, body}` from the first hook that renders it,
+    or `:skip`.
+
+  """
+  @spec rendering(Resource.t(), map()) :: {:ok, String.t(), binary()} | :skip
+  def rendering(collection, options) do
+    options
+    |> Map.get(:hooks, [])
+    |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :rendered, 2)))
+    |> Enum.find_value(:skip, fn hook ->
+      case hook.rendered(collection, options) do
+        {:ok, type, body} -> {:ok, type, body}
+        :skip -> nil
+      end
+    end)
+  end
+
   @optional_callbacks headers: 3,
                       deleted: 2,
                       properties: 3,
@@ -365,7 +470,9 @@ defmodule Dav.Web.Hook do
                       removable: 3,
                       inherited: 3,
                       readable: 2,
-                      creatable: 3
+                      creatable: 3,
+                      disclosed: 3,
+                      rendered: 2
 
   @doc """
   Ask every hook whether a client may create a resource at this path.

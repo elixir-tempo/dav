@@ -21,6 +21,7 @@ defmodule Dav.Cal.Delegation do
   alias Dav.Cal.Schedule
   alias Dav.Cal.Sharing
   alias Dav.Web.Acl
+  alias Dav.Web.Grant
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -309,8 +310,33 @@ defmodule Dav.Cal.Delegation do
       administrator?(caller, options) -> :ok
       proxy_of?(caller, owner, :read, options) -> :ok
       shared_to_caller?(resource, options) -> :ok
+      listed_with?(resource, caller, :read, options) -> :ok
       true -> {:error, :forbidden}
     end
+  end
+
+  # RFC 3744: what an `ACL` on the collection granted. Consulted on
+  # the resource's whole lineage, so a grant on the calendar covers
+  # its members.
+  defp listed_with?(%Resource{path: path}, caller, privilege, options) do
+    listed_path_with?(path, caller, privilege, options)
+  end
+
+  defp listed_path_with?(path, caller, privilege, %{store: store, context: context} = options) do
+    mine = identified(caller, options)
+
+    Enum.any?(lineage(path), fn ancestors ->
+      case store.resolve(ancestors, context) do
+        {:ok, %Resource{} = held} -> granted_to?(held, mine, privilege, options)
+        _absent -> false
+      end
+    end)
+  end
+
+  defp granted_to?(held, mine, privilege, options) do
+    Enum.any?(Grant.granted(held, options), fn {href, privileges} ->
+      identified(href, options) == mine and privilege in privileges
+    end)
   end
 
   @doc """
@@ -338,7 +364,8 @@ defmodule Dav.Cal.Delegation do
          caller when is_binary(caller) <- Map.get(options, :principal),
          %Resource{} = parent <- nearest(path, store, context),
          owner when is_binary(owner) <- home_owner(parent, options),
-         false <- authorized_writer?(caller, owner, options) do
+         false <- authorized_writer?(caller, owner, options),
+         false <- listed_path_with?(path, caller, :write, options) do
       {:error, :forbidden}
     else
       _permitted -> :ok
