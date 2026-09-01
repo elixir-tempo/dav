@@ -27,12 +27,8 @@
   {"implicitauto2.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
   {"implicitauto3.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
   {"implicitauto4.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
-  {"implicitauto5.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
-  {"implicitauto6.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
-  {"implicitauto7.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
   {"implicitauto9.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
   {"implicitauto10.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
-  {"implicitauto11.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
   {"implicitautopast.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
 
   # --- incidental: cannot pass as vendored -------------------------------

@@ -54,11 +54,11 @@ Against that declaration the suite puts **3,164 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 3,122 | 98.7% |
-| failed | 40 | 1.3% |
+| passed | 3,138 | 99.2% |
+| failed | 24 | 0.8% |
 | skipped | 2 | 0.1% |
 
-Every failure is classified and cited: none are against RFC-required behaviour. Twenty-eight are the open tail of the room auto-scheduling work — fine-detail differences from the reference server's answering modes, still being driven down — and the remaining fourteen (failed plus skipped) are expectations the vendored, archived fixtures cannot support on principle. Each has its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).
+Every failure is classified and cited: none are against RFC-required behaviour. Twelve are the open tail of the room auto-scheduling work — delivery-mark and version bookkeeping still being driven down — and the remaining fourteen (failed plus skipped) are expectations the vendored, archived fixtures cannot support on principle. Each has its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).
 
 Fourteen verifiers are ported — `statusCode`, `header`, `multistatusItems`, `propfindItems`, `propfindValues`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlDataMatch`, `xmlElementMatch`, `prepostcondition`, `freeBusy` and `postFreeBusy` — along with the suite's compound directives (`DELETEALL`, `GETNEW`, `WAITCOUNT`, `GETCONTAINS`) and the `grab` elements that carry a value from one response into a later request. A check the harness cannot make is reported skipped, never counted as a pass.
 
