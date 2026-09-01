@@ -75,6 +75,11 @@ defmodule Dav.CalDAVTester.Features do
                 # The extended query grammar: `test="anyof"` on
                 # `comp-filter` and `prop-filter`, in `Dav.Cal.Filter`.
                 "query-extended",
+                # RFC 5995, in `Dav.Web.Plug`: `POST` to a calendar's
+                # `DAV:add-member` URL stores a member the server names.
+                # Apple's managed attachments, in `Dav.Cal.Attachments`.
+                "managed-attachments",
+                "add-member",
                 "prefer",
                 "prefer-minimal",
                 "prefer-noroot",

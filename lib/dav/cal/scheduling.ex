@@ -366,7 +366,17 @@ defmodule Dav.Cal.Scheduling do
       default_calendar(resource, options) ++
       free_busy_set(resource, options) ++
       calendar_transparency(resource, options) ++
-      timezone_identifier(resource, options) ++ collection_tag(resource, options)
+      timezone_identifier(resource, options) ++
+      collection_tag(resource, options) ++ member_post(resource, options)
+  end
+
+  # RFC 5995: where a client may `POST` a new member without naming
+  # it. A calendar offers one; its home does not — collections are not
+  # created this way.
+  defp member_post(resource, _options) do
+    if Cal.calendar?(resource),
+      do: [{{Xml.dav(), "add-member"}, {:hrefs, [Resource.href(resource) <> ";add-member"]}}],
+      else: []
   end
 
   # `CS:getctag` — the collection change tag Apple's clients poll

@@ -705,7 +705,12 @@ defmodule Dav.CalDAVTester.Runner do
     bind(state, variable, calendar_value(conn.resp_body, name))
   end
 
-  defp grab({:calendar_parameter, _name, _variable}, _conn, _request, state), do: state
+  # `VEVENT/ATTACH/MANAGED-ID` names a parameter on a property inside
+  # a component — the managed-attachments suites carry ids between
+  # requests this way.
+  defp grab({:calendar_parameter, name, variable}, conn, _request, state) do
+    bind(state, variable, calendar_parameter(conn.resp_body, name))
+  end
 
   defp grab({:unsupported, _name, _variable}, _conn, _request, state), do: state
 
@@ -754,6 +759,18 @@ defmodule Dav.CalDAVTester.Runner do
   defp text_of(element), do: String.trim(element.text)
 
   defp clark({namespace, local}), do: "{" <> namespace <> "}" <> local
+
+  defp calendar_parameter(body, name) do
+    with [component, property, parameter] <- String.split(name || "", "/", parts: 3),
+         {:ok, calendar} <- ICalendar.parse(body),
+         found when not is_nil(found) <-
+           Enum.find(calendar.components, &(&1.name == component)),
+         %{parameters: parameters} <- Enum.find(found.properties, &(&1.name == property)) do
+      Map.get(parameters, parameter)
+    else
+      _absent -> nil
+    end
+  end
 
   # `VEVENT/SUMMARY` names a property inside a component.
   defp calendar_value(body, name) do
@@ -1387,12 +1404,12 @@ defmodule Dav.CalDAVTester.Runner do
       store: SchedulingStore,
       context: context,
       methods: [{"MKCALENDAR", Cal.Mkcalendar}, {"POST", Cal.Post}],
-      validators: [Cal.Object],
-      hooks: [Cal.Scheduling, Cal.Sharing],
+      validators: [Cal.Object, Cal.Attachments],
+      hooks: [Cal.Scheduling, Cal.Sharing, Cal.Attachments],
       authentication: :required,
       compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling
-           calendarserver-home-sync calendar-query-extended),
+           calendarserver-home-sync calendar-query-extended calendar-managed-attachments),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness

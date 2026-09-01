@@ -187,9 +187,14 @@ defmodule Dav.Web.Plug do
   end
 
   defp dispatch(method, conn, options) when method in ["GET", "POST"] do
-    case acted(conn, options) do
-      {:ok, conn} -> conn
-      :unhandled -> undirected(method, conn, options)
+    if method == "POST" and
+         List.last(Store.segments(conn.request_path)) == ";add-member" do
+      add_member(conn, options)
+    else
+      case acted(conn, options) do
+        {:ok, conn} -> conn
+        :unhandled -> undirected(method, conn, options)
+      end
     end
   end
 
@@ -221,6 +226,21 @@ defmodule Dav.Web.Plug do
     end
   end
 
+  # RFC 5995: a `POST` to a collection's `DAV:add-member` URL stores a
+  # new member without the client choosing its name — the server picks
+  # one and answers with `Location`. Everything else is a `PUT`: the
+  # same validation, the same hooks, the same preferences.
+  defp add_member(conn, options) do
+    parent = conn.request_path |> Store.segments() |> Enum.drop(-1)
+    name = "member-#{System.unique_integer([:positive])}.ics"
+    location = "/" <> Enum.map_join(parent ++ [name], "/", &URI.encode/1)
+
+    conn
+    |> Map.put(:request_path, location)
+    |> put_resp_header("location", location)
+    |> put(options)
+  end
+
   # What a `GET` or `POST` means when nothing claimed its `action`:
   # a `GET` is a read, and a `POST` belongs to whichever extension
   # registered for it.
@@ -245,6 +265,7 @@ defmodule Dav.Web.Plug do
     with :ok <- capable(options, :read),
          {:ok, resource} <- resolve(conn, options),
          :ok <- readable(resource),
+         :ok <- permitted(resource, options),
          {:ok, body} <- options.store.read(resource, options.context) do
       conn
       |> etag(resource)
@@ -252,12 +273,41 @@ defmodule Dav.Web.Plug do
       |> put_resp_content_type(resource.content_type || "application/octet-stream")
       |> send_resp(200, if(method == "HEAD", do: "", else: body))
     else
-      {:error, :unsupported} -> refuse(conn, options)
-      {:error, :not_found} -> send_resp(conn, 404, "")
+      {:error, :unsupported} ->
+        refuse(conn, options)
+
+      # An extension guarding an area answers for its misses too — a
+      # `404` inside somebody's private space confirms what is not
+      # there.
+      {:error, :not_found} ->
+        absent = %Resource{path: Store.segments(conn.request_path)}
+
+        case permitted(absent, options) do
+          :ok -> send_resp(conn, 404, "")
+          {:error, :forbidden} -> precondition(conn, {Xml.dav(), "need-privileges"})
+        end
+
+      {:error, :forbidden} ->
+        precondition(conn, {Xml.dav(), "need-privileges"})
+
       # RFC 4918 leaves GET on a collection to the server. Refusing is
       # honest; inventing a directory listing is a different product.
-      {:error, :is_collection} -> send_resp(conn, 405, "")
+      {:error, :is_collection} ->
+        send_resp(conn, 405, "")
     end
+  end
+
+  # An extension holding private material refuses the read here —
+  # attachments are the owner's alone.
+  defp permitted(resource, options) do
+    options.hooks
+    |> Enum.filter(&implements?(&1, :readable, 2))
+    |> Enum.find_value(:ok, fn hook ->
+      case hook.readable(resource, options) do
+        :ok -> nil
+        refusal -> refusal
+      end
+    end)
   end
 
   defp put(conn, options) do

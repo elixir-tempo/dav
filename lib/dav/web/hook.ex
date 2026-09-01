@@ -305,6 +305,27 @@ defmodule Dav.Web.Hook do
               options :: map()
             ) :: [{Dav.Xml.qname(), Dav.Xml.value()}]
 
+  @doc """
+  Whether a resource may be read at all.
+
+  Optional. Reading is open by default; an extension that keeps
+  private material — managed attachments live under their owner's
+  home — refuses everyone else here, and the server answers `403`.
+
+  ### Arguments
+
+  * `resource` is the resolved resource.
+
+  * `options` carries `:store`, `:context` and `:principal`.
+
+  ### Returns
+
+  * `:ok`, or `{:error, :forbidden}`.
+
+  """
+  @callback readable(resource :: Resource.t(), options :: map()) ::
+              :ok | {:error, :forbidden}
+
   @optional_callbacks headers: 3,
                       deleted: 2,
                       properties: 3,
@@ -313,7 +334,8 @@ defmodule Dav.Web.Hook do
                       patchable: 3,
                       relocated: 3,
                       removable: 3,
-                      inherited: 3
+                      inherited: 3,
+                      readable: 2
 
   @doc """
   React to a resource having been written.

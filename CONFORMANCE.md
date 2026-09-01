@@ -9,11 +9,11 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | Class | Failing | Meaning |
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
-| Apple/interop | 12 | the open tail of the room auto-scheduling work — see below |
+| Apple/interop | 64 | the room auto-scheduling tail plus the managed-attachments companion files — see below |
 | Incidental | 15 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 
-Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately: declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 12 still fail on fine detail — the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules across rounds, a few `SEQUENCE` propagation cases, and parts of the `accept-if-free` delegate flow in `implicitauto10`. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
+Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately, twice. Declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 12 still fail on fine detail — the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules across rounds, a few `SEQUENCE` propagation cases, and parts of the `accept-if-free` delegate flow in `implicitauto10`. Declaring `managed-attachments` brought the attachment files in (about 315 tests); the core and recurrence files pass in full and 52 remain across the three companion files — see the attachments model below. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
 
 ## How the drive was run
 
@@ -84,6 +84,22 @@ Two smaller features landed after the auto-scheduling drive, both full passes:
 * RFC 7240 `Prefer`, in `Dav.Web.Plug` (`prefer`, `prefer-minimal`, `prefer-noroot`, `prefer-representation` declared; `prefer.xml` 28/28). `return=minimal` trims the `404` propstats from `PROPFIND` and report answers and turns an all-successful `PROPPATCH` into a bare `200`; `depth-noroot` drops the target's own response from a `Depth: 1` listing; `return=representation` answers a `PUT` with what was actually stored — hooks' rewrites included — plus `Content-Location`, and a failed conditional write answers with the copy that won, sparing the client the `GET` either way.
 
 * The extended query grammar (`query-extended`, with `calendar-query-extended` advertised): `test="anyof"` on `comp-filter`/`prop-filter` in `Dav.Cal.Filter`, and `match-type` (`equals`, `starts-with`, `ends-with`, `contains`) on `text-match`. One `reports.xml` suite is cited incidental: its two verify variants assume either a single combined events-and-tasks calendar or the full `split-calendars` feature, and the harness's split layout without the splitting behaviour fits neither.
+
+## The attachments model
+
+Apple's managed attachments (`Dav.Cal.Attachments`, declaring `calendar-managed-attachments`), plus RFC 5995 `POST ;add-member` (`add-member` declared, `DAV:add-member` advertised on calendars, `add-member.xml` a full pass). The core file `managed-attachments.xml` and `managed-attachments-recurrence.xml` pass in full; the rules that took reading the fixtures to learn:
+
+* **A managed `ATTACH` property belongs to the server, not the client.** `POST ?action=attachment-add|update|remove` stores the file under the owner's `dropbox` and writes an `ATTACH;MANAGED-ID=...;FILENAME=...;FMTTYPE=...;SIZE=...` into the targeted components. On every later `PUT`, the canonical form is restored from the stored file — mangled parameters, a swapped URL, or a dropped `MANAGED-ID` on a value that names the home's own file are all corrected in place.
+
+* **Files are per-event copies, reference-counted by the event bodies.** Storage is `dropbox/<uid>/<filename>`, and the event bodies are the id register — an id is valid exactly while some event carries it. A `PUT` reusing an id another event in the home carries keeps the id but gets its own copy of the file under its own URL, so each reference lives and dies alone: an update elsewhere or a deleted event only takes a file with it when it held the last reference. Collection is a sweep after every write and delete.
+
+* **Somebody else's id is stripped, a made-up one is refused.** A `PUT` carrying a `MANAGED-ID` no event in the writer's home carries keeps the `ATTACH` as a plain URL — the parameter is deleted after storing — when the id is at least shaped like a real one; anything else is `CALDAV:valid-managed-id`. A `managed-id` parameter on `attachment-add` is `CALDAV:valid-managed-id-parameter`, and so is a `rid` — the reference attaches to the whole event, never to an instance. The sixth attachment is `CALDAV:max-attachments`.
+
+* **The attachment area answers `403`, not `404`.** A `GET` under someone else's `dropbox`, or for a path that is not there, is refused with `DAV:need-privileges` rather than confirming what exists — via the `readable/2` hook seam.
+
+* The three still-failing companion files are classified `:apple` and are the open queue: `managed-attachments-implicit.xml` (24 — attachments must propagate to attendee copies with `SEQUENCE` bumps, and attendees may read the organizer's files), `managed-attachments-sharing.xml` (18 — sharee operations store into the sharer's home), and `managed-attachments-dropbox.xml` (legacy dropbox write restrictions and the `dropbox-home-URL` principal property).
+
+* The harness's `grabcalparameter` grab was an unimplemented stub until this drive — `$managed_id1:` never bound, so every fixture that carried an id between requests either skipped or failed. If a suite family fails uniformly on "unresolved" variables, check the grab implementations before the server.
 
 ## The synchronisation model
 
