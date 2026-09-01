@@ -123,7 +123,11 @@ defmodule Dav.CalDAVTester.Features do
                 # Apple's `X-CALENDARSERVER-MASK-UID` on a free-busy
                 # `POST`, in `Dav.Cal.Outbox`: the event being
                 # rescheduled is left out of its own conflict check.
-                "maskuid"
+                "maskuid",
+                # Apple's calendar-user-proxy draft: per-principal
+                # read/write proxy groups, granted by PROPPATCHing
+                # `DAV:group-member-set`.
+                "proxy"
               ]
 
   @doc """

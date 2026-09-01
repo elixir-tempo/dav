@@ -47,6 +47,7 @@ defmodule Dav.Cal.Outbox do
   import Plug.Conn
 
   alias Dav.Cal
+  alias Dav.Cal.Delegation
   alias Dav.Cal.FreeBusy
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
@@ -73,6 +74,7 @@ defmodule Dav.Cal.Outbox do
   def call(conn, path, options) do
     with {:ok, resource} <- resolve(path, options),
          {:ok, kind} <- accepts(resource),
+         :ok <- caller_allowed(kind, resource, options),
          {:ok, body, conn} <- request_body(conn, options),
          :ok <- media_type(conn),
          :ok <- readable(body),
@@ -87,6 +89,9 @@ defmodule Dav.Cal.Outbox do
         send_resp(conn, 404, "")
 
       {:error, :not_outbox} ->
+        send_resp(conn, 403, "")
+
+      {:error, :forbidden} ->
         send_resp(conn, 403, "")
 
       {:error, {_namespace, _local} = failed} ->
@@ -231,6 +236,21 @@ defmodule Dav.Cal.Outbox do
   # A message arriving from another server names an organiser on that
   # server by definition, so there is nothing here to check it against.
   # Applying the Outbox rule would refuse every incoming invitation.
+  # The Outbox is its owner's mouth: only they, an administrator, or
+  # a holder of their write-proxy grant speak through it.
+  defp caller_allowed(:receiver, _outbox, _options), do: :ok
+
+  defp caller_allowed(:outbox, outbox, %{store: store, context: context} = options) do
+    with caller when is_binary(caller) <- Map.get(options, :principal),
+         {:ok, %Resource{owner: owner}} when is_binary(owner) <-
+           store.resolve(Enum.drop(outbox.path, -1), context),
+         false <- Delegation.authorized_writer?(caller, owner, options) do
+      {:error, caldav("organizer-allowed")}
+    else
+      _anonymous_deployment_or_permitted -> :ok
+    end
+  end
+
   defp organizer_allowed(:receiver, _component, _resource, _options), do: :ok
 
   defp organizer_allowed(:outbox, component, outbox, options) do

@@ -144,14 +144,16 @@ defmodule Dav.Web.PrincipalTest do
     end
   end
 
-  test "principal-match with DAV:self returns the principals", context do
+  # RFC 3744 section 9.3: `DAV:self` matches the principals that *are*
+  # the current user — and groups they belong to — not everyone here.
+  test "principal-match with DAV:self returns the caller's principals", context do
     body =
       ~s(<?xml version="1.0"?><D:principal-match xmlns:D="DAV:"><D:self/><D:prop><D:displayname/></D:prop></D:principal-match>)
 
     conn = report("/principals", body, context.options)
 
     assert conn.resp_body =~ "Kip Cole"
-    assert conn.resp_body =~ "Sam Jones"
+    refute conn.resp_body =~ "Sam Jones"
   end
 
   test "principal-search-property-set says what may be searched", context do

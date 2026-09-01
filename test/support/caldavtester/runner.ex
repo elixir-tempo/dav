@@ -591,12 +591,21 @@ defmodule Dav.CalDAVTester.Runner do
   # credentials fail for authenticated requests.
   defp principal_for(%{authenticate?: false}, _state), do: nil
 
+  # The admin is nobody's numbered account: matching them to the
+  # fallback would have every administrative request acting as the
+  # first user, which access control now tells apart.
   defp principal_for(request, state) do
-    index = account(request, state)
+    name = request.user && ServerInfo.expand(request.user, state.substitutions)
 
-    if correct?(request, index, state),
-      do: canonical_principal(index, state.substitutions),
-      else: nil
+    if is_binary(name) and name == state.substitutions["$useradmin:"] do
+      state.substitutions["$principaluri_admin:"]
+    else
+      index = account(request, state)
+
+      if correct?(request, index, state),
+        do: canonical_principal(index, state.substitutions),
+        else: nil
+    end
   end
 
   defp correct?(%{password: nil}, _index, _state), do: true
@@ -1076,10 +1085,13 @@ defmodule Dav.CalDAVTester.Runner do
         ancestry(room_principals(rooms, substitutions)) ++
         principals ++
         room_principals(rooms, substitutions) ++
-        proxies(principals) ++ receiver ++ group_principals(substitutions),
+        proxies(principals) ++
+        proxies(room_principals(rooms, substitutions)) ++
+        receiver ++ group_principals(substitutions),
       addresses,
       principal_properties(people, substitutions)
       |> Map.merge(group_properties(substitutions))
+      |> Map.merge(proxy_grants(rooms, substitutions))
       |> Map.merge(tasks_properties(homes)),
       canonical_addresses(people, substitutions),
       aliased_homes(people, substitutions),
@@ -1140,14 +1152,15 @@ defmodule Dav.CalDAVTester.Runner do
   # Apple's calendar-user-proxy draft: every principal has two child
   # principals standing for "may read my calendars" and "may write
   # them". A client grants access by PROPPATCHing `group-member-set`
-  # on one of them, so they have to exist before anything can.
+  # on one of them, so they have to exist before anything can. Each
+  # carries the draft's resource type beside `DAV:principal`.
   defp proxies(principals) do
     for principal <- principals,
         leaf <- ["calendar-proxy-read", "calendar-proxy-write"],
         do: %Resource{
           path: principal.path ++ [leaf],
           collection?: true,
-          types: [Acl.principal()],
+          types: [Acl.principal(), {"http://calendarserver.org/ns/", leaf}],
           owner: principal.owner
         }
   end
@@ -1180,17 +1193,40 @@ defmodule Dav.CalDAVTester.Runner do
         do: {address, home}
   end
 
+  # Like people, a room answers at both its named and its stable path,
+  # and `owner` carries the stable one so properties can say which is
+  # canonical.
   defp room_principals(rooms, substitutions) do
     for {index, _home} <- rooms,
-        path = substitutions["$rprincipal#{index}:"],
+        canonical = substitutions["$rprincipaluri#{index}:"],
+        path <- Enum.uniq([substitutions["$rprincipal#{index}:"], canonical]),
         is_binary(path),
         do: %Resource{
           path: segments(path),
           collection?: true,
           types: [Acl.principal()],
-          owner: path,
+          owner: canonical || path,
           display_name: substitutions["$resourcename#{index}:"]
         }
+  end
+
+  # The reference deployment's directory pre-grants each room's
+  # proxies: `user01` may write for it, `user03` may read — the
+  # `Location/Resource tracking` and delegate suites rely on both.
+  # Directory-provided, so the groups are locked against `PROPPATCH`.
+  defp proxy_grants(rooms, substitutions) do
+    writer = substitutions["$principaluri1:"]
+    reader = substitutions["$principaluri3:"]
+
+    for {index, _home} <- rooms,
+        canonical = substitutions["$rprincipaluri#{index}:"],
+        spelling <- Enum.uniq([substitutions["$rprincipal#{index}:"], canonical]),
+        is_binary(spelling),
+        {leaf, member} <- [{"calendar-proxy-write", writer}, {"calendar-proxy-read", reader}],
+        is_binary(member),
+        into: %{},
+        do:
+          {segments(spelling) ++ [leaf], %{{Xml.dav(), "group-member-set"} => {:hrefs, [member]}}}
   end
 
   # A home carries its owner's name. `CALDAV:calendar-user-address-set`
@@ -1215,11 +1251,17 @@ defmodule Dav.CalDAVTester.Runner do
     Map.merge(people, rooms)
   end
 
+  # Ancestors only — a bare collection at a principal's own path would
+  # sit earlier in the list than the principal, and `resolve/2` would
+  # find the placeholder.
   defp ancestry(principals) do
+    named = MapSet.new(principals, & &1.path)
+
     principals
     |> Enum.map(& &1.path)
     |> ancestors()
     |> Enum.uniq()
+    |> Enum.reject(&MapSet.member?(named, &1))
     |> Enum.map(&%Resource{path: &1, collection?: true})
   end
 
@@ -1436,12 +1478,14 @@ defmodule Dav.CalDAVTester.Runner do
       context: context,
       methods: [{"MKCALENDAR", Cal.Mkcalendar}, {"POST", Cal.Post}],
       validators: [Cal.Object, Cal.Attachments],
-      hooks: [Cal.Scheduling, Cal.Sharing, Cal.Attachments],
+      hooks: [Cal.Scheduling, Cal.Sharing, Cal.Attachments, Cal.Delegation],
       authentication: :required,
       well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],
+      administrators: [substitutions["$principaluri_admin:"]],
       compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling
-           calendarserver-home-sync calendar-query-extended calendar-managed-attachments),
+           calendarserver-home-sync calendar-query-extended calendar-managed-attachments
+           calendar-proxy),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness

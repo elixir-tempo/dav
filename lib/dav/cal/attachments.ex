@@ -82,6 +82,7 @@ defmodule Dav.Cal.Attachments do
   @impl Dav.Web.Hook
   def written(%{resource: %{collection?: false} = resource, body: body} = change, options)
       when is_binary(body) do
+    resource = %{resource | path: settled(resource.path, options)}
     home = Enum.drop(resource.path, -2)
 
     with {:ok, calendar} <- ICalendar.parse(body) do

@@ -95,6 +95,20 @@ RFC 6638 auto-scheduling for rooms and resources, in `Dav.Cal.Scheduling` with t
 
 * Later refinements, each measured against the whole corpus: per-occurrence answers restricted to components that name the room; all-day (date-valued) occurrences spelled correctly in derived overrides; `TRANSP` forced to match the answer on every processed component; a room's freshly declined booking written down where a stale refusal is not recreated; a copy a cancellation leaves empty — or holding nothing the room still accepts — deleted; the master's `SEQUENCE` following only when the room's own line was re-answered, an override's only when the client renumbered it; exclusion-cancellations delivered to whoever held the withdrawn instances. The open tail (12 tests, classified `:apple`): the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules, a few `SEQUENCE` cases, and parts of the delegate flow in `implicitauto10`. `implicitautomodes` and `implicitautogroup` stay excluded — they drive the deployment's mode switches through CalDAVTester's `control-api`, which the harness does not model.
 
+## The delegation model
+
+Apple's calendar-user-proxy extension, in `Dav.Cal.Delegation` (`proxy` declared, `calendar-proxy` in the `DAV` header). `calendaruserproxy.xml`, `implicitproxy.xml` and `sharing-proxies.xml` pass in full. This is also where access control arrived: the drive that landed it wired the first real read/write enforcement.
+
+* **Grants are `PROPPATCH`es of `DAV:group-member-set`** on a principal's `calendar-proxy-read` / `calendar-proxy-write` child. Members must be spelled canonically — an alias spelling is refused the way the reference refuses a name it cannot place — and a directory-provided group (a room's) is locked against editing. The event bodies of the grant records are inverted into `DAV:group-membership` and `CS:calendar-proxy-read-for`/`-write-for` on every principal, and `DAV:expand-property` follows hook-contributed properties like stored ones.
+
+* **Enforcement**: reading anything in a calendar home takes being its owner, an administrator (`:administrators` plug option), a proxy of either grant, or a sharee of a calendar on the path — consulted by `PROPFIND` and `GET` through the `readable/2` seam, answered `403` `DAV:need-privileges`. Writing (`PUT`/`MKCOL`/`MKCALENDAR`, via `creatable/3`) takes the write grant; so does speaking through the owner's Outbox, refused `CALDAV:organizer-allowed`. A write-proxy also passes the organizer-integrity checks (`theirs_to_change`, `removable`) as the owner.
+
+* **A proxy acts as the delegator.** Writes through a view attribute per-user data — alarms, transparency — to the view's home owner, not the caller, and `DAV:principal-match` `self` matches the caller's principal plus every group whose `group-member-set` names them (RFC 3744 section 9.3), one level into the principal tree so proxy groups are found.
+
+* **Per-proxy properties**: `calendar-color`/`calendar-order` written by a non-owner land in a per-principal overlay the owner never sees; `DAV:acl` answers only where `read-acl` would be granted — the owner and the administrators.
+
+* Two harness repairs mattered: the admin account (and room principals) resolved to the *first user* through the numbered-account fallback, invisible until access control told callers apart; and bare ancestry placeholders shadowed room-principal resources, so their `owner` never resolved canonically.
+
 ## Small features from the same drive
 
 * `CS:getctag` (`ctag` declared): already implemented as the sync token's twin; `ctag.xml` needed the harness's `propfindItems` to honour its `only` argument, and one Apple quirk — a `MOVE` whose source is gone and whose destination is taken answers `403` for the destination rather than `404` for the source.

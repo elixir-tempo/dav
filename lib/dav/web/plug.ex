@@ -97,7 +97,8 @@ defmodule Dav.Web.Plug do
       extensions: Keyword.get(options, :extensions),
       compliance: Keyword.get(options, :compliance, []),
       methods: Map.new(Keyword.get(options, :methods, [])),
-      well_known: Map.new(Keyword.get(options, :well_known, []))
+      well_known: Map.new(Keyword.get(options, :well_known, [])),
+      administrators: Keyword.get(options, :administrators, [])
     }
   end
 
@@ -849,6 +850,7 @@ defmodule Dav.Web.Plug do
     with {:ok, request} <- Xml.parse_propfind(body),
          {:ok, depth} <- finite(depth(conn, {:ok, :infinity})),
          {:ok, resource} <- resolve(conn, options),
+         :ok <- permitted(resource, options),
          :ok <- changed_since(conn, resource),
          {:ok, resources} <- gather(resource, depth, options) do
       prefer = preferences(conn)
@@ -864,6 +866,7 @@ defmodule Dav.Web.Plug do
       {:error, :bad_depth} -> send_resp(conn, 400, "")
       {:error, :depth_infinity} -> precondition(conn, {Xml.dav(), "propfind-finite-depth"})
       {:error, :not_found} -> absent(conn, options)
+      {:error, :forbidden} -> precondition(conn, {Xml.dav(), "need-privileges"})
       {:error, :not_modified} -> send_resp(conn, 304, "")
     end
   end
@@ -1437,7 +1440,13 @@ defmodule Dav.Web.Plug do
     responses =
       Enum.map(
         resources,
-        &response(typed(&1, options), request, advertised(&1, options), dead(&1, options))
+        &response(
+          typed(&1, options),
+          request,
+          advertised(&1, options),
+          dead(&1, options),
+          options
+        )
       )
 
     multistatus(conn, trimmed_missing(responses, prefer.minimal))
@@ -1574,7 +1583,7 @@ defmodule Dav.Web.Plug do
     |> Map.new()
   end
 
-  defp response(%Resource{} = resource, :allprop, reports, dead) do
+  defp response(%Resource{} = resource, :allprop, reports, dead, _options) do
     everything = Properties.all(resource) ++ [report_set(reports)] ++ listed(dead)
 
     {Resource.href(resource), [{"HTTP/1.1 200 OK", everything}]}
@@ -1582,7 +1591,7 @@ defmodule Dav.Web.Plug do
 
   # `propname` asks what exists, not what it is worth, so every value
   # is empty by design rather than by omission.
-  defp response(%Resource{} = resource, :propname, reports, dead) do
+  defp response(%Resource{} = resource, :propname, reports, dead, _options) do
     names =
       for {qname, _value} <- Properties.all(resource) ++ [report_set(reports)] ++ listed(dead),
           do: {qname, nil}
@@ -1593,10 +1602,10 @@ defmodule Dav.Web.Plug do
   # A request routinely asks for properties that partly exist, which is
   # why one response carries a propstat per status rather than one
   # status per response.
-  defp response(%Resource{} = resource, {:prop, names}, reports, dead) do
+  defp response(%Resource{} = resource, {:prop, names}, reports, dead, options) do
     {found, missing} =
       Enum.reduce(names, {[], []}, fn qname, {found, missing} ->
-        case fetch(resource, qname, reports, dead) do
+        case fetch(resource, qname, reports, dead, options) do
           {:ok, value} -> {found ++ [{qname, value}], missing}
           :error -> {found, missing ++ [{qname, nil}]}
         end
@@ -1609,7 +1618,7 @@ defmodule Dav.Web.Plug do
     {Resource.href(resource), propstats}
   end
 
-  defp fetch(_resource, {"DAV:", "supported-report-set"}, reports, _dead) do
+  defp fetch(_resource, {"DAV:", "supported-report-set"}, reports, _dead, _options) do
     {_qname, value} = report_set(reports)
     {:ok, value}
   end
@@ -1621,26 +1630,54 @@ defmodule Dav.Web.Plug do
   # it replaces the default the server would otherwise derive from the
   # path. Protected properties are the other way round — nothing a
   # client stored may shadow the server's own answer.
-  defp fetch(resource, qname, _reports, {stored, contributed}) do
+  defp fetch(resource, qname, _reports, {stored, contributed}, options) do
     case Map.fetch(contributed, qname) do
       {:ok, value} -> {:ok, value}
-      :error -> from_store(resource, qname, stored)
+      :error -> from_store(resource, qname, stored, options)
     end
   end
 
-  defp from_store(resource, qname, stored) do
+  defp from_store(resource, qname, stored, options) do
     case Map.fetch(stored, qname) do
       {:ok, value} ->
-        if Properties.protected?(qname), do: live(resource, qname), else: {:ok, value}
+        if Properties.protected?(qname), do: live(resource, qname, options), else: {:ok, value}
 
       :error ->
-        live(resource, qname)
+        live(resource, qname, options)
     end
   end
 
   defp listed({stored, contributed}), do: Map.to_list(Map.merge(stored, contributed))
 
-  defp live(resource, qname), do: Properties.fetch(resource, qname)
+  # RFC 3744 section 5.5: reading `DAV:acl` takes the `read-acl`
+  # privilege, which belongs to the owner and the administrators — a
+  # proxy sees the calendars, not who else may.
+  defp live(resource, {"DAV:", "acl"} = qname, options) do
+    if acl_readable?(resource, options),
+      do: Properties.fetch(resource, qname),
+      else: :error
+  end
+
+  defp live(resource, qname, _options), do: Properties.fetch(resource, qname)
+
+  defp acl_readable?(%Resource{owner: owner}, options) when is_binary(owner) do
+    caller = Map.get(options, :principal)
+
+    is_binary(caller) and
+      (canonical_principal_of(caller, options) == owner or
+         Enum.any?(Map.get(options, :administrators, []), fn admin ->
+           canonical_principal_of(admin, options) == canonical_principal_of(caller, options)
+         end))
+  end
+
+  defp acl_readable?(_resource, _options), do: true
+
+  defp canonical_principal_of(href, %{store: store, context: context}) do
+    case store.resolve(Store.segments(href), context) do
+      {:ok, %Resource{owner: owner}} when is_binary(owner) -> owner
+      _unknown -> href
+    end
+  end
 
   defp report_set(reports) do
     {{Xml.dav(), "supported-report-set"}, Xml.supported_report_set(reports)}

@@ -86,10 +86,16 @@ defmodule Dav.Web.Principal do
       with {:ok, document} <- Xml.parse(body) do
         wanted = Principal.requested(document)
 
+        # A principal's own sub-principals — its proxy groups — count
+        # among "the principals in the collection", one level down.
+        surface = Principal.members(collection, options)
+
+        nested = Enum.flat_map(surface, &Principal.sub_principals(&1, collection, options))
+
         {:ok,
-         collection
-         |> Principal.members(options)
-         |> Enum.filter(&Principal.mine?(&1, document))
+         (surface ++ nested)
+         |> Enum.uniq_by(& &1.path)
+         |> Enum.filter(&Principal.mine?(&1, document, options))
          |> Enum.map(&Principal.response(&1, wanted))}
       end
     end
@@ -235,22 +241,107 @@ defmodule Dav.Web.Principal do
 
   * `document` is the request, which may name the property to follow.
 
+  * `options` carries `:store`, `:context` and `:principal`.
+
   ### Returns
 
   * `true` when the resource is the user's own principal, or is owned
-    by them.
+    by them — their proxy groups included.
 
   ### Examples
 
       iex> {:ok, document} = Dav.Xml.parse(~s(<?xml version="1.0"?><D:principal-match xmlns:D="DAV:"><D:self/></D:principal-match>))
-      iex> Dav.Web.Principal.mine?(%Dav.Web.Resource{types: [Dav.Web.Acl.principal()]}, document)
+      iex> resource = %Dav.Web.Resource{path: ["principals", "me"], collection?: true, types: [Dav.Web.Acl.principal()]}
+      iex> Dav.Web.Principal.mine?(resource, document, %{principal: "/principals/me/"})
       true
 
   """
-  @spec mine?(Resource.t(), Xml.element()) :: boolean()
-  def mine?(resource, document) do
-    if find(document, "self"), do: Acl.principal?(resource), else: not is_nil(resource.owner)
+  @spec mine?(Resource.t(), Xml.element(), map()) :: boolean()
+  def mine?(resource, document, options) do
+    whose = canonical_caller(options)
+
+    if find(document, "self"),
+      do: Acl.principal?(resource) and matches_caller?(resource, whose, options),
+      else: held_by?(resource, whose, options)
   end
+
+  # RFC 3744 section 9.3: a principal matches the current user when it
+  # *is* them — and a group principal matches when they are one of its
+  # members.
+  defp matches_caller?(_resource, nil, _options), do: false
+
+  defp matches_caller?(%Resource{} = resource, whose, options) do
+    identity_of(resource) == whose or member_of?(resource, whose, options)
+  end
+
+  defp member_of?(%Resource{} = group, whose, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :properties),
+         %{} = properties <- store.properties(group, context),
+         {:hrefs, members} <- Map.get(properties, {Xml.dav(), "group-member-set"}) do
+      Enum.any?(members, &(canonical_of(&1, options) == whose))
+    else
+      _no_members -> false
+    end
+  end
+
+  defp member_of?(_group, _whose, _options), do: false
+
+  @doc """
+  The sub-principals of a collection member, for a principal walk.
+
+  ### Arguments
+
+  * `member` is the candidate, from the surface listing.
+
+  * `collection` is the walked collection itself, never descended.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * The member's own members when it is a principal, else `[]`.
+
+  """
+  @spec sub_principals(Resource.t(), Resource.t(), map()) :: [Resource.t()]
+  def sub_principals(member, collection, options) do
+    if member != collection and Acl.principal?(member),
+      do: tl(members(member, options)),
+      else: []
+  end
+
+  defp held_by?(_resource, nil, _options), do: false
+
+  defp held_by?(%Resource{} = resource, whose, options) do
+    identity_of(resource) == whose or
+      (is_binary(resource.owner) and canonical_of(resource.owner, options) == whose)
+  end
+
+  # `owner` says who a principal belongs to; for a sub-principal — a
+  # proxy group — that is its holder, not itself.
+  defp identity_of(%Resource{owner: owner, path: path}) when is_binary(owner) do
+    case List.last(path) do
+      leaf when leaf in ["calendar-proxy-read", "calendar-proxy-write"] -> owner <> leaf <> "/"
+      _self_owned -> owner
+    end
+  end
+
+  defp identity_of(%Resource{} = resource), do: Resource.href(resource)
+
+  defp canonical_caller(options) do
+    case Map.get(options, :principal) do
+      principal when is_binary(principal) -> canonical_of(principal, options)
+      _nobody -> nil
+    end
+  end
+
+  defp canonical_of(href, %{store: store, context: context}) do
+    case store.resolve(Store.segments(href), context) do
+      {:ok, %Resource{} = found} -> identity_of(found)
+      _unknown -> href
+    end
+  end
+
+  defp canonical_of(href, _options), do: href
 
   @doc """
   The property searches a `principal-property-search` asked for.
@@ -354,11 +445,30 @@ defmodule Dav.Web.Principal do
   # client that can read a group's members but not expand them is back
   # to the round trips `expand-property` exists to save.
   defp fetch(resource, name, options) do
-    case Properties.fetch(resource, name) do
-      {:ok, value} -> {:ok, value}
-      :error -> stored(resource, name, options)
+    with :error <- Properties.fetch(resource, name),
+         :error <- stored(resource, name, options) do
+      contributed(resource, name, options)
     end
   end
+
+  # What an extension computes — a principal's proxy memberships, say
+  # — expands like anything the store holds.
+  defp contributed(resource, name, %{store: store, context: context} = options) do
+    collection =
+      case store.resolve(Enum.drop(resource.path, -1), context) do
+        {:ok, parent} -> parent
+        _no_parent -> nil
+      end
+
+    options
+    |> Map.get(:hooks, [])
+    |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :properties, 3)))
+    |> Enum.flat_map(& &1.properties(resource, collection, options))
+    |> Map.new()
+    |> Map.fetch(name)
+  end
+
+  defp contributed(_resource, _name, _options), do: :error
 
   defp stored(resource, name, %{store: store, context: context}) do
     if Store.supports?(store, :properties) do

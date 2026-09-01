@@ -33,6 +33,7 @@ defmodule Dav.Cal.Object do
   @behaviour Dav.Web.Validator
 
   alias Dav.Cal
+  alias Dav.Cal.Delegation
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Scheduling
   alias Dav.Cal.Sharing
@@ -639,6 +640,7 @@ defmodule Dav.Cal.Object do
          %Resource{} = held <- collection,
          owner when is_binary(owner) <- held_owner(held, options),
          who when is_binary(who) and who != owner <- Map.get(options, :principal),
+         false <- Delegation.authorized_writer?(who, owner, options),
          false <- involved?(calendar, who, options),
          %{} = before <- stored(path, options),
          false <- shared_part(before, options) == shared_part(calendar, options) do

@@ -89,6 +89,51 @@ defmodule Dav.Test.WritableStore do
 
   defp dated(resource, _agent), do: resource
 
+  defp name_of_instruction({:set, name, _value}), do: name
+  defp name_of_instruction({:remove, name}), do: name
+
+  # The asker, when the thing patched is not their own — the owner's
+  # writes stay the shared default everyone else reads through.
+  defp foreign_asker(agent, path) do
+    with who when is_binary(who) <- asking(agent),
+         owner when is_binary(owner) <- owner_above(agent, path),
+         false <- owner == who do
+      who
+    else
+      _own_or_nobody -> nil
+    end
+  end
+
+  defp owner_above(agent, path) do
+    resources = Agent.get(pid(agent), & &1.resources)
+
+    Enum.find_value(length(path)..1//-1, fn depth ->
+      prefix = Enum.take(path, depth)
+      Enum.find_value(resources, &owner_at(&1, prefix))
+    end)
+  end
+
+  defp owner_at(%Resource{path: path, owner: owner}, path), do: owner
+  defp owner_at(_resource, _prefix), do: nil
+
+  defp patch_overlay(agent, path, instructions) do
+    who = asking(agent)
+
+    Agent.update(pid(agent), fn state ->
+      overlays = Map.get(state, :overlays, %{})
+      mine = overlays |> Map.get(who, %{}) |> Map.get(path, %{})
+
+      updated =
+        Enum.reduce(instructions, mine, fn
+          {:set, name, value}, acc -> Map.put(acc, name, value)
+          {:remove, name}, acc -> Map.delete(acc, name)
+        end)
+
+      held = overlays |> Map.get(who, %{}) |> Map.put(path, updated)
+      Map.put(state, :overlays, Map.put(overlays, who, held))
+    end)
+  end
+
   # A shared calendar is a view, not a copy. What sits in the
   # invitee's home is a link recording where the original lives, and a
   # resource addressed inside it is the sharer's resource seen from
@@ -178,8 +223,13 @@ defmodule Dav.Test.WritableStore do
     held = underlying(agent, path)
     shared = Agent.get(pid(agent), &Map.get(&1.bodies, held, ""))
 
-    {:ok, merged(shared, mine(agent, held))}
+    {:ok, merged(shared, mine(agent, held, acting_of(agent, path)))}
   end
+
+  # Whose view this is. A path in somebody's home shows their view of
+  # the thing — a proxy writing or reading through it acts as them,
+  # and the alarms land on the right person's phone.
+  defp acting_of(agent, path), do: owner_above(agent, path) || asking(agent)
 
   @impl Dav.Web.Store
   def put(path, body, content_type, agent) do
@@ -188,8 +238,14 @@ defmodule Dav.Test.WritableStore do
     if exists?(agent, Enum.drop(held, -1)) do
       {shared, personal} = divided(agent, held, body)
 
-      keep_personal(agent, held, personal)
-      store(agent, held, shared, content_type)
+      keep_personal(agent, held, personal, acting_of(agent, path))
+
+      # Answered at the path the caller wrote to: a later write derived
+      # from this one — a hook restating the body — lands on the same
+      # spelling, and so acts as the same person.
+      with {:ok, outcome, resource} <- store(agent, held, shared, content_type) do
+        {:ok, outcome, %{resource | path: path}}
+      end
     else
       {:error, :conflict}
     end
@@ -248,11 +304,9 @@ defmodule Dav.Test.WritableStore do
     end
   end
 
-  defp keep_personal(_agent, _held, nil), do: :ok
+  defp keep_personal(_agent, _held, nil, _who), do: :ok
 
-  defp keep_personal(agent, held, personal) do
-    who = asking(agent)
-
+  defp keep_personal(agent, held, personal, who) do
     Agent.update(pid(agent), fn state ->
       Map.update(
         state,
@@ -263,8 +317,8 @@ defmodule Dav.Test.WritableStore do
     end)
   end
 
-  defp mine(agent, held) do
-    case asking(agent) do
+  defp mine(agent, held, who) do
+    case who do
       nil -> nil
       who -> Agent.get(pid(agent), &(&1 |> Map.get(:personal, %{}) |> Map.get({held, who})))
     end
@@ -437,11 +491,28 @@ defmodule Dav.Test.WritableStore do
     Agent.get(pid(agent), &Enum.any?(&1.resources, fn r -> r.path == path end))
   end
 
+  # The properties Apple keeps per person even on a shared thing: a
+  # proxy's calendar colour is their own, layered over the owner's.
+  @per_user [
+    {"http://apple.com/ns/ical/", "calendar-color"},
+    {"http://apple.com/ns/ical/", "calendar-order"}
+  ]
+
   @impl Dav.Web.Store
   def properties(%Resource{path: path}, agent) do
     held = aliased(agent, path)
+    shared = Agent.get(pid(agent), &Map.get(&1.dead, held, %{}))
 
-    Agent.get(pid(agent), &Map.get(&1.dead, held, %{}))
+    case asking(agent) do
+      nil -> shared
+      who -> Map.merge(shared, overlay_for(agent, who, held))
+    end
+  end
+
+  defp overlay_for(agent, who, path) do
+    Agent.get(pid(agent), fn state ->
+      state |> Map.get(:overlays, %{}) |> Map.get(who, %{}) |> Map.get(path, %{})
+    end)
   end
 
   # Atomic by construction: the new map is computed in full and only
@@ -449,10 +520,19 @@ defmodule Dav.Test.WritableStore do
   @impl Dav.Web.Store
   def patch(%Resource{path: path}, instructions, agent) do
     path = aliased(agent, path)
+
+    {personal, common} =
+      case foreign_asker(agent, path) do
+        nil -> {[], instructions}
+        _who -> Enum.split_with(instructions, &(name_of_instruction(&1) in @per_user))
+      end
+
+    if personal != [], do: patch_overlay(agent, path, personal)
+
     current = Agent.get(pid(agent), &Map.get(&1.dead, path, %{}))
 
     updated =
-      Enum.reduce(instructions, current, fn
+      Enum.reduce(common, current, fn
         {:set, name, value}, acc -> Map.put(acc, name, value)
         {:remove, name}, acc -> Map.delete(acc, name)
       end)
@@ -515,7 +595,7 @@ defmodule Dav.Test.WritableStore do
         %{state | bodies: Map.put(state.bodies, target, IO.iodata_to_binary(shared))}
       end)
 
-      keep_personal(agent, target, personal_of(calendar))
+      keep_personal(agent, target, personal_of(calendar), asking(agent))
     end
 
     :ok

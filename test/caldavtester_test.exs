@@ -90,7 +90,7 @@ defmodule Dav.CalDAVTesterTest do
     # calendars and for the home.
     assert MapSet.member?(declared, "sync-report")
     assert MapSet.member?(declared, "sync-report-home")
-    assert MapSet.size(declared) < 30
+    assert MapSet.size(declared) < 35
     assert map_size(context.results) == 162
   end
 

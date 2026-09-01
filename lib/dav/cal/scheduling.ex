@@ -38,6 +38,7 @@ defmodule Dav.Cal.Scheduling do
   @behaviour Dav.Web.Hook
 
   alias Dav.Cal
+  alias Dav.Cal.Delegation
   alias Dav.Cal.FreeBusy
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
@@ -5848,6 +5849,7 @@ defmodule Dav.Cal.Scheduling do
          organizer when is_binary(organizer) <- organizer_of(components),
          owner when is_binary(owner) <- shared_from(collection, options) || collection.owner,
          who when is_binary(who) and who != owner <- Map.get(options, :principal),
+         false <- Delegation.authorized_writer?(who, owner, options),
          false <- involved_in?(components, who, options) do
       {:error, {Xml.dav(), "need-privileges"}}
     else

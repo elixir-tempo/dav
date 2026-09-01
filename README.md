@@ -34,11 +34,11 @@ HTTP                    RFC 9110/9111/9112
 * `calendar-query`, `calendar-multiget` and `free-busy-query` as `Dav.Web.Report`s.
 * `Dav.Cal.TimeRange` — the five-row overlap table of RFC 4791 section 9.9, with recurrence expanded through Tempo.
 
-`Dav.Cal.Scheduling` implements CalDAV scheduling — RFC 6638, which is Standards Track and **updates RFC 4791**, so it is a requirement rather than an extension. Storing an event with attendees delivers the invitations, an attendee's save replies to the organiser, cancellations and reschedules travel as iTIP messages, free-busy is answered from the Outbox, auto-managed rooms accept on arrival, and the `Schedule-Tag` weak-`ETag` ledger of section 3.2.10 governs conditional writes. `Dav.Cal.Sharing` implements Apple's calendar-sharing extension — invitations, notifications, per-sharee views and per-user data. `Dav.Cal.Attachments` implements Apple's managed attachments — files posted to an event and carried as server-owned `ATTACH` properties, reference-counted per event, delivered to attendees and shared with sharees; all five of the suite's attachment files pass in full. The behavioural record of how both were driven to conformance, model by model, is the [conformance record](https://hexdocs.pm/dav/conformance.html).
+`Dav.Cal.Scheduling` implements CalDAV scheduling — RFC 6638, which is Standards Track and **updates RFC 4791**, so it is a requirement rather than an extension. Storing an event with attendees delivers the invitations, an attendee's save replies to the organiser, cancellations and reschedules travel as iTIP messages, free-busy is answered from the Outbox, auto-managed rooms accept on arrival, and the `Schedule-Tag` weak-`ETag` ledger of section 3.2.10 governs conditional writes. `Dav.Cal.Sharing` implements Apple's calendar-sharing extension — invitations, notifications, per-sharee views and per-user data. `Dav.Cal.Delegation` implements Apple's calendar-user proxies — one person managing another's calendar — and the access control that makes the distinction mean something. `Dav.Cal.Attachments` implements Apple's managed attachments — files posted to an event and carried as server-owned `ATTACH` properties, reference-counted per event, delivered to attendees and shared with sharees; all five of the suite's attachment files pass in full. The behavioural record of how both were driven to conformance, model by model, is the [conformance record](https://hexdocs.pm/dav/conformance.html).
 
 `Dav.Web.Sync` implements collection synchronisation — RFC 6578. Calendars, the scheduling Inbox, notification collections and the calendar home all answer the `DAV:sync-collection` report and carry a `DAV:sync-token`, so a polling client fetches what changed rather than everything, and the home tells it which calendars to look in.
 
-Not built yet: `Dav.Card` and ACL enforcement (RFC 3744) beyond the principal reports.
+Not built yet: `Dav.Card` and the `ACL` method itself — though access control is now enforced: reading a calendar home takes being its owner, an administrator, a proxy or a sharee, and writing takes the write grant, via `Dav.Cal.Delegation`.
 
 ## Measured against the conformance suite
 
@@ -48,13 +48,13 @@ Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests 
 
 CalDAVTester gates 850 of its own blocks on `<require-feature>`, read against a `serverinfo.xml` describing *the server under test*. Apple's file declares 84 features because Apple's server implements 84; running this server against that list asks it thousands of questions it never claimed to answer, and a server is not non-conformant for lacking a feature it does not advertise.
 
-`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, `auto-accept`, `auto-accept-modes`, `query-extended`, the RFC 7240 `prefer` family, RFC 5995 `add-member`, `managed-attachments`, `ctag`, `well-known`, `brief`, `resource-id`, and `maskuid`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
+`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, `auto-accept`, `auto-accept-modes`, `query-extended`, the RFC 7240 `prefer` family, RFC 5995 `add-member`, `managed-attachments`, `ctag`, `well-known`, `brief`, `resource-id`, `maskuid`, and `proxy`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and it enlarges the denominator honestly rather than flattering the percentage.
 
-Against that declaration the suite puts **3,751 tests**, of which:
+Against that declaration the suite puts **3,883 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 3,730 | 99.4% |
+| passed | 3,862 | 99.5% |
 | failed | 19 | 0.5% |
 | skipped | 2 | 0.1% |
 
