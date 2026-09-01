@@ -38,7 +38,7 @@ HTTP                    RFC 9110/9111/9112
 
 `Dav.Web.Sync` implements collection synchronisation — RFC 6578. Calendars, the scheduling Inbox, notification collections and the calendar home all answer the `DAV:sync-collection` report and carry a `DAV:sync-token`, so a polling client fetches what changed rather than everything, and the home tells it which calendars to look in.
 
-Not built yet: `Dav.Card`. Access control is enforced — reading a calendar home takes being its owner, an administrator, a proxy, a sharee or an `ACL` grantee, and writing takes the write grant, via `Dav.Cal.Delegation` — and the `ACL` method itself is grant-only: `Dav.Web.Grant` accepts RFC 3744 grants of `DAV:read` and `DAV:write` and refuses everything else with the section 8.1 preconditions. `Dav.Cal.Access` adds Apple's private events: an `X-CALENDARSERVER-ACCESS` mark on an event governs what everyone but the owner sees, down to not existing at all.
+Not built yet: `Dav.Card`. Access control is enforced — reading a calendar home takes being its owner, an administrator, a proxy, a sharee or an `ACL` grantee, and writing takes the write grant, via `Dav.Cal.Delegation`. The `ACL` method (`Dav.Web.Grant`) takes RFC 3744 grants and denies of `DAV:read` and `DAV:write` for href principals and `DAV:authenticated`, first matching ace deciding, with a calendar's aces inherited by its objects; anything it cannot enforce is refused with the section 8.1 preconditions rather than stored. `Dav.Cal.Access` adds Apple's private events: an `X-CALENDARSERVER-ACCESS` mark on an event governs what everyone but the owner sees, down to not existing at all.
 
 ## Measured against the conformance suite
 
@@ -48,13 +48,13 @@ Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests 
 
 CalDAVTester gates 850 of its own blocks on `<require-feature>`, read against a `serverinfo.xml` describing *the server under test*. Apple's file declares 84 features because Apple's server implements 84; running this server against that list asks it thousands of questions it never claimed to answer, and a server is not non-conformant for lacking a feature it does not advertise.
 
-`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, `auto-accept`, `auto-accept-modes`, `query-extended`, the RFC 7240 `prefer` family, RFC 5995 `add-member`, `managed-attachments`, `ctag`, `well-known`, `brief`, `resource-id`, `maskuid`, `proxy`, `extended-freebusy`, and `private-events`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and each declaration enlarges the denominator rather than flattering the percentage.
+`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, `auto-accept`, `auto-accept-modes`, `query-extended`, the RFC 7240 `prefer` family, RFC 5995 `add-member`, `managed-attachments`, `ctag`, `well-known`, `brief`, `resource-id`, `maskuid`, `proxy`, `extended-freebusy`, `private-events`, and the `ACL Method`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and each declaration enlarges the denominator rather than flattering the percentage.
 
-Against that declaration the suite puts **4,073 tests**, of which:
+Against that declaration the suite puts **4,115 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 4,052 | 99.5% |
+| passed | 4,094 | 99.5% |
 | failed | 19 | 0.5% |
 | skipped | 2 | 0.1% |
 
@@ -64,7 +64,7 @@ Fourteen verifiers are ported — `statusCode`, `header`, `multistatusItems`, `p
 
 `xmlDataMatch` and `propfindItems`'s value comparison are the places the port is deliberately not literal. Upstream normalises both documents through ElementTree's serialiser and compares the strings; that output cannot be reproduced here, so the comparison is structural — names, attributes, text and sorted children. It is a stricter test of the same thing: two documents differing only in element order compare equal, and two differing in content do not.
 
-What remains is the finer points of iTIP (per-instance cancellation, partstat propagation), the rest of the sharing extension, and the deny half of the `ACL` method. The whole CalDAV suite regardless of declaration is 5,624 tests.
+What remains is the finer points of iTIP (per-instance cancellation, partstat propagation), the rest of the sharing extension, and per-object ACLs — access lists consulted object by object inside reports. The whole CalDAV suite regardless of declaration is 5,624 tests.
 
 ## On sharing
 

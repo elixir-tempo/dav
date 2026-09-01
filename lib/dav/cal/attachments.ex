@@ -557,7 +557,20 @@ defmodule Dav.Cal.Attachments do
   @impl Dav.Web.Hook
   @spec properties(Resource.t(), Resource.t() | nil, map()) :: [{Xml.qname(), Xml.value()}]
   def properties(resource, _collection, options) do
-    if Acl.principal?(resource), do: dropbox_home(resource, options), else: []
+    cond do
+      Acl.principal?(resource) -> dropbox_home(resource, options)
+      in_attachment_area?(resource) -> read_only_privileges()
+      true -> []
+    end
+  end
+
+  # The attachment store is server-owned: even its owner reads it
+  # without being able to write into it directly, and
+  # `DAV:current-user-privilege-set` says so.
+  defp in_attachment_area?(%Resource{path: path}), do: "dropbox" in path
+
+  defp read_only_privileges do
+    [{{Xml.dav(), "current-user-privilege-set"}, Acl.read_privilege_set()}]
   end
 
   defp dropbox_home(resource, %{store: store, context: context}) do

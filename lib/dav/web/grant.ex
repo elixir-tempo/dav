@@ -1,19 +1,22 @@
 defmodule Dav.Web.Grant do
   @moduledoc """
-  The `ACL` method — RFC 3744 section 8.1, the grant-only core.
+  The `ACL` method — RFC 3744 section 8.1.
 
   A client sends a `DAV:acl` naming principals and the privileges each
-  is granted; the server stores them, and the read and write
-  enforcement honours them from then on. What is implemented is what
-  clients actually send when they share by access list: `DAV:grant`
-  aces naming a principal by `DAV:href` with `DAV:read` and
-  `DAV:write` privileges. A `DAV:deny` ace, an abstract principal, or
-  a privilege outside that pair is refused rather than stored and
-  quietly ignored — a client must not believe a restriction took hold
-  when it did not.
+  is granted or denied; the server stores the list in order, and the
+  read and write enforcement honours it from then on — the first ace
+  matching a principal and privilege decides. A principal is named by
+  `DAV:href` or is `DAV:authenticated` (anyone logged in); the
+  privileges are `DAV:read` and `DAV:write` plus the read-side leaves
+  a grant of them implies. Anything else — an abstract principal the
+  server cannot place, a privilege it does not enforce — is refused
+  rather than stored and quietly ignored: a client must not believe a
+  restriction took hold when it did not.
 
   Only the resource's owner or an administrator may change its access
-  list.
+  list, and a calendar home does not take one at all — the home's
+  access is the deployment's policy, answered `405` as the reference
+  answers it.
 
   """
 
@@ -50,6 +53,7 @@ defmodule Dav.Web.Grant do
 
     with :ok <- supported(store),
          {:ok, resource} <- resolve(path, options),
+         :ok <- settable_target(resource, options),
          :ok <- settable_by_caller(resource, options),
          {:ok, aces} <- parsed(body),
          :ok <- store.patch(resource, [{:set, {Xml.dav(), "acl"}, stored(aces)}], context) do
@@ -64,7 +68,7 @@ defmodule Dav.Web.Grant do
   end
 
   @doc """
-  The access list stored on a resource, as `{principal, privileges}`.
+  The access list stored on a resource, in ace order.
 
   ### Arguments
 
@@ -74,12 +78,16 @@ defmodule Dav.Web.Grant do
 
   ### Returns
 
-  * A list of `{href, [:read | :write]}` pairs, empty when no list
-    was ever stored.
+  * A list of `{kind, principal, privileges}` entries — `kind` is
+    `:grant` or `:deny`, `principal` is `{:href, url}` or
+    `:authenticated`, `privileges` are the privilege names as sent.
+    Empty when no list was ever stored.
 
   """
-  @spec granted(Resource.t(), map()) :: [{String.t(), [:read | :write]}]
-  def granted(%Resource{} = resource, %{store: store, context: context}) do
+  @spec entries(Resource.t(), map()) :: [
+          {:grant | :deny, {:href, String.t()} | :authenticated, [String.t()]}
+        ]
+  def entries(%Resource{} = resource, %{store: store, context: context}) do
     with true <- Store.supports?(store, :properties),
          %{} = properties <- store.properties(resource, context),
          stored when is_binary(stored) <- Map.get(properties, {Xml.dav(), "acl"}),
@@ -93,6 +101,23 @@ defmodule Dav.Web.Grant do
   defp supported(store) do
     if Store.supports?(store, :patch), do: :ok, else: {:error, :unsupported}
   end
+
+  # A calendar home takes no access list of its own — its access is
+  # the deployment's policy, and the reference answers `405` there. A
+  # home is the owned collection sitting directly under an unowned
+  # container.
+  defp settable_target(
+         %Resource{owner: owner, collection?: true, path: [_head | _tail] = path},
+         %{store: store, context: context}
+       )
+       when is_binary(owner) do
+    case store.resolve(Enum.drop(path, -1), context) do
+      {:ok, %Resource{owner: parent_owner}} when is_binary(parent_owner) -> :ok
+      _unowned_container -> {:error, :unsupported}
+    end
+  end
+
+  defp settable_target(%Resource{}, _options), do: :ok
 
   defp resolve(path, %{store: store, context: context}) do
     store.resolve(path, context)
@@ -134,65 +159,70 @@ defmodule Dav.Web.Grant do
     end)
   end
 
+  @supported_privileges ~w(read write read-acl read-current-user-privilege-set read-free-busy)
+
   defp one(ace) do
     principal = ace.children |> Enum.find(&named?(&1, "principal"))
-    grant = ace.children |> Enum.find(&named?(&1, "grant"))
-    deny = ace.children |> Enum.find(&named?(&1, "deny"))
+    side = Enum.find(ace.children, &(named?(&1, "grant") or named?(&1, "deny")))
 
-    with false <- deny != nil,
-         %{} <- grant,
-         href when is_binary(href) <- href_of(principal),
-         {:ok, privileges} <- privileges_of(grant) do
-      {:ok, {href, privileges}}
+    with %{name: {_namespace, kind}} <- side,
+         {:ok, who} <- principal_of(principal),
+         {:ok, privileges} <- privileges_of(side) do
+      {:ok, {String.to_existing_atom(kind), who, privileges}}
     else
-      true -> {:error, {Xml.dav(), "grant-only"}}
-      _unusable -> {:error, {Xml.dav(), "recognized-principal"}}
+      nil -> {:error, {Xml.dav(), "recognized-principal"}}
+      refusal -> refusal
     end
   end
 
-  defp href_of(nil), do: nil
+  defp principal_of(nil), do: {:error, {Xml.dav(), "recognized-principal"}}
 
-  defp href_of(principal) do
-    case Enum.find(principal.children, &named?(&1, "href")) do
-      nil -> nil
-      element -> String.trim(element.text)
+  defp principal_of(principal) do
+    href = Enum.find(principal.children, &named?(&1, "href"))
+
+    cond do
+      is_map(href) -> {:ok, {:href, String.trim(href.text)}}
+      Enum.any?(principal.children, &named?(&1, "authenticated")) -> {:ok, :authenticated}
+      true -> {:error, {Xml.dav(), "recognized-principal"}}
     end
   end
 
-  defp privileges_of(grant) do
+  defp privileges_of(side) do
     named =
-      for privilege <- grant.children,
+      for privilege <- side.children,
           named?(privilege, "privilege"),
           %{name: {_namespace, local}} <- privilege.children,
           do: local
 
-    if Enum.all?(named, &(&1 in ["read", "write"])),
-      do: {:ok, Enum.map(named, &String.to_existing_atom/1)},
+    if Enum.all?(named, &(&1 in @supported_privileges)),
+      do: {:ok, named},
       else: {:error, {Xml.dav(), "not-supported-privilege"}}
   end
 
-  # One line per ace, privilege names joined — plain text a later read
-  # takes apart without another grammar.
+  # One line per ace, in ace order — plain text a later read takes
+  # apart without another grammar. `@authenticated` stands for the
+  # abstract principal; an href never starts with `@`.
   defp stored(aces) do
-    Enum.map_join(aces, "\n", fn {href, privileges} ->
-      href <> " " <> Enum.map_join(privileges, ",", &Atom.to_string/1)
+    Enum.map_join(aces, "\n", fn {kind, who, privileges} ->
+      Enum.join([Atom.to_string(kind), spelled(who), Enum.join(privileges, ",")], " ")
     end)
   end
+
+  defp spelled(:authenticated), do: "@authenticated"
+  defp spelled({:href, href}), do: href
 
   defp decoded(stored) do
     entries =
       for line <- String.split(stored, "\n", trim: true),
-          [href, privileges] <- [String.split(line, " ", parts: 2)],
-          do:
-            {href,
-             for(
-               p <- String.split(privileges, ","),
-               p in ~w(read write),
-               do: String.to_existing_atom(p)
-             )}
+          [kind, who, privileges] <- [String.split(line, " ", parts: 3)],
+          kind in ~w(grant deny),
+          do: {String.to_existing_atom(kind), addressed(who), String.split(privileges, ",")}
 
     {:ok, entries}
   end
+
+  defp addressed("@authenticated"), do: :authenticated
+  defp addressed(href), do: {:href, href}
 
   defp forbidden(conn, {namespace, local}) do
     conn

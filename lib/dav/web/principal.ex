@@ -444,11 +444,27 @@ defmodule Dav.Web.Principal do
   # are the store's to answer rather than the resource struct's, and a
   # client that can read a group's members but not expand them is back
   # to the round trips `expand-property` exists to save.
+  # The same precedence `PROPFIND` applies: a stored value wins for
+  # any property a client may set — a proxy group's
+  # `DAV:group-member-set` — while a protected name is the server's
+  # own answer, never shadowed by the store.
   defp fetch(resource, name, options) do
-    with :error <- Properties.fetch(resource, name),
-         :error <- stored(resource, name, options) do
+    with :error <- primary(resource, name, options),
+         :error <- secondary(resource, name, options) do
       contributed(resource, name, options)
     end
+  end
+
+  defp primary(resource, name, options) do
+    if Properties.protected?(name),
+      do: Properties.fetch(resource, name),
+      else: stored(resource, name, options)
+  end
+
+  defp secondary(resource, name, options) do
+    if Properties.protected?(name),
+      do: stored(resource, name, options),
+      else: Properties.fetch(resource, name)
   end
 
   # What an extension computes — a principal's proxy memberships, say

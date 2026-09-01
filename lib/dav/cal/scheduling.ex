@@ -43,6 +43,7 @@ defmodule Dav.Cal.Scheduling do
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
   alias Dav.Cal.TimeRange
+  alias Dav.Web.Acl
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -368,7 +369,22 @@ defmodule Dav.Cal.Scheduling do
       free_busy_set(resource, options) ++
       calendar_transparency(resource, options) ++
       timezone_identifier(resource, options) ++
-      collection_tag(resource, options) ++ member_post(resource, options)
+      collection_tag(resource, options) ++
+      member_post(resource, options) ++ scheduling_privileges(resource)
+  end
+
+  # RFC 6638 section 6: the Inbox holds `CALDAV:schedule-deliver`, the
+  # Outbox `CALDAV:schedule-send` — the suite reads them back as the
+  # aggregate `CALDAV:schedule` alongside the ordinary privileges, and
+  # an ordinary calendar must not show it.
+  defp scheduling_privileges(resource) do
+    if Schedule.inbox?(resource) or Schedule.outbox?(resource) do
+      set = Acl.current_user_privilege_set([{:caldav, "schedule"}])
+
+      [{{Xml.dav(), "current-user-privilege-set"}, set}]
+    else
+      []
+    end
   end
 
   # RFC 5995: where a client may `POST` a new member without naming

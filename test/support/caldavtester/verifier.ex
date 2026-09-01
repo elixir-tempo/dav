@@ -122,6 +122,16 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
+  # Upstream's `aclItems`: every `DAV:response` in the multistatus
+  # must show, inside its `DAV:current-user-privilege-set`, all the
+  # privileges named `granted` and none named `denied`.
+  def run(%Verify{callback: "aclItems", args: args}, conn, _substitutions) do
+    with :ok <- expect_status(conn, 207),
+         {:ok, document} <- document(conn) do
+      privilege_items(document, Map.get(args, "granted", []), Map.get(args, "denied", []))
+    end
+  end
+
   def run(%Verify{callback: "freeBusy", args: args}, conn, _substitutions) do
     with :ok <- expect_status(conn, 200),
          {:ok, periods} <- free_busy(conn.resp_body) do
@@ -206,6 +216,40 @@ defmodule Dav.CalDAVTester.Verifier do
   # The body is quoted in the failure because "not valid XML" on its
   # own hides the usual cause, which is a body that is empty or is not
   # XML at all rather than one that is malformed.
+  defp named?(%{name: {_namespace, local}}, local), do: true
+  defp named?(_element, _local), do: false
+
+  defp privilege_items(document, granted, denied) do
+    document.children
+    |> Enum.filter(&named?(&1, "response"))
+    |> Enum.map(fn response ->
+      held = MapSet.new(held_privileges(response))
+      missing = Enum.reject(granted, &MapSet.member?(held, &1))
+      present = Enum.filter(denied, &MapSet.member?(held, &1))
+      {missing, present}
+    end)
+    |> Enum.reject(&(&1 == {[], []}))
+    |> case do
+      [] ->
+        :passed
+
+      [{missing, present} | _rest] ->
+        {:failed,
+         "privileges missing: #{inspect(missing)}; privileges that should be denied: #{inspect(present)}"}
+    end
+  end
+
+  defp held_privileges(element) do
+    if named?(element, "current-user-privilege-set") do
+      for privilege <- element.children,
+          named?(privilege, "privilege"),
+          %{name: {namespace, local}} <- privilege.children,
+          do: "{#{namespace}}#{local}"
+    else
+      Enum.flat_map(element.children, &held_privileges/1)
+    end
+  end
+
   defp document(conn) do
     case Xml.parse(conn.resp_body) do
       {:ok, document} -> {:ok, document}

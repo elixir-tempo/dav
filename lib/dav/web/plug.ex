@@ -67,6 +67,11 @@ defmodule Dav.Web.Plug do
     clients, so a deployment states it; the default carries only
     `X-APPLE-STRUCTURED-LOCATION`.
 
+  * `:principals` lists the hrefs of the collections that hold this
+    deployment's principals, reported as RFC 3744's
+    `DAV:principal-collection-set` on every resource. Empty by
+    default, and the property is simply absent then.
+
   * `:reports`, `:validators`, `:hooks` and `:methods` are the four
     extension points, each a list the request dispatches through.
 
@@ -99,7 +104,8 @@ defmodule Dav.Web.Plug do
       compliance: Keyword.get(options, :compliance, []),
       methods: Map.new(Keyword.get(options, :methods, [])),
       well_known: Map.new(Keyword.get(options, :well_known, [])),
-      administrators: Keyword.get(options, :administrators, [])
+      administrators: Keyword.get(options, :administrators, []),
+      principals: Keyword.get(options, :principals, [])
     }
   end
 
@@ -1118,6 +1124,7 @@ defmodule Dav.Web.Plug do
          :ok <- entity_tag_matches(conn, source.path, options),
          :ok <- schedule_tag_matches(conn, source.path, options),
          :ok <- distinct(source, destination),
+         :ok <- within_owner(source, destination, options),
          {:ok, replacing?} <- overwritable(conn, destination, options),
          :ok <- parent_of(destination, options),
          :ok <- validate_transfer(kind, source, destination, options),
@@ -1138,11 +1145,34 @@ defmodule Dav.Web.Plug do
       {:error, :schedule_tag} -> send_resp(conn, 412, "")
       {:error, :not_found} -> missing_source(conn, kind, options)
       {:error, :same} -> send_resp(conn, 403, "")
+      {:error, :foreign} -> send_resp(conn, 403, "")
       {:error, :would_overwrite} -> send_resp(conn, 412, "")
       {:error, :no_parent} -> send_resp(conn, 409, "")
       {:error, :other_server} -> send_resp(conn, 502, "")
       {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
     end
+  end
+
+  # A resource travels within its owner's tree. Relocating one into
+  # somebody else's home — a grant notwithstanding — is how the
+  # reference treats it: refused outright, before overwrite or parent
+  # checks get a say. The homes are compared by name rather than
+  # through links, so a sharee writing through the view in their own
+  # home stays in their own home.
+  defp within_owner(source, destination, options) do
+    if home_owner(source.path, options) == home_owner(destination, options),
+      do: :ok,
+      else: {:error, :foreign}
+  end
+
+  defp home_owner(path, options) do
+    for(n <- 1..length(path)//1, do: Enum.take(path, n))
+    |> Enum.find_value(fn prefix ->
+      case resolved(prefix, options) do
+        %Resource{owner: owner} when is_binary(owner) -> owner
+        _unowned -> nil
+      end
+    end)
   end
 
   # A `MOVE` whose source is gone and whose destination is taken is
@@ -1554,10 +1584,18 @@ defmodule Dav.Web.Plug do
     collection = parent(resource.path, options)
 
     current_user(options)
+    |> Map.merge(principal_collections(options))
     |> Map.merge(hook_properties(resource, collection, options))
     |> Map.merge(synced(resource, options))
     |> Map.merge(identified(resource, options))
   end
+
+  # RFC 3744 section 5.8: where the principals live, stated on every
+  # resource so a client can find them from anywhere.
+  defp principal_collections(%{principals: [_head | _tail] = collections}),
+    do: %{{Xml.dav(), "principal-collection-set"} => {:hrefs, collections}}
+
+  defp principal_collections(_options), do: %{}
 
   # RFC 5842: the identity that names the resource itself, wherever
   # it is bound — only where the store can promise one.
@@ -1725,13 +1763,24 @@ defmodule Dav.Web.Plug do
     caller = Map.get(options, :principal)
 
     is_binary(caller) and
-      (canonical_principal_of(caller, options) == owner or
-         Enum.any?(Map.get(options, :administrators, []), fn admin ->
-           canonical_principal_of(admin, options) == canonical_principal_of(caller, options)
-         end))
+      (canonical_principal_of(caller, options) == owner or administrator?(caller, options))
   end
 
-  defp acl_readable?(_resource, _options), do: true
+  # An unowned resource's list is the deployment's policy, and only
+  # the administrators read policy. A deployment with no
+  # authentication has every caller as the owner, so `nil` reads.
+  defp acl_readable?(%Resource{}, options) do
+    case Map.get(options, :principal) do
+      nil -> true
+      caller -> administrator?(caller, options)
+    end
+  end
+
+  defp administrator?(caller, options) do
+    Enum.any?(Map.get(options, :administrators, []), fn admin ->
+      canonical_principal_of(admin, options) == canonical_principal_of(caller, options)
+    end)
+  end
 
   defp canonical_principal_of(href, %{store: store, context: context}) do
     case store.resolve(Store.segments(href), context) do

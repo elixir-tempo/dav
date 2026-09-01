@@ -2,7 +2,7 @@
 # `Dav.CalDAVTester.Runner`. Regenerate with `mix run priv/baseline.exs`
 # after a change that legitimately improves or reduces coverage.
 %{
-  "acl.xml" => 0,
+  "acl.xml" => 42,
   "aclreports.xml" => 2,
   "add-member.xml" => 4,
   "alarm-dismissal.xml" => 9,

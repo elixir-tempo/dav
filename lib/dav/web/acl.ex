@@ -33,14 +33,29 @@ defmodule Dav.Web.Acl do
 
   # The privilege tree of RFC 3744 section 3. `DAV:all` is the root and
   # aggregates everything; the leaves are what an ACE actually grants.
+  # `CALDAV:read-free-busy` is RFC 4791 section 6.1: contained in
+  # `DAV:read`, and the one privilege the suite reads back after an
+  # `ACL` grant of `DAV:read`.
   @tree {"all",
          [
-           {"read", [{"read-acl", []}, {"read-current-user-privilege-set", []}]},
+           {"read",
+            [
+              {"read-acl", []},
+              {"read-current-user-privilege-set", []},
+              {{:caldav, "read-free-busy"}, []}
+            ]},
            {"write",
             [{"write-properties", []}, {"write-content", []}, {"bind", []}, {"unbind", []}]},
            {"write-acl", []},
            {"unlock", []}
          ]}
+
+  @read_tree {"read",
+              [
+                {"read-acl", []},
+                {"read-current-user-privilege-set", []},
+                {{:caldav, "read-free-busy"}, []}
+              ]}
 
   @doc """
   The resource type of a principal.
@@ -96,25 +111,26 @@ defmodule Dav.Web.Acl do
 
       iex> {:elements, namespaces, _inner} = Dav.Web.Acl.supported_privilege_set()
       iex> namespaces
-      ["DAV:"]
+      ["DAV:", "urn:ietf:params:xml:ns:caldav"]
 
   """
   @spec supported_privilege_set() :: Xml.value()
-  def supported_privilege_set, do: {:elements, [Xml.dav()], supported(@tree)}
+  def supported_privilege_set, do: {:elements, [Xml.dav(), Xml.caldav()], supported(@tree)}
 
   defp supported({name, children}) do
     [
       "<D:supported-privilege>",
-      "<D:privilege><D:",
-      name,
-      "/></D:privilege>",
+      privilege(name),
       "<D:description>",
-      name,
+      described(name),
       "</D:description>",
       Enum.map(children, &supported/1),
       "</D:supported-privilege>"
     ]
   end
+
+  defp described({:caldav, name}), do: name
+  defp described(name), do: name
 
   @doc """
   What the current user may do here.
@@ -131,8 +147,53 @@ defmodule Dav.Web.Acl do
 
   """
   @spec current_user_privilege_set() :: Xml.value()
-  def current_user_privilege_set do
-    {:elements, [Xml.dav()], Enum.map(granted(), &privilege/1)}
+  def current_user_privilege_set, do: current_user_privilege_set([])
+
+  @doc """
+  The full privilege set with extras a context adds.
+
+  ### Arguments
+
+  * `additional` lists extra privileges — a bare name for `DAV:`, or
+    `{:caldav, name}` — a scheduling Inbox adds `CALDAV:schedule`.
+
+  ### Returns
+
+  * A `t:Dav.Xml.value/0`.
+
+  ### Examples
+
+      iex> {:elements, _namespaces, inner} = Dav.Web.Acl.current_user_privilege_set([{:caldav, "schedule"}])
+      iex> IO.iodata_to_binary(inner) =~ "<C:schedule/>"
+      true
+
+  """
+  @spec current_user_privilege_set([String.t() | {:caldav, String.t()}]) :: Xml.value()
+  def current_user_privilege_set(additional) do
+    {:elements, [Xml.dav(), Xml.caldav()], Enum.map(granted() ++ additional, &privilege/1)}
+  end
+
+  @doc """
+  The privilege set of somewhere readable but not writable.
+
+  The `DAV:read` subtree alone — what `DAV:current-user-privilege-set`
+  reports on a server-owned area like the attachment store, where even
+  the owner may look but not touch.
+
+  ### Returns
+
+  * A `t:Dav.Xml.value/0`.
+
+  ### Examples
+
+      iex> {:elements, _namespaces, inner} = Dav.Web.Acl.read_privilege_set()
+      iex> IO.iodata_to_binary(inner) =~ "<D:write/>"
+      false
+
+  """
+  @spec read_privilege_set() :: Xml.value()
+  def read_privilege_set do
+    {:elements, [Xml.dav(), Xml.caldav()], Enum.map(flatten(@read_tree), &privilege/1)}
   end
 
   @doc """
@@ -171,7 +232,7 @@ defmodule Dav.Web.Acl do
       "</D:ace>"
     ]
 
-    {:elements, [Xml.dav()], inner}
+    {:elements, [Xml.dav(), Xml.caldav()], inner}
   end
 
   @doc """
@@ -184,12 +245,12 @@ defmodule Dav.Web.Acl do
   ### Examples
 
       iex> {:elements, _namespaces, inner} = Dav.Web.Acl.acl_restrictions()
-      iex> IO.iodata_to_binary(inner) =~ "grant-only"
+      iex> IO.iodata_to_binary(inner) =~ "no-invert"
       true
 
   """
   @spec acl_restrictions() :: Xml.value()
-  def acl_restrictions, do: {:elements, [Xml.dav()], ["<D:grant-only/>", "<D:no-invert/>"]}
+  def acl_restrictions, do: {:elements, [Xml.dav()], ["<D:no-invert/>"]}
 
   # Every privilege in the tree, flattened. With no authentication
   # there is nothing to withhold.
@@ -197,5 +258,6 @@ defmodule Dav.Web.Acl do
 
   defp flatten({name, children}), do: [name | Enum.flat_map(children, &flatten/1)]
 
+  defp privilege({:caldav, name}), do: ["<D:privilege><C:", name, "/></D:privilege>"]
   defp privilege(name), do: ["<D:privilege><D:", name, "/></D:privilege>"]
 end

@@ -129,17 +129,34 @@ defmodule Dav.Web.Properties do
 
   def fetch(%Resource{}, {"DAV:", "acl-restrictions"}), do: {:ok, Acl.acl_restrictions()}
 
-  def fetch(%Resource{owner: nil}, {"DAV:", "acl"}), do: :error
+  # An unowned resource still has an access list — the deployment's
+  # policy — with no aces of its own to show.
+  def fetch(%Resource{owner: nil}, {"DAV:", "acl"}), do: {:ok, nil}
   def fetch(%Resource{owner: owner}, {"DAV:", "acl"}), do: {:ok, Acl.acl(owner)}
 
   def fetch(%Resource{owner: nil}, {"DAV:", "owner"}), do: :error
   def fetch(%Resource{owner: owner}, {"DAV:", "owner"}), do: {:ok, {:hrefs, [owner]}}
 
   # "This protected property, if present, contains the URL of the
-  # principal that is the group of the resource." No groups here.
-  def fetch(%Resource{}, {"DAV:", "group"}), do: {:ok, nil}
+  # principal that is the group of the resource." No resource has one
+  # here, and RFC 3744 makes the property optional — absent, not
+  # present and empty, is how the reference answers.
+  def fetch(%Resource{}, {"DAV:", "group"}), do: :error
 
   def fetch(%Resource{}, {"DAV:", "inherited-acl-set"}), do: {:ok, nil}
+
+  # RFC 3744 section 4: a principal states these even when it has
+  # nothing to put in them — an empty set is an answer, absence reads
+  # as "not a principal". A stored `DAV:group-member-set` — a proxy
+  # group's members — wins over this empty default, because the
+  # property is not protected.
+  def fetch(%Resource{} = resource, {"DAV:", "alternate-URI-set"}) do
+    if Acl.principal?(resource), do: {:ok, nil}, else: :error
+  end
+
+  def fetch(%Resource{} = resource, {"DAV:", "group-member-set"}) do
+    if Acl.principal?(resource), do: {:ok, nil}, else: :error
+  end
 
   # RFC 5397's `DAV:current-user-principal` is *not* here. It answers
   # "who am I", which is a fact about the request rather than about
@@ -148,10 +165,16 @@ defmodule Dav.Web.Properties do
   # authenticated principal; deriving it from the resource's owner
   # instead tells every caller they are the owner.
 
-  def fetch(%Resource{owner: nil}, {"DAV:", "principal-URL"}), do: :error
-
+  # RFC 3744 section 4.2: "a principal may have many URLs, but there
+  # must be one 'principal URL'". A principal reached by an alias
+  # answers the canonical spelling, which the store records as the
+  # principal's owner — itself, canonically spelled.
   def fetch(%Resource{} = resource, {"DAV:", "principal-URL"}) do
-    if Acl.principal?(resource), do: {:ok, {:hrefs, [Resource.href(resource)]}}, else: :error
+    cond do
+      not Acl.principal?(resource) -> :error
+      is_binary(resource.owner) -> {:ok, {:hrefs, [resource.owner]}}
+      true -> {:ok, {:hrefs, [Resource.href(resource)]}}
+    end
   end
 
   def fetch(%Resource{collection?: true} = resource, {"DAV:", "resourcetype"}) do

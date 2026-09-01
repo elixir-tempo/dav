@@ -132,10 +132,12 @@ defmodule Dav.CalDAVTester.Features do
                 # asker holding a proxy grant gets the events, not
                 # only the times.
                 "extended-freebusy",
-                # Apple's private-events model plus RFC 3744's ACL
-                # method in its grant-only core, in `Dav.Web.Grant`
-                # and `Dav.Cal.Access`.
-                "private-events"
+                # Apple's private-events model, in `Dav.Cal.Access`.
+                "private-events",
+                # RFC 3744 section 8.1 in `Dav.Web.Grant`: grants and
+                # denies of `DAV:read`/`DAV:write`, enforced through
+                # `Dav.Cal.Delegation`.
+                "ACL Method"
               ]
 
   @doc """

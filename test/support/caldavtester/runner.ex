@@ -597,14 +597,15 @@ defmodule Dav.CalDAVTester.Runner do
   defp principal_for(request, state) do
     name = request.user && ServerInfo.expand(request.user, state.substitutions)
 
-    if is_binary(name) and name == state.substitutions["$useradmin:"] do
-      state.substitutions["$principaluri_admin:"]
-    else
-      index = account(request, state)
+    cond do
+      not correct?(request, account(request, state), state) ->
+        nil
 
-      if correct?(request, index, state),
-        do: canonical_principal(index, state.substitutions),
-        else: nil
+      is_binary(name) and name == state.substitutions["$useradmin:"] ->
+        state.substitutions["$principaluri_admin:"]
+
+      true ->
+        canonical_principal(account(request, state), state.substitutions)
     end
   end
 
@@ -969,14 +970,7 @@ defmodule Dav.CalDAVTester.Runner do
     resources =
       ([[] | ancestors(homes)] ++ homes)
       |> Enum.uniq()
-      |> Enum.map(
-        &%Resource{
-          path: &1,
-          collection?: true,
-          owner: owner_of(&1, owners),
-          display_name: Map.get(named, &1)
-        }
-      )
+      |> Enum.map(&container(&1, owners, named))
 
     calendars =
       for path <- collections,
@@ -1464,6 +1458,20 @@ defmodule Dav.CalDAVTester.Runner do
     end)
   end
 
+  # The containers exist on the reference server as real DAV
+  # resources: each has an ETag, a directory content type, and a
+  # display name — `acl.xml` reads all three off `/calendars/`.
+  defp container(path, owners, named) do
+    %Resource{
+      path: path,
+      collection?: true,
+      owner: owner_of(path, owners),
+      display_name: Map.get(named, path) || List.last(path),
+      etag: ~s("#{:erlang.phash2(path)}"),
+      content_type: "httpd/unix-directory"
+    }
+  end
+
   defp ancestors(homes) do
     homes
     |> Enum.flat_map(fn home -> for n <- 1..length(home)//1, do: Enum.take(home, n) end)
@@ -1489,6 +1497,7 @@ defmodule Dav.CalDAVTester.Runner do
       authentication: :required,
       well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],
       administrators: [substitutions["$principaluri_admin:"]],
+      principals: [substitutions["$principalcollection:"]],
       compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling
            calendarserver-home-sync calendar-query-extended calendar-managed-attachments

@@ -325,19 +325,42 @@ defmodule Dav.Cal.Delegation do
   defp listed_path_with?(path, caller, privilege, %{store: store, context: context} = options) do
     mine = identified(caller, options)
 
-    Enum.any?(lineage(path), fn ancestors ->
+    Enum.reduce_while(lineage(path), false, fn ancestors, _nothing_yet ->
       case store.resolve(ancestors, context) do
-        {:ok, %Resource{} = held} -> granted_to?(held, mine, privilege, options)
-        _absent -> false
+        {:ok, %Resource{} = held} -> consulted(held, ancestors == path, mine, privilege, options)
+        _absent -> {:cont, false}
       end
     end)
   end
 
-  defp granted_to?(held, mine, privilege, options) do
-    Enum.any?(Grant.granted(held, options), fn {href, privileges} ->
-      identified(href, options) == mine and privilege in privileges
+  # A resource's own list always speaks for it; an ancestor's only
+  # when the ancestor is a calendar — the reference inherits a
+  # calendar's aces onto its objects and leaves a regular collection's
+  # members to their own lists.
+  defp consulted(held, own?, mine, privilege, options) do
+    if own? or Cal.calendar?(held),
+      do: stated(held, mine, privilege, options),
+      else: {:cont, false}
+  end
+
+  # What the nearest access list with an opinion says — RFC 3744's
+  # rule that the first matching ace decides, applied up the tree: a
+  # deny on the calendar is not outvoted by a grant on the home.
+  defp stated(held, mine, privilege, options) do
+    name = Atom.to_string(privilege)
+
+    Grant.entries(held, options)
+    |> Enum.find_value({:cont, false}, fn {kind, who, privileges} ->
+      if name in privileges and addressed_to?(who, mine, options),
+        do: {:halt, kind == :grant},
+        else: nil
     end)
   end
+
+  defp addressed_to?(:authenticated, _mine, _options), do: true
+
+  defp addressed_to?({:href, href}, mine, options),
+    do: identified(href, options) == mine
 
   @doc """
   Whether the caller may store a resource at this path.
