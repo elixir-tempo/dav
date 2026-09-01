@@ -1062,7 +1062,8 @@ defmodule Dav.CalDAVTester.Runner do
       |> Map.merge(tasks_properties(homes)),
       canonical_addresses(people, substitutions),
       aliased_homes(people, substitutions),
-      unattended_addresses(rooms, substitutions)
+      unattended_addresses(rooms, substitutions),
+      auto_modes(rooms, substitutions)
     )
   end
 
@@ -1074,6 +1075,18 @@ defmodule Dav.CalDAVTester.Runner do
     for {address, _home} <- located(rooms, ~w(rcuaddr rcuaddrurn rcuaddralt), substitutions),
         into: MapSet.new(),
         do: String.downcase(address)
+  end
+
+  # The reference deployment runs `resource08` in `accept-if-free`
+  # mode: it books itself when its calendar is clear and otherwise
+  # queues the invitation for a delegate — what `implicitauto10`
+  # exercises. Everyone else answers automatically.
+  defp auto_modes(rooms, substitutions) do
+    held_back = Enum.filter(rooms, fn {index, _home} -> index == 8 end)
+
+    for {address, _home} <- located(held_back, ~w(rcuaddr rcuaddrurn rcuaddralt), substitutions),
+        into: %{},
+        do: {String.downcase(address), :accept_if_free}
   end
 
   # Apple's calendar-user-proxy draft: every principal has two child

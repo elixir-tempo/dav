@@ -19,7 +19,8 @@ defmodule Dav.Test.SchedulingStore do
         dead \\ %{},
         canonical \\ %{},
         aliases \\ %{},
-        unattended \\ MapSet.new()
+        unattended \\ MapSet.new(),
+        auto_modes \\ %{}
       ) do
     agent = WritableStore.start(resources)
 
@@ -29,6 +30,7 @@ defmodule Dav.Test.SchedulingStore do
       |> Map.put(:canonical, canonical)
       |> Map.put(:aliases, aliases)
       |> Map.put(:unattended, unattended)
+      |> Map.put(:auto_modes, auto_modes)
     end)
 
     agent
@@ -36,6 +38,12 @@ defmodule Dav.Test.SchedulingStore do
 
   @impl Dav.Web.Store
   defdelegate scope(context, principal), to: WritableStore
+
+  @impl Dav.Web.Store
+  def auto_schedule_mode(address, agent) do
+    Agent.get(WritableStore.pid(agent), &Map.get(&1, :auto_modes, %{}))
+    |> Map.get(String.downcase(address || ""), :automatic)
+  end
 
   @impl Dav.Web.Store
   def unattended?(address, agent) do

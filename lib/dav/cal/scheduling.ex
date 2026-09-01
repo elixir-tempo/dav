@@ -365,7 +365,21 @@ defmodule Dav.Cal.Scheduling do
     tag ++
       default_calendar(resource, options) ++
       free_busy_set(resource, options) ++
-      calendar_transparency(resource, options) ++ timezone_identifier(resource, options)
+      calendar_transparency(resource, options) ++
+      timezone_identifier(resource, options) ++ collection_tag(resource, options)
+  end
+
+  # `CS:getctag` — the collection change tag Apple's clients poll
+  # before deciding whether to look closer. It moves exactly when the
+  # synchronisation token does, because they answer the same question.
+  defp collection_tag(resource, %{store: store, context: context}) do
+    case Store.supports?(store, :sync_token) and store.sync_token(resource, context) do
+      token when is_binary(token) ->
+        [{{"http://calendarserver.org/ns/", "getctag"}, token}]
+
+      _not_synchronised ->
+        []
+    end
   end
 
   # RFC 7809 section 7: `CALDAV:calendar-timezone-id` is the other
@@ -933,19 +947,23 @@ defmodule Dav.Cal.Scheduling do
     end)
   end
 
-  defp cancel_lost(false, _components, _change, _addresses, _calendar, _options, _sent), do: :ok
+  defp cancel_lost(false, _components, _change, _addresses, _calendar, _options, _sent), do: []
 
   defp cancel_lost(true, components, change, addresses, calendar, options, sent) do
     # An instance already travelling in the exclusion cancellation is
-    # not sent a second time as a loss.
-    for {people, instances} <- uninvited(components, change, addresses),
-        remaining = Enum.reject(instances, &(&1 in rids_of(sent))),
-        remaining != [],
-        lost = lost_instances(change, remaining),
-        lost != [],
-        do: send_to(people, "CANCEL", lost, zones(calendar), options, every(lost))
+    # not sent a second time as a loss. Whoever was messaged here was
+    # delivered to this round, and their line restamps like any other.
+    told =
+      for {people, instances} <- uninvited(components, change, addresses),
+          remaining = Enum.reject(instances, &(&1 in rids_of(sent))),
+          remaining != [],
+          lost = lost_instances(change, remaining),
+          lost != [] do
+        send_to(people, "CANCEL", lost, zones(calendar), options, every(lost))
+        people
+      end
 
-    :ok
+    told |> List.flatten() |> Enum.uniq()
   end
 
   # The cancellation describes the meeting they had, not the one that
@@ -1393,6 +1411,29 @@ defmodule Dav.Cal.Scheduling do
     end
   end
 
+  # A room that declined still receives its copy: the reference
+  # writes the turned-down booking to the resource's calendar,
+  # transparent, as the record of what was asked. A person who
+  # declined by deleting theirs is left alone.
+  defp silently_declined?(recipient, components, options) do
+    declined?(components, recipient) and
+      not still_holds?(recipient, components, options) and
+      not auto_managed?(recipient, options)
+  end
+
+  defp prepared(components, change, options) do
+    components =
+      components
+      |> Enum.map(&remembered(&1, change, options))
+      |> Enum.map(fn component ->
+        %{component | properties: Enum.map(component.properties, &promoted/1)}
+      end)
+      |> Enum.map(&once_each/1)
+
+    components ++
+      (components |> revived(change, options) |> Enum.map(&remembered(&1, change, options)))
+  end
+
   defp route(resource, calendar, components, organizer, addresses, change, options) do
     if organizer in addresses do
       # "The server MUST NOT send a scheduling message to the Attendee
@@ -1415,19 +1456,12 @@ defmodule Dav.Cal.Scheduling do
           Enum.find(components, &(&1.name != "VTIMEZONE" and is_nil(value(&1, "RECURRENCE-ID"))))
         )
 
-      components =
-        components
-        |> Enum.map(&remembered(&1, change, options))
-        |> Enum.map(fn component ->
-          %{component | properties: Enum.map(component.properties, &promoted/1)}
-        end)
-        |> Enum.map(&once_each/1)
-
-      components =
-        components ++
-          (components |> revived(change, options) |> Enum.map(&remembered(&1, change, options)))
-
+      components = prepared(components, change, options)
       components = compacted(components, change, options)
+      {components, auto_replied} = auto_answers(components, options)
+
+      options =
+        Map.put(options, :auto_replied, Enum.map(auto_replied, &canonical_address(&1, options)))
 
       delivering? = organizer_delivers?(components)
 
@@ -1474,7 +1508,7 @@ defmodule Dav.Cal.Scheduling do
 
       asked =
         recipients
-        |> Enum.reject(&(declined?(components, &1) and not still_holds?(&1, components, options)))
+        |> Enum.reject(&silently_declined?(&1, components, options))
         |> notified(components, change, options)
 
       told = Enum.uniq(asked ++ reinvited)
@@ -1510,7 +1544,8 @@ defmodule Dav.Cal.Scheduling do
       # a recipient losing the old series and gaining one instance of
       # the new must not have the new instance struck through by a
       # cancellation that was really about the old.
-      cancel_lost(delivering?, components, change, addresses, calendar, options, withdrawn)
+      lost_told =
+        cancel_lost(delivering?, components, change, addresses, calendar, options, withdrawn)
 
       # What the cancellation already said is not asked again. A save
       # whose only news *is* the withdrawal — a `STATUS:CANCELLED`, an
@@ -1550,10 +1585,8 @@ defmodule Dav.Cal.Scheduling do
       record(
         resource,
         organizer_stated(restated(calendar, components)),
-        stamped_for(asked, dropped, reinvited, recipients) -- refused,
+        stamped_for(asked, Enum.uniq(dropped ++ lost_told), reinvited, recipients) -- refused,
         refused,
-        asking?,
-        newly_asked(recipients, components, change, options),
         options
       )
     else
@@ -2529,17 +2562,23 @@ defmodule Dav.Cal.Scheduling do
          calendar,
          recipients,
          refused,
-         asking?,
-         fresh,
          %{store: store, context: context} = options
        ) do
+    # "2.0" is the record of an answer. A round whose auto-processing
+    # answered nothing — the event is wholly past, the room's mode
+    # held its peace, or nothing new was asked — leaves the plain
+    # delivery mark of the messages that did go out.
+    replied = Map.get(options, :auto_replied, [])
+    answered = Enum.filter(recipients, &(canonical_address(&1, options) in replied))
+
     if Store.supports?(store, :put) do
       updated = %{
         calendar
         | components:
             calendar.components
             |> Enum.map(&stamp(&1, recipients, options))
-            |> Enum.map(&auto_answered(&1, if(asking?, do: fresh, else: []), options))
+            |> Enum.map(&auto_answered(&1, answered, options))
+            |> Enum.map(&unsplit/1)
             |> Enum.map(&undeliverable(&1, refused, options))
       }
 
@@ -2549,11 +2588,11 @@ defmodule Dav.Cal.Scheduling do
     :ok
   end
 
-  # A room answers the moment it is asked: a `REQUEST` delivered to
-  # an auto-managed recipient is answered by the server on its
+  # A room answers the moment it is asked: any message delivered to
+  # an auto-managed recipient is processed by the server on its
   # behalf, and the organiser's copy records the reply ("2.0"), not
-  # merely the delivery. A round that only cancelled asked nothing,
-  # and "1.2" stands.
+  # merely the delivery — an `EXDATE`-only round included, because
+  # the room's server consumed that cancellation too.
   defp auto_answered(component, [], _options), do: component
   defp auto_answered(%{name: "VTIMEZONE"} = zone, _asked, _options), do: zone
 
@@ -2562,7 +2601,12 @@ defmodule Dav.Cal.Scheduling do
       Enum.map(component.properties, fn property ->
         if property.name == "ATTENDEE" and property.value in asked and
              unattended?(property.parameters) do
-          %{property | parameters: Map.put(property.parameters, "SCHEDULE-STATUS", "2.0")}
+          parameters =
+            property.parameters
+            |> Map.put("SCHEDULE-STATUS", "2.0")
+            |> Map.put_new("PARTSTAT", "NEEDS-ACTION")
+
+          %{property | parameters: parameters}
         else
           property
         end
@@ -2571,44 +2615,28 @@ defmodule Dav.Cal.Scheduling do
     %{component | properties: properties}
   end
 
-  # Which recipients this save asks something *new* — a first
-  # invitation, or an occurrence their previous line had not answered.
-  # An auto-managed attendee accepts those on arrival and the copy
-  # records "2.0"; a save that merely re-delivers what they already
-  # accepted leaves the plain delivery mark.
-  defp newly_asked(recipients, components, %{previous: previous}, options)
-       when is_binary(previous) do
-    case ICalendar.parse(previous) do
-      {:ok, before} ->
-        held = schedulable(before)
-        Enum.filter(recipients, &asked_anew_somewhere?(&1, components, held, options))
+  # An override the server split out of the master is bookkeeping,
+  # not a question: the room's line keeps its `NEEDS-ACTION` without
+  # `RSVP`, and the mark itself goes no further than this store.
+  defp unsplit(component) do
+    if Enum.any?(component.properties, &(&1.name == "X-DAV-SPLIT")) do
+      properties =
+        component.properties
+        |> Enum.reject(&(&1.name == "X-DAV-SPLIT"))
+        |> Enum.map(&unasked/1)
 
-      _unreadable ->
-        recipients
+      %{component | properties: properties}
+    else
+      component
     end
   end
 
-  defp newly_asked(recipients, _components, _change, _options), do: recipients
-
-  defp asked_anew_somewhere?(recipient, components, held, options) do
-    address = canonical_address(recipient, options)
-
-    Enum.any?(components, fn component ->
-      component.name != "VTIMEZONE" and names?(component, address, options) and
-        not answered_previously?(held, utc_rid(component), address, options)
-    end)
-  end
-
-  defp answered_previously?(held, rid, address, options) do
-    case Enum.find(held, &(utc_rid(&1) == rid)) do
-      nil ->
-        false
-
-      counterpart ->
-        Enum.any?(counterpart.properties, fn property ->
-          property.name == "ATTENDEE" and addressed_as(property, options) == address and
-            Map.get(property.parameters, "PARTSTAT", "NEEDS-ACTION") != "NEEDS-ACTION"
-        end)
+  defp unasked(property) do
+    if property.name == "ATTENDEE" and unattended?(property.parameters) and
+         Map.get(property.parameters, "PARTSTAT") == "NEEDS-ACTION" do
+      %{property | parameters: Map.delete(property.parameters, "RSVP")}
+    else
+      property
     end
   end
 
@@ -2858,6 +2886,300 @@ defmodule Dav.Cal.Scheduling do
 
   defp participating(property, _known, _organizer, _merging, _options), do: property
 
+  # The reference's `checkAttendeeAutoReply`: every occurrence inside
+  # a year-long window is judged — an occurrence already over keeps
+  # its `NEEDS-ACTION`, a free one is accepted, a booked one declined.
+  # All alike, the whole object answers at once; mixed, the master
+  # takes the majority answer and each occurrence that differs stands
+  # in an override, derived where the rule alone produced it.
+  defp auto_answers(components, options) do
+    rooms =
+      for component <- components,
+          component.name != "VTIMEZONE",
+          property <- component.properties,
+          property.name == "ATTENDEE",
+          unattended?(property.parameters) or auto_managed?(property.value, options),
+          uniq: true,
+          do: property.value
+
+    Enum.reduce(rooms, {components, []}, fn address, {held, replied} ->
+      case answered_for(held, address, options) do
+        {updated, true} -> {updated, [address | replied]}
+        {updated, false} -> {updated, replied}
+      end
+    end)
+  end
+
+  defp answered_for(components, address, options) do
+    events = Enum.filter(components, &(&1.name != "VTIMEZONE"))
+    master = Enum.find(events, &is_nil(value(&1, "RECURRENCE-ID")))
+    overrides = Enum.filter(events, &(not is_nil(value(&1, "RECURRENCE-ID"))))
+
+    with {_from, _to} = window <- conflict_window(master || List.first(events)),
+         busy when is_list(busy) <- room_busy(address, events, window, options),
+         rows when rows != [] <-
+           judged(master, overrides, address, window, busy, auto_schedule_mode(address, options)),
+         true <- Enum.any?(rows, & &1.active) do
+      {apply_answers(components, master, rows, address),
+       Enum.any?(rows, &Map.get(&1, :answered, false))}
+    else
+      _nothing_to_answer -> {components, false}
+    end
+  end
+
+  defp room_busy(address, events, window, options) do
+    with %Resource{} = home <- home_of(address, options),
+         scoped = as(home, options),
+         %Resource{} = calendar <- collection(home, &event_calendar?(&1, scoped), scoped) do
+      uid = Enum.find_value(events, &value(&1, "UID"))
+
+      calendar
+      |> held_calendars(uid, scoped)
+      |> Enum.flat_map(&FreeBusy.periods_of(&1, window))
+    else
+      _nowhere_to_check -> nil
+    end
+  end
+
+  # One row per occurrence: where it came from, whether it is still
+  # to come, and the answer it ends up with.
+  defp judged(master, overrides, address, window, busy, mode) do
+    ruled = ruled_rows(master, overrides, address, window)
+
+    stated =
+      for override <- overrides,
+          names_line?(override, address),
+          {at, ended} <- TimeRange.occurring(override, window),
+          do: row({:override, override}, override, address, at, ended)
+
+    Enum.map(ruled ++ stated, &answer_row(&1, busy, mode))
+  end
+
+  defp ruled_rows(nil, _overrides, _address, _window), do: []
+
+  defp ruled_rows(%{} = master, overrides, address, window) do
+    if names_line?(master, address) do
+      for {at, ended} <- TimeRange.occurring(master, window, nil, overrides),
+          do: row(:master, master, address, at, ended)
+    else
+      []
+    end
+  end
+
+  defp row(source, component, address, at, ended) do
+    %{
+      source: source,
+      at: at,
+      active: ahead?(ended),
+      span: {at, ended},
+      partstat: line_partstat(component, address)
+    }
+  end
+
+  defp names_line?(component, address) do
+    Enum.any?(
+      component.properties,
+      &(&1.name == "ATTENDEE" and &1.value == address)
+    )
+  end
+
+  defp line_partstat(component, address) do
+    Enum.find_value(component.properties, "NEEDS-ACTION", fn property ->
+      if property.name == "ATTENDEE" and property.value == address,
+        do: Map.get(property.parameters, "PARTSTAT", "NEEDS-ACTION")
+    end)
+  end
+
+  defp answer_row(%{partstat: "NEEDS-ACTION", active: true} = row, busy, mode) do
+    free? = not FreeBusy.overlapping?([{"BUSY", row.span}], busy)
+
+    answer =
+      case {mode, free?} do
+        {:accept_always, _either} -> "ACCEPTED"
+        {:decline_always, _either} -> "DECLINED"
+        {:accept_if_free, true} -> "ACCEPTED"
+        {:accept_if_free, false} -> "NEEDS-ACTION"
+        {:decline_if_busy, false} -> "DECLINED"
+        {:decline_if_busy, true} -> "NEEDS-ACTION"
+        {_automatic, true} -> "ACCEPTED"
+        {_automatic, false} -> "DECLINED"
+      end
+
+    %{row | partstat: answer} |> Map.put(:answered, answer != "NEEDS-ACTION")
+  end
+
+  defp answer_row(row, _busy, _mode), do: row
+
+  # The deployment states each auto-managed user's answering mode —
+  # the reference's `AutoScheduleMode` — and `automatic` is the
+  # default: accept when free, decline when busy.
+  defp auto_schedule_mode(address, %{store: store, context: context} = options) do
+    if Store.supports?(store, :auto_schedule_mode),
+      do: store.auto_schedule_mode(canonical_address(address, options), context),
+      else: :automatic
+  end
+
+  defp apply_answers(components, master, rows, address) do
+    counts = Enum.frequencies(Enum.map(rows, & &1.partstat))
+
+    if map_size(counts) == 1 do
+      # The one answer everything already agrees on. `NEEDS-ACTION`
+      # everywhere is no answer at all — the copy stays exactly as the
+      # client spelled it, and no reply is made.
+      case Map.to_list(counts) do
+        [{"NEEDS-ACTION", _count}] -> components
+        [{answer, _count}] -> Enum.map(components, &set_answer(&1, address, answer, false))
+      end
+    else
+      mixed_answers(components, master, rows, address, counts)
+    end
+  end
+
+  # The reference breaks a tie the way Python's `max` over sorted
+  # pairs does: the alphabetically first of the most common.
+  defp mixed_answers(components, master, rows, address, counts) do
+    {chosen, _count} =
+      counts |> Enum.sort_by(fn {answer, count} -> {-count, answer} end) |> List.first()
+
+    asked_before? = master != nil and had_rsvp?(master, address)
+
+    derived =
+      for %{source: :master, partstat: answer, at: at} <- rows,
+          answer != chosen,
+          spelled = spelled_instant(at),
+          is_binary(spelled),
+          do: master |> override_at(spelled) |> set_answer(address, answer, asked_before?)
+
+    Enum.map(components, &answered_component(&1, rows, address, chosen)) ++ derived
+  end
+
+  defp answered_component(component, rows, address, chosen) do
+    cond do
+      component.name == "VTIMEZONE" ->
+        component
+
+      is_nil(value(component, "RECURRENCE-ID")) ->
+        set_answer(component, address, chosen, false)
+
+      true ->
+        case Enum.find(rows, &(&1.source == {:override, component})) do
+          %{partstat: answer} -> set_answer(component, address, answer, false)
+          nil -> component
+        end
+    end
+  end
+
+  defp spelled_instant(at) do
+    case Tempo.to_elixir(at) do
+      {:ok, %DateTime{} = moment} -> Calendar.strftime(moment, "%Y%m%dT%H%M%SZ")
+      {:ok, %NaiveDateTime{} = moment} -> Calendar.strftime(moment, "%Y%m%dT%H%M%S")
+      _unspellable -> nil
+    end
+  end
+
+  defp had_rsvp?(component, address) do
+    Enum.any?(component.properties, fn property ->
+      property.name == "ATTENDEE" and property.value == address and
+        Map.get(property.parameters, "RSVP") == "TRUE"
+    end)
+  end
+
+  defp set_answer(%{name: "VTIMEZONE"} = zone, _address, _answer, _had_rsvp), do: zone
+
+  defp set_answer(component, address, answer, had_rsvp) do
+    properties =
+      Enum.map(component.properties, fn property ->
+        if property.name == "ATTENDEE" and property.value == address,
+          do: %{property | parameters: answer_parameters(property.parameters, answer, had_rsvp)},
+          else: property
+      end)
+
+    %{component | properties: properties}
+  end
+
+  defp answer_parameters(parameters, "NEEDS-ACTION", true) do
+    parameters |> Map.put("PARTSTAT", "NEEDS-ACTION") |> Map.put("RSVP", "TRUE")
+  end
+
+  defp answer_parameters(parameters, answer, _had_rsvp) do
+    parameters |> Map.put("PARTSTAT", answer) |> Map.delete("RSVP")
+  end
+
+  # A derived override says what the rule alone said, at one moment —
+  # everything but the rule itself, named by its occurrence.
+  defp override_at(master, spelled) do
+    stated =
+      case Enum.find(master.properties, &(&1.name == "DTSTART")) do
+        nil -> %{}
+        property -> Map.delete(property.parameters, "TZID")
+      end
+
+    %{
+      master
+      | properties: [
+          %{name: "DTSTART", parameters: stated, value: spelled},
+          %{name: "RECURRENCE-ID", parameters: stated, value: spelled},
+          # A transient mark: this override is the server's
+          # bookkeeping, not a fresh question, so the organiser's copy
+          # must not re-ask (`RSVP`) the room it split out. Stripped
+          # before storing, never delivered.
+          %{name: "X-DAV-SPLIT", parameters: %{}, value: "TRUE"}
+          | Enum.reject(master.properties, &(&1.name in ~w(RRULE RDATE EXDATE DTSTART)))
+        ]
+    }
+  end
+
+  # Nobody needs a room in the past. An occurrence already over is
+  # not answered — the reference's auto-processing accepts and
+  # declines only what is still to come, and an event that is wholly
+  # over is delivered without being processed at all.
+  defp future_occurrence?(component) do
+    case conflict_window(component) do
+      {_from, _to} = window ->
+        window
+        |> then(&TimeRange.occurring(component, &1))
+        |> Enum.any?(fn {_at, ended} -> ahead?(ended) end)
+
+      _unreadable ->
+        true
+    end
+  end
+
+  defp ahead?(moment) do
+    case Tempo.to_elixir(moment) do
+      {:ok, %DateTime{} = at} -> DateTime.after?(at, DateTime.utc_now())
+      {:ok, %NaiveDateTime{} = at} -> NaiveDateTime.after?(at, NaiveDateTime.utc_now())
+      {:ok, %Date{} = at} -> Date.after?(at, Date.utc_today())
+      _unspellable -> true
+    end
+  end
+
+  defp held_calendars(calendar, uid, %{store: store, context: context} = options) do
+    case store.children(calendar, context) do
+      {:ok, children} ->
+        for object <- children,
+            not object.collection?,
+            {:ok, body} <- [read(object, options)],
+            {:ok, held} <- [ICalendar.parse(IO.iodata_to_binary(body))],
+            Enum.find_value(held.components, &value(&1, "UID")) != uid,
+            do: held
+
+      _nothing ->
+        []
+    end
+  end
+
+  defp conflict_window(component) do
+    case value(component, "DTSTART") do
+      <<year::binary-size(4), rest::binary-size(4), _tail::binary>> ->
+        {year <> rest <> "T000000Z",
+         Integer.to_string(String.to_integer(year) + 1) <> rest <> "T000000Z"}
+
+      _absent_or_short ->
+        nil
+    end
+  end
+
   defp record_for(_known, _address, false), do: nil
 
   defp record_for(known, address, true) do
@@ -2871,38 +3193,31 @@ defmodule Dav.Cal.Scheduling do
   # carries `RSVP=TRUE` — the attendee's client uses it to know a
   # reply is wanted rather than that the event simply appeared.
   defp answered_or_asked(parameters, known, value, merging) do
-    # A room does not deliberate. Nobody sits at its keyboard to
-    # accept, so the server answers for it the moment it is invited —
-    # and records that answer as one it processed itself.
-    if unattended?(parameters) do
-      parameters |> Map.put("PARTSTAT", "ACCEPTED") |> Map.put("SCHEDULE-STATUS", "2.0")
-    else
-      # `SCHEDULE-STATUS` is the server's record of its own deliveries.
-      # A client echoing one back is repeating what it read, and a
-      # fresh attendee carrying one is claiming a delivery that never
-      # happened — the stored value stands, or none does.
-      case Map.fetch(known, value) do
-        # A client repeating the stored answer is echoing what the
-        # server showed it, and the echo round-trips as written —
-        # `RSVP` and `SCHEDULE-STATUS` included. Only a *different*
-        # answer is the organiser speaking for somebody, and is
-        # coerced back to the record. A merging write is stale, not an
-        # echo: the client asked for reconciliation, and the stored
-        # record is restored over whatever its old copy carried.
-        {:ok, {answer, _delivery}} ->
-          restated_answer(parameters, answer, known, value, merging)
+    # `SCHEDULE-STATUS` is the server's record of its own deliveries.
+    # A client echoing one back is repeating what it read, and a
+    # fresh attendee carrying one is claiming a delivery that never
+    # happened — the stored value stands, or none does.
+    case Map.fetch(known, value) do
+      # A client repeating the stored answer is echoing what the
+      # server showed it, and the echo round-trips as written —
+      # `RSVP` and `SCHEDULE-STATUS` included. Only a *different*
+      # answer is the organiser speaking for somebody, and is
+      # coerced back to the record. A merging write is stale, not an
+      # echo: the client asked for reconciliation, and the stored
+      # record is restored over whatever its old copy carried.
+      {:ok, {answer, _delivery}} ->
+        restated_answer(parameters, answer, known, value, merging)
 
-        :error ->
-          # No stored answer and nothing worth writing: an absent
-          # `PARTSTAT` *is* `NEEDS-ACTION`, and the reference leaves
-          # it as the client spelled it rather than writing the
-          # default out. A stated value other than the default was
-          # the organiser answering for somebody and is reset.
-          parameters
-          |> reset_unanswered()
-          |> Map.delete("SCHEDULE-STATUS")
-          |> awaiting()
-      end
+      :error ->
+        # No stored answer and nothing worth writing: an absent
+        # `PARTSTAT` *is* `NEEDS-ACTION`, and the reference leaves
+        # it as the client spelled it rather than writing the
+        # default out. A stated value other than the default was
+        # the organiser answering for somebody and is reset.
+        parameters
+        |> reset_unanswered()
+        |> Map.delete("SCHEDULE-STATUS")
+        |> awaiting()
     end
   end
 
@@ -2980,10 +3295,18 @@ defmodule Dav.Cal.Scheduling do
   # for someone who has one, and every other participant would see the
   # invention rather than the person.
   defp named(parameters, address, options) do
-    case common_name(address, options) do
-      nil -> parameters
-      name -> Map.put(parameters, "CN", name)
-    end
+    parameters =
+      case common_name(address, options) do
+        nil -> parameters
+        name -> Map.put(parameters, "CN", name)
+      end
+
+    # Like the `CN`, what kind of calendar user this is comes from the
+    # directory, not the client: an auto-managed address is a
+    # resource whether or not the invitation said so.
+    if auto_managed?(address, options),
+      do: Map.put_new(parameters, "CUTYPE", "RESOURCE"),
+      else: parameters
   end
 
   defp common_name(address, %{store: store, context: context}) do
@@ -3478,7 +3801,7 @@ defmodule Dav.Cal.Scheduling do
 
   defp forged?(_home, _method, _components, _uid, _options), do: false
 
-  defp delivered_to(home, recipient, method, components, told, zones, uid, options) do
+  defp deposit_message(home, method, told, zones, uid, components, recipient, options) do
     case collection(home, &Schedule.inbox?/1, options) do
       nil ->
         :ok
@@ -3492,20 +3815,42 @@ defmodule Dav.Cal.Scheduling do
           addressing(method, components, recipient)
         )
     end
+  end
+
+  # Whether the server answered for this recipient anywhere in the
+  # object: any `ACCEPTED` or `DECLINED` on their line is a reply.
+  defp answered_in?(components, recipient, options) do
+    address = canonical_address(recipient, options)
+
+    Enum.any?(components, fn component ->
+      component.name != "VTIMEZONE" and
+        Enum.any?(component.properties, fn property ->
+          property.name == "ATTENDEE" and
+            canonical_address(property.value, options) == address and
+            Map.get(property.parameters, "PARTSTAT") in ["ACCEPTED", "DECLINED"]
+        end)
+    end)
+  end
+
+  defp auto_managed?(recipient, %{store: store, context: context} = options) do
+    Store.supports?(store, :unattended?) and
+      store.unattended?(canonical_address(recipient, options), context)
+  end
+
+  defp delivered_to(home, recipient, method, components, told, zones, uid, options) do
+    # Nobody reads a room's Inbox for what the server already
+    # answered. A message the auto-processing could not answer — the
+    # room was busy and its mode holds rather than declines — queues
+    # for a delegate; one wholly in the past is not worth the storage.
+    if consumed?(recipient, components, options) do
+      :ok
+    else
+      deposit_message(home, method, told, zones, uid, components, recipient, options)
+    end
 
     case {method, holding_calendar(home, uid, options) || provisioned(method, home, options)} do
       {"REQUEST", %Resource{} = calendar} ->
-        address = canonical_address(recipient, options)
-
-        delivered =
-          calendar
-          |> preserving(recipient, components, told, uid, options)
-          |> Enum.map(&auto_accepted(&1, address))
-          |> Enum.map(&transparent_until_answered(&1, address))
-          |> Enum.map(&unmarked/1)
-          |> Enum.map(&schedulable_after_all/1)
-
-        store(calendar, own_copy(delivered, zones, address), uid, options)
+        write_request(calendar, recipient, components, told, zones, uid, options)
 
       {"REPLY", %Resource{} = calendar} ->
         apply_reply(calendar, components, uid, options)
@@ -3523,6 +3868,33 @@ defmodule Dav.Cal.Scheduling do
     end
 
     :ok
+  end
+
+  defp consumed?(recipient, components, options) do
+    is_binary(recipient) and auto_managed?(recipient, options) and
+      (answered_in?(components, recipient, options) or
+         not Enum.any?(components, &(&1.name != "VTIMEZONE" and future_occurrence?(&1))))
+  end
+
+  defp write_request(calendar, recipient, components, told, zones, uid, options) do
+    address = canonical_address(recipient, options)
+    auto? = auto_managed?(recipient, options)
+
+    synced =
+      if auto?,
+        do: fn component -> in_sequence(component, told) end,
+        else: fn component -> component end
+
+    delivered =
+      calendar
+      |> preserving(recipient, components, told, uid, options)
+      |> Enum.map(synced)
+      |> Enum.map(&auto_accepted(&1, address, auto?))
+      |> Enum.map(&transparent_until_answered(&1, address))
+      |> Enum.map(&unmarked/1)
+      |> Enum.map(&schedulable_after_all/1)
+
+    store(calendar, own_copy(delivered, zones, address), uid, options)
   end
 
   # The calendar that already holds the meeting, wherever the
@@ -3562,25 +3934,75 @@ defmodule Dav.Cal.Scheduling do
 
   defp provisioned(_method, _home, _options), do: nil
 
-  defp auto_accepted(%{name: "VTIMEZONE"} = zone, _address), do: zone
+  # The reference's `sequenceInSync`: a kept component's version never
+  # trails the one the organiser now numbers it with. Each component
+  # answers for itself — an override moving to `SEQUENCE:1` says
+  # nothing about the master beside it.
+  defp in_sequence(%{name: "VTIMEZONE"} = zone, _delivered), do: zone
 
-  defp auto_accepted(component, address) do
-    properties =
-      Enum.map(component.properties, fn property ->
-        if property.name == "ATTENDEE" and property.value == address and
-             unattended?(property.parameters) do
-          parameters =
-            property.parameters
-            |> Map.put("PARTSTAT", "ACCEPTED")
-            |> Map.delete("RSVP")
-
-          %{property | parameters: parameters}
-        else
-          property
-        end
+  defp in_sequence(component, delivered) do
+    stated =
+      Enum.find(delivered, fn candidate ->
+        candidate.name != "VTIMEZONE" and utc_rid(candidate) == utc_rid(component)
       end)
 
-    %{component | properties: properties}
+    if stated != nil and sequence_of(stated) > sequence_of(component) do
+      renumber = %{
+        name: "SEQUENCE",
+        parameters: %{},
+        value: Integer.to_string(sequence_of(stated))
+      }
+
+      %{
+        component
+        | properties: Enum.reject(component.properties, &(&1.name == "SEQUENCE")) ++ [renumber]
+      }
+    else
+      component
+    end
+  end
+
+  defp sequence_of(component) do
+    case Integer.parse(value(component, "SEQUENCE") || "0") do
+      {number, _rest} -> number
+      :error -> 0
+    end
+  end
+
+  defp auto_accepted(component, _address, false), do: component
+  defp auto_accepted(%{name: "VTIMEZONE"} = zone, _address, _auto), do: zone
+
+  defp auto_accepted(component, address, true) do
+    properties = Enum.map(component.properties, &arrived_answer(&1, address))
+
+    # A declined booking does not hold the room: its own copy reads
+    # transparent, so the next free-busy check can say yes to somebody
+    # else.
+    if declined_by?(properties, address),
+      do: %{component | properties: transparent(properties)},
+      else: %{component | properties: properties}
+  end
+
+  # The organiser's server already asked this room's calendar, and
+  # the line arrives carrying the answer — or carrying no answer,
+  # when there was nothing to answer. Either way the delivered value
+  # is the record; only the request for a reply is dropped once one
+  # exists.
+  defp arrived_answer(property, address) do
+    if property.name == "ATTENDEE" and property.value == address and
+         unattended?(property.parameters) and
+         Map.get(property.parameters, "PARTSTAT") in ["ACCEPTED", "DECLINED"] do
+      %{property | parameters: Map.delete(property.parameters, "RSVP")}
+    else
+      property
+    end
+  end
+
+  defp declined_by?(properties, address) do
+    Enum.any?(properties, fn property ->
+      property.name == "ATTENDEE" and property.value == address and
+        Map.get(property.parameters, "PARTSTAT") == "DECLINED"
+    end)
   end
 
   # "5.3" on the recipient's own `ORGANIZER` line said this meeting
@@ -5006,8 +5428,19 @@ defmodule Dav.Cal.Scheduling do
       ],
       components:
         zones ++
-          (components |> Enum.map(&untaken(&1, recipient)) |> Enum.map(&replied(&1, recipient)))
+          (components
+           |> Enum.map(&untaken(&1, recipient))
+           |> answered_back(recipient))
     })
+  end
+
+  # The server answered on the room's behalf only if there was
+  # something to answer: an event wholly in the past was delivered and
+  # left alone, and its copy records no reply the organiser never got.
+  defp answered_back(components, recipient) do
+    if Enum.any?(components, &(&1.name != "VTIMEZONE" and future_occurrence?(&1))),
+      do: Enum.map(components, &replied(&1, recipient)),
+      else: components
   end
 
   # The calendar user addresses of whoever owns this resource, found by

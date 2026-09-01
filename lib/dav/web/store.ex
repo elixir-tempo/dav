@@ -237,6 +237,7 @@ defmodule Dav.Web.Store do
           | :unattended?
           | :sync_token
           | :changes
+          | :auto_schedule_mode
         ) :: boolean()
   def supports?(store, capability) do
     Code.ensure_loaded?(store) and function_exported?(store, capability, arity(capability))
@@ -259,6 +260,7 @@ defmodule Dav.Web.Store do
   defp arity(:unattended?), do: 2
   defp arity(:sync_token), do: 2
   defp arity(:changes), do: 4
+  defp arity(:auto_schedule_mode), do: 2
 
   @doc """
   A resource's dead properties.
@@ -531,6 +533,30 @@ defmodule Dav.Web.Store do
   @callback unattended?(address :: String.t(), context :: term()) :: boolean()
 
   @doc """
+  How an auto-managed calendar user answers invitations.
+
+  Optional, and read from the deployment's directory the way
+  `c:unattended?/2` is. The modes are the reference server's: answer
+  every invitation (`:accept_always`, `:decline_always`), answer only
+  when the calendar can (`:accept_if_free`, `:decline_if_busy`), or
+  both at once (`:automatic`) — accept when free, decline when busy.
+  A store without the callback answers `:automatic` for everyone.
+
+  ### Arguments
+
+  * `address` is the calendar user address.
+
+  * `context` is the store's context.
+
+  ### Returns
+
+  * The mode.
+
+  """
+  @callback auto_schedule_mode(address :: String.t(), context :: term()) ::
+              :automatic | :accept_always | :decline_always | :accept_if_free | :decline_if_busy
+
+  @doc """
   The synchronisation token a collection currently carries.
 
   Optional. RFC 6578 — a token is an opaque URI that changes whenever
@@ -614,5 +640,6 @@ defmodule Dav.Web.Store do
                       origin: 2,
                       unattended?: 2,
                       sync_token: 2,
-                      changes: 4
+                      changes: 4,
+                      auto_schedule_mode: 2
 end

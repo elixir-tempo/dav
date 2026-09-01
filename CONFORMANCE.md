@@ -9,11 +9,11 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | Class | Failing | Meaning |
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
-| Apple/interop | **0** | CalendarServer behaviour beyond the RFCs — Apple Calendar and Thunderbird interop |
+| Apple/interop | 28 | the open tail of the room auto-scheduling work — see below |
 | Incidental | 14 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 
-Every suite classified `:rfc` or `:apple` passes in full. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
+Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately: declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 28 still fail on fine detail — sequence propagation to kept copies, cancel bookkeeping on auto-managed calendars, and the `accept-if-free` delegate flow. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
 
 ## How the drive was run
 
@@ -62,6 +62,20 @@ Apple's calendarserver-sharing, in `Dav.Cal.Sharing` and the store:
 * A sharee with write access may change `TRANSP`, alarms and `X-` data — their view — and nothing else (`theirs_to_change/4`, on the `PerUserDataFilter` model); deleting an organiser's meeting is refused through `c:Dav.Web.Hook.removable/3`. A sharee's save into a shared view schedules for the *sharer* (`owner_addresses` resolves through `store.origin`).
 
 * `DAV:displayname` is never synthesised from the URL leaf — absent until somebody sets it.
+
+## The auto-scheduling model
+
+RFC 6638 auto-scheduling for rooms and resources, in `Dav.Cal.Scheduling` with the `auto-accept` feature declared. The model is the reference's `checkAttendeeAutoReply`, implemented organiser-side since every copy is stored here:
+
+* Every occurrence inside a year window is judged for each auto-managed attendee: an occurrence already over keeps its `NEEDS-ACTION`, a free one is accepted, a booked one declined — the free-busy check runs against the room's own calendar, excluding the event's own `UID`. All occurrences agreeing, the whole object answers at once; mixed, the master takes the majority answer and each differing occurrence stands in an override, derived from the master where the rule alone produced it (`X-DAV-SPLIT` marks a derived override transiently so the organiser's copy does not re-ask the room it split out).
+
+* Answering modes come from the deployment's directory through `c:Dav.Web.Store.auto_schedule_mode/2`: `automatic` (accept free, decline busy), the always/if-free/if-busy variants — the harness runs `resource08` as `accept-if-free`, whose busy invitations queue in its Inbox for a delegate. An auto-managed recipient's Inbox consumes what the server answered; a message it could not answer, or one wholly in the past, is not stored.
+
+* `SCHEDULE-STATUS=2.0` is the record of an answer, marked per round: a delivery whose auto-processing answered nothing — a wholly past event, a mode that held its peace — leaves the plain `1.2`. The room's own copy keeps the delivered answer, turns transparent when declined, and carries the organiser's `1.2` mark only when a reply was actually made. The `CUTYPE=RESOURCE` a client omitted is materialised from the directory the way `CN` is.
+
+* A declined booking is still delivered: the room's calendar records what it turned down, transparent. A room's kept components take the message's `SEQUENCE` per occurrence (`sequenceInSync`), which people's copies do not.
+
+* The open tail (28 tests, classified `:apple`): sequence propagation when a client republishes a component by version alone, cancel bookkeeping details on auto-managed calendars, and parts of the delegate flow in `implicitauto10`. `implicitautomodes` and `implicitautogroup` stay excluded — they drive the deployment's mode switches through CalDAVTester's `control-api`, which the harness does not model.
 
 ## The synchronisation model
 

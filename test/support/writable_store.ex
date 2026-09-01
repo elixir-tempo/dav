@@ -578,10 +578,13 @@ defmodule Dav.Test.WritableStore do
     {:ok, resource}
   end
 
+  # The token is the newest revision *beneath this collection*, not
+  # the store's clock: a write elsewhere moves neither this token nor
+  # the `CS:getctag` derived from it.
   @impl Dav.Web.Store
   def sync_token(%Resource{} = collection, agent) do
     if synchronised?(collection, agent) do
-      "data:," <> Integer.to_string(Agent.get(pid(agent), &Map.get(&1, :written, 0)))
+      "data:," <> Integer.to_string(subtree_revision(collection, agent))
     end
   end
 

@@ -456,6 +456,55 @@ defmodule Dav.Cal.TimeRange do
   end
 
   @doc """
+  The occurrences of a component inside a window, with their spans.
+
+  Unlike `periods/4` the spans are not clipped to the window and each
+  is returned separately — the caller is asking *which* occurrences
+  fall inside, not how much busy time they add up to. Auto-scheduling
+  needs it: a resource declines the occurrences it cannot host, by
+  name.
+
+  ### Arguments
+
+  * `component` is the parsed component.
+
+  * `range` is the `{from, to}` window, as iCalendar date-time
+    strings.
+
+  * `floating` is the zone floating times are read in, or `nil`.
+
+  * `overridden` is the component's sibling overrides; occurrences
+    they stand in for are left to them.
+
+  ### Returns
+
+  * A list of `{start, finish}` pairs, one per occurrence, in rule
+    order.
+
+  ### Examples
+
+      iex> Dav.Cal.TimeRange.occurring(%{name: "VEVENT", properties: [], components: []}, {"20260101T000000Z", "20270101T000000Z"})
+      []
+
+  """
+  @spec occurring(map(), {String.t(), String.t()}, String.t() | nil, [map()]) ::
+          [{Tempo.t(), Tempo.t()}]
+  def occurring(component, {from, to}, floating \\ nil, overridden \\ []) do
+    with {:ok, start} <- moment(from),
+         {:ok, finish} <- moment(to),
+         {:ok, dtstart} <- property_value(component, "DTSTART", floating) do
+      component
+      |> occurrences(dtstart, extent(component, dtstart, floating), overridden, floating)
+      |> Enum.filter(fn {_recurrence, instance, extent} ->
+        instance_overlaps?(extent, instance, start, finish)
+      end)
+      |> Enum.map(fn {_recurrence, at, was} -> {at, ending(was, at)} end)
+    else
+      _no_dtstart_or_unreadable -> []
+    end
+  end
+
+  @doc """
   The periods a component is busy for, clipped to the range.
 
   `overlaps?/2` answers whether a component is in the window;

@@ -18,6 +18,23 @@
 # named more specifically. Unlisted failures report as :unclassified so
 # new ones are triaged rather than silently binned.
 %{
+  # --- apple: the open auto-schedule tail --------------------------------
+  # Room auto-accept (RFC 6638 with CalendarServer's answering modes)
+  # landed with the `auto-accept` feature; these files' remaining
+  # failures are fine-detail differences still being worked — sequence
+  # propagation to kept copies, cancel bookkeeping on auto-managed
+  # calendars, and the accept-if-free delegate flow. See CONFORMANCE.md.
+  {"implicitauto2.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  {"implicitauto3.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  {"implicitauto4.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  {"implicitauto5.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  {"implicitauto6.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  {"implicitauto7.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  {"implicitauto9.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  {"implicitauto10.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  {"implicitauto11.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  {"implicitautopast.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+
   # --- incidental: cannot pass as vendored -------------------------------
   {"implicitcopymove.xml", "PUT UID restrictions - ORGANIZER"} =>
     {:incidental, "expected files predate address canonicalisation; see CONFORMANCE.md"},

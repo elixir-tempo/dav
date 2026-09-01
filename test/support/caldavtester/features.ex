@@ -65,6 +65,10 @@ defmodule Dav.CalDAVTester.Features do
                 # inside them.
                 "sync-report",
                 "sync-report-home",
+                # RFC 6638 auto-scheduling for rooms and resources, in
+                # `Dav.Cal.Scheduling`: an unattended recipient's copy
+                # answers on arrival.
+                "auto-accept",
                 # RFC 6638 implicit scheduling, in `Dav.Cal.Scheduling`:
                 # storing an event with attendees delivers the
                 # invitations, and an attendee's reply reaches the

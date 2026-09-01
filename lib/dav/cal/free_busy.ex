@@ -285,6 +285,39 @@ defmodule Dav.Cal.FreeBusy do
     end
   end
 
+  @doc """
+  Whether any period in one set overlaps any period in another.
+
+  ### Arguments
+
+  * `some` is a list of `{fbtype, {from, to}}` pairs, as
+    `periods_of/3` returns.
+
+  * `others` is another such list.
+
+  ### Returns
+
+  * `true` when some period in the first set intersects one in the
+    second.
+
+  ### Examples
+
+      iex> Dav.Cal.FreeBusy.overlapping?([], [])
+      false
+
+  """
+  @spec overlapping?(
+          [{String.t(), {Tempo.t(), Tempo.t()}}],
+          [{String.t(), {Tempo.t(), Tempo.t()}}]
+        ) :: boolean()
+  def overlapping?(some, others) do
+    Enum.any?(some, fn {_type, {from, to}} ->
+      Enum.any?(others, fn {_other, {begins, ends}} ->
+        earlier?(begins, to) and earlier?(from, ends)
+      end)
+    end)
+  end
+
   defp value(component, name) do
     case Enum.find(component.properties, &(&1.name == name)) do
       nil -> nil
