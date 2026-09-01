@@ -326,6 +326,35 @@ defmodule Dav.Web.Hook do
   @callback readable(resource :: Resource.t(), options :: map()) ::
               :ok | {:error, :forbidden}
 
+  @doc """
+  Whether a client may create a resource at this path.
+
+  Consulted before `PUT` stores a new document and before `MKCOL` or
+  `MKCALENDAR` makes a collection. An extension that owns part of the
+  tree — an attachment area the server alone writes into — refuses the
+  creation here.
+
+  ### Arguments
+
+  * `path` is where the client is trying to create.
+
+  * `kind` is what it is trying to create — `:document`, `:collection`
+    or `:calendar`.
+
+  * `options` carries `:store`, `:context` and `:principal`.
+
+  ### Returns
+
+  * `:ok`, `{:error, :forbidden}` for a `403`, or
+    `{:error, :method_not_allowed}` for a `405`.
+
+  """
+  @callback creatable(
+              path :: [String.t()],
+              kind :: :document | :collection | :calendar,
+              options :: map()
+            ) :: :ok | {:error, :forbidden} | {:error, :method_not_allowed}
+
   @optional_callbacks headers: 3,
                       deleted: 2,
                       properties: 3,
@@ -335,7 +364,39 @@ defmodule Dav.Web.Hook do
                       relocated: 3,
                       removable: 3,
                       inherited: 3,
-                      readable: 2
+                      readable: 2,
+                      creatable: 3
+
+  @doc """
+  Ask every hook whether a client may create a resource at this path.
+
+  ### Arguments
+
+  * `path` is where the client is trying to create.
+
+  * `kind` is what it is trying to create — `:document`, `:collection`
+    or `:calendar`.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `:ok` when every hook allows it, otherwise the first refusal.
+
+  """
+  @spec creation(path :: [String.t()], kind :: atom(), options :: map()) ::
+          :ok | {:error, :forbidden} | {:error, :method_not_allowed}
+  def creation(path, kind, options) do
+    options
+    |> Map.get(:hooks, [])
+    |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :creatable, 3)))
+    |> Enum.find_value(:ok, fn hook ->
+      case hook.creatable(path, kind, options) do
+        :ok -> nil
+        refusal -> refusal
+      end
+    end)
+  end
 
   @doc """
   React to a resource having been written.

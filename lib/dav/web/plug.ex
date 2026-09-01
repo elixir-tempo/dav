@@ -29,6 +29,7 @@ defmodule Dav.Web.Plug do
   import Plug.Conn
 
   alias Dav.Cal
+  alias Dav.Web.Hook
   alias Dav.Web.Properties
   alias Dav.Web.Resource
   alias Dav.Web.Store
@@ -317,6 +318,7 @@ defmodule Dav.Web.Plug do
 
     with :ok <- capable(options, :put),
          :ok <- writable(path, options),
+         :ok <- Hook.creation(path, :document, options),
          :ok <- schedule_tag_matches(conn, path, options),
          :ok <- entity_tag_matches(conn, path, options),
          :ok <- validate(body, path, options, type),
@@ -339,6 +341,8 @@ defmodule Dav.Web.Plug do
       # A missing parent is a conflict, not an invitation to create it.
       {:error, :conflict} -> send_resp(conn, 409, "")
       {:error, :collection} -> send_resp(conn, 403, "")
+      {:error, :forbidden} -> send_resp(conn, 403, "")
+      {:error, :method_not_allowed} -> send_resp(conn, 405, "")
       {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
     end
   end
@@ -748,6 +752,7 @@ defmodule Dav.Web.Plug do
 
     with :ok <- capable(options, :mkcol),
          :ok <- no_body(body),
+         :ok <- Hook.creation(path, :collection, options),
          :ok <- nestable(path, options),
          {:ok, _resource} <- options.store.mkcol(path, options.context) do
       send_resp(conn, 201, "")
@@ -756,6 +761,8 @@ defmodule Dav.Web.Plug do
       # RFC 4918 reserves a body for extended MKCOL, which this is not.
       {:error, :body} -> send_resp(conn, 415, "")
       {:error, :exists} -> send_resp(conn, 405, "")
+      {:error, :forbidden} -> send_resp(conn, 403, "")
+      {:error, :method_not_allowed} -> send_resp(conn, 405, "")
       {:error, :conflict} -> send_resp(conn, 409, "")
       {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
     end
@@ -816,8 +823,20 @@ defmodule Dav.Web.Plug do
       {:error, :malformed} -> send_resp(conn, 400, "")
       {:error, :bad_depth} -> send_resp(conn, 400, "")
       {:error, :depth_infinity} -> precondition(conn, {Xml.dav(), "propfind-finite-depth"})
-      {:error, :not_found} -> send_resp(conn, 404, "")
+      {:error, :not_found} -> absent(conn, options)
       {:error, :not_modified} -> send_resp(conn, 304, "")
+    end
+  end
+
+  # A missing resource usually answers `404` — but an extension
+  # holding private material may refuse to say even that much, the
+  # same consultation the `GET` path makes.
+  defp absent(conn, options) do
+    missing = %Resource{path: Store.segments(conn.request_path)}
+
+    case permitted(missing, options) do
+      :ok -> send_resp(conn, 404, "")
+      {:error, :forbidden} -> precondition(conn, {Xml.dav(), "need-privileges"})
     end
   end
 

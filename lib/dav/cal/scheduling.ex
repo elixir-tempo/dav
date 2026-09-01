@@ -1187,6 +1187,34 @@ defmodule Dav.Cal.Scheduling do
   # stored counterpart's number (`needsiTIPSequenceChange`); a client
   # that raised every number is left alone. Before either test, no
   # number is allowed to go backwards (`sequenceInSync`).
+  defp withdrawal_numbered(components, [], change) do
+    if raised_by_client?(components, change),
+      do: components,
+      else: Enum.map(components, &outgoing/1)
+  end
+
+  defp withdrawal_numbered(components, _asked, _change), do: components
+
+  # Whether the client's own save already raised every component's
+  # number above its stored counterpart — `bumped/2`'s test, asked
+  # without the correction.
+  defp raised_by_client?(components, %{previous: previous}) when is_binary(previous) do
+    case ICalendar.parse(previous) do
+      {:ok, before} ->
+        held = schedulable(before)
+
+        Enum.all?(
+          components,
+          &(&1.name == "VTIMEZONE" or renumbered?(&1, held))
+        )
+
+      _unreadable ->
+        false
+    end
+  end
+
+  defp raised_by_client?(_components, _change), do: false
+
   defp bumped(components, held) do
     components = in_sync(components, held)
 
@@ -1629,7 +1657,14 @@ defmodule Dav.Cal.Scheduling do
       # recipient heard of the meeting.
       dropped = if delivering?, do: departed(components, change, addresses), else: []
 
-      send_to(dropped, "CANCEL", components, zones(calendar), options, every(components))
+      # `generateCancel`'s `seq + 1` for the withdrawn invitation.
+      # When somebody was asked this round the components already rose
+      # by one, and a client that renumbered its own save has done the
+      # raising itself — either way the number is right as it stands.
+      # Only when nobody raised it does the cancellation do so.
+      withdrawal = withdrawal_numbered(components, asked, change)
+
+      send_to(dropped, "CANCEL", withdrawal, zones(calendar), options, every(withdrawal))
 
       record(
         resource,

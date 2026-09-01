@@ -34,7 +34,7 @@ HTTP                    RFC 9110/9111/9112
 * `calendar-query`, `calendar-multiget` and `free-busy-query` as `Dav.Web.Report`s.
 * `Dav.Cal.TimeRange` — the five-row overlap table of RFC 4791 section 9.9, with recurrence expanded through Tempo.
 
-`Dav.Cal.Scheduling` implements CalDAV scheduling — RFC 6638, which is Standards Track and **updates RFC 4791**, so it is a requirement rather than an extension. Storing an event with attendees delivers the invitations, an attendee's save replies to the organiser, cancellations and reschedules travel as iTIP messages, free-busy is answered from the Outbox, auto-managed rooms accept on arrival, and the `Schedule-Tag` weak-`ETag` ledger of section 3.2.10 governs conditional writes. `Dav.Cal.Sharing` implements Apple's calendar-sharing extension — invitations, notifications, per-sharee views and per-user data. `Dav.Cal.Attachments` implements Apple's managed attachments — files posted to an event and carried as server-owned `ATTACH` properties, reference-counted per event. The behavioural record of how both were driven to conformance, model by model, is the [conformance record](https://hexdocs.pm/dav/conformance.html).
+`Dav.Cal.Scheduling` implements CalDAV scheduling — RFC 6638, which is Standards Track and **updates RFC 4791**, so it is a requirement rather than an extension. Storing an event with attendees delivers the invitations, an attendee's save replies to the organiser, cancellations and reschedules travel as iTIP messages, free-busy is answered from the Outbox, auto-managed rooms accept on arrival, and the `Schedule-Tag` weak-`ETag` ledger of section 3.2.10 governs conditional writes. `Dav.Cal.Sharing` implements Apple's calendar-sharing extension — invitations, notifications, per-sharee views and per-user data. `Dav.Cal.Attachments` implements Apple's managed attachments — files posted to an event and carried as server-owned `ATTACH` properties, reference-counted per event, delivered to attendees and shared with sharees; all five of the suite's attachment files pass in full. The behavioural record of how both were driven to conformance, model by model, is the [conformance record](https://hexdocs.pm/dav/conformance.html).
 
 `Dav.Web.Sync` implements collection synchronisation — RFC 6578. Calendars, the scheduling Inbox, notification collections and the calendar home all answer the `DAV:sync-collection` report and carry a `DAV:sync-token`, so a polling client fetches what changed rather than everything, and the home tells it which calendars to look in.
 
@@ -54,17 +54,17 @@ Against that declaration the suite puts **3,525 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 3,446 | 97.8% |
-| failed | 75 | 2.1% |
-| skipped | 4 | 0.1% |
+| passed | 3,498 | 99.2% |
+| failed | 25 | 0.7% |
+| skipped | 2 | 0.1% |
 
-Every failure is classified and cited: none are against RFC-required behaviour. Sixty-four are the open Apple/interop queue — twelve from the room auto-scheduling tail, and fifty-two from the managed-attachments companion files (propagation through scheduling, sharee semantics, legacy dropbox restrictions) that declaring the feature deliberately brought into the corpus. The remaining fifteen (failed plus skipped) are expectations the vendored, archived fixtures cannot support on principle. Each has its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).
+Every failure is classified and cited: none are against RFC-required behaviour. Twelve are the open tail of the room auto-scheduling work — delivery-mark and version bookkeeping still being driven down — and the remaining fifteen (failed plus skipped) are expectations the vendored, archived fixtures cannot support on principle. Each has its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).
 
 Fourteen verifiers are ported — `statusCode`, `header`, `multistatusItems`, `propfindItems`, `propfindValues`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlDataMatch`, `xmlElementMatch`, `prepostcondition`, `freeBusy` and `postFreeBusy` — along with the suite's compound directives (`DELETEALL`, `GETNEW`, `WAITCOUNT`, `GETCONTAINS`) and the `grab` elements that carry a value from one response into a later request. A check the harness cannot make is reported skipped, never counted as a pass.
 
 `xmlDataMatch` and `propfindItems`'s value comparison are the places the port is deliberately not literal. Upstream normalises both documents through ElementTree's serialiser and compares the strings; that output cannot be reproduced here, so the comparison is structural — names, attributes, text and sorted children. It is a stricter test of the same thing: two documents differing only in element order compare equal, and two differing in content do not.
 
-What remains is attachment propagation through scheduling and sharing, the finer points of iTIP (per-instance cancellation, partstat propagation), the rest of the sharing extension, and the `ACL` method itself. The whole CalDAV suite regardless of declaration is 5,624 tests.
+What remains is the finer points of iTIP (per-instance cancellation, partstat propagation), the rest of the sharing extension, and the `ACL` method itself. The whole CalDAV suite regardless of declaration is 5,624 tests.
 
 ## On sharing
 

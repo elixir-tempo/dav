@@ -22,6 +22,8 @@ defmodule Dav.Cal.Attachments do
 
   alias Dav.Cal
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.Sharing
+  alias Dav.Web.Acl
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -29,6 +31,7 @@ defmodule Dav.Cal.Attachments do
   import Plug.Conn
 
   @caldav "urn:ietf:params:xml:ns:caldav"
+  @calendarserver "http://calendarserver.org/ns/"
 
   # As a validator: a `PUT` may carry `ATTACH;MANAGED-ID=` only for
   # attachments this event's home actually holds — a made-up id, or
@@ -82,33 +85,94 @@ defmodule Dav.Cal.Attachments do
     home = Enum.drop(resource.path, -2)
 
     with {:ok, calendar} <- ICalendar.parse(body) do
-      known =
-        home
-        |> registry(resource.path, options)
-        |> Map.merge(previously_carried(change, home))
-
-      {components, changed?} =
-        Enum.map_reduce(calendar.components, false, fn component, changed? ->
-          {kept, touched?} = canonicalized(component, home, known, options)
-          {kept, changed? or touched?}
-        end)
-
-      if changed? do
-        %{store: store, context: context} = options
-
-        store.put(
-          resource.path,
-          ICalendar.write(%{calendar | components: components}),
-          "text/calendar; charset=utf-8",
-          context
-        )
-      end
+      if foreign_organized?(calendar, home, options),
+        do: mirrored(resource, calendar, change, options),
+        else: owned(resource, calendar, home, change, options)
     end
 
     collect_garbage(home, options)
   end
 
   def written(_change, _options), do: :ok
+
+  defp owned(resource, calendar, home, change, options) do
+    known =
+      home
+      |> registry(resource.path, options)
+      |> Map.merge(previously_carried(change, home))
+
+    {components, changed?} =
+      Enum.map_reduce(calendar.components, false, fn component, changed? ->
+        {kept, touched?} = canonicalized(component, home, known, options)
+        {kept, changed? or touched?}
+      end)
+
+    if changed?,
+      do: written_back(resource, %{calendar | components: components}, options)
+  end
+
+  # An attendee's copy mirrors the organizer's attachments: whatever
+  # the attendee's own write did to the `ATTACH` properties is quietly
+  # undone, restored from the copy the write replaced. The write
+  # itself succeeds — the reference calls this failing silently.
+  defp mirrored(resource, calendar, %{previous: previous}, options) when is_binary(previous) do
+    with {:ok, held} <- ICalendar.parse(previous) do
+      {components, changed?} =
+        Enum.map_reduce(calendar.components, false, fn component, changed? ->
+          {kept, touched?} = attaches_restored(component, held)
+          {kept, changed? or touched?}
+        end)
+
+      if changed?,
+        do: written_back(resource, %{calendar | components: components}, options)
+    end
+
+    :ok
+  end
+
+  defp mirrored(_resource, _calendar, _change, _options), do: :ok
+
+  defp attaches_restored(%{name: "VTIMEZONE"} = zone, _held), do: {zone, false}
+
+  defp attaches_restored(component, held) do
+    case Enum.find(
+           held.components,
+           &(&1.name == component.name and rid_of(&1) == rid_of(component))
+         ) do
+      nil ->
+        {component, false}
+
+      counterpart ->
+        mine = Enum.filter(component.properties, &(&1.name == "ATTACH"))
+        theirs = Enum.filter(counterpart.properties, &(&1.name == "ATTACH"))
+
+        if mine == theirs do
+          {component, false}
+        else
+          kept = Enum.reject(component.properties, &(&1.name == "ATTACH")) ++ theirs
+          {%{component | properties: kept}, true}
+        end
+    end
+  end
+
+  defp rid_of(component) do
+    Enum.find_value(component.properties, fn property ->
+      property.name == "RECURRENCE-ID" && property.value
+    end)
+  end
+
+  defp foreign_organized?(calendar, home, %{store: store, context: context}) do
+    with address when is_binary(address) <- organizer_of(calendar),
+         {:ok, %Resource{path: organizer_home}} <- store.principal(address, context) do
+      organizer_home != home
+    else
+      _unscheduled -> false
+    end
+  end
+
+  defp written_back(%Resource{path: path}, calendar, %{store: store, context: context}) do
+    store.put(path, ICalendar.write(calendar), "text/calendar; charset=utf-8", context)
+  end
 
   # The body this write replaced still vouches for the ids it carried:
   # a client restating one of its own attachments with mangled
@@ -372,12 +436,22 @@ defmodule Dav.Cal.Attachments do
       when action in ["attachment-add", "attachment-update", "attachment-remove"] do
     {:ok, body, conn} = read_body(conn)
 
+    # A sharee addresses the event through their view; the event, and
+    # everything stored for it, lives with the calendar's owner.
+    resource = %{resource | path: settled(resource.path, options)}
+
     cond do
       not calendar_object?(resource, options) ->
         {:ok, send_resp(conn, 403, "")}
 
-      not owned_by_caller?(resource, options) ->
+      not may_manage?(resource, options) ->
         {:ok, refused(conn, {"DAV:", "need-privileges"})}
+
+      # An attendee's copy of a scheduled event mirrors the
+      # organizer's attachments; managing them is the organizer's
+      # alone, and each verb has its own refusal.
+      attendee_copy?(resource, options) ->
+        {:ok, refused(conn, {@caldav, "valid-" <> action})}
 
       true ->
         {:ok, managed(action, conn, resource, body, options)}
@@ -386,10 +460,45 @@ defmodule Dav.Cal.Attachments do
 
   def action(_other, _conn, _resource, _options), do: :unhandled
 
-  # Attachments are private to the home they live in: a `GET` from
-  # anybody else is refused, and so is one for an attachment that is
-  # not there — the reference answers `403` for the whole area rather
-  # than confirming what exists in it.
+  defp settled(path, %{store: store, context: context}) do
+    if Store.supports?(store, :origin), do: store.origin(path, context), else: path
+  end
+
+  # The owner manages their own attachments; a sharee manages them
+  # exactly when the calendar was shared to them read-write.
+  defp may_manage?(resource, %{store: store, context: context} = options) do
+    owned_by_caller?(resource, options) or
+      case store.resolve(Enum.drop(resource.path, -1), context) do
+        {:ok, collection} -> Sharing.granted_on(collection, options) == "read-write"
+        _no_parent -> false
+      end
+  end
+
+  defp attendee_copy?(resource, %{store: store, context: context} = options) do
+    with {:ok, calendar} <- held(resource, options),
+         address when is_binary(address) <- organizer_of(calendar),
+         {:ok, %Resource{path: organizer_home}} <- store.principal(address, context) do
+      organizer_home != Enum.drop(resource.path, -2)
+    else
+      _unscheduled -> false
+    end
+  end
+
+  defp organizer_of(calendar) do
+    Enum.find_value(calendar.components, fn component ->
+      component.name != "VTIMEZONE" &&
+        Enum.find_value(component.properties, fn property ->
+          property.name == "ORGANIZER" && property.value
+        end)
+    end)
+  end
+
+  # Attachments are private to the home they live in — with one
+  # opening: an attendee of an event may read the files that event
+  # carries, for as long as the organizer's copy names them as an
+  # attendee. Anybody else is refused, and so is a `GET` for an
+  # attachment that is not there — the reference answers `403` for
+  # the whole area rather than confirming what exists in it.
   @impl Dav.Web.Hook
   def readable(%Resource{path: path}, %{store: store, context: context} = options) do
     case Enum.split_while(path, &(&1 != "dropbox")) do
@@ -399,10 +508,122 @@ defmodule Dav.Cal.Attachments do
       {prefix, [_dropbox | below]} ->
         cond do
           below == [] -> :ok
-          not match?(%Resource{path: ^prefix}, caller_home(options)) -> {:error, :forbidden}
+          not permitted_reader?(prefix, path, options) -> {:error, :forbidden}
           not match?({:ok, _held}, store.resolve(path, context)) -> {:error, :forbidden}
           true -> :ok
         end
+    end
+  end
+
+  # The attachment area is the server's to write: a client creating
+  # anything under a `dropbox` is refused. Inside an existing
+  # directory the method itself is not allowed; anywhere else the
+  # refusal is flat.
+  @impl Dav.Web.Hook
+  def creatable(path, kind, options) do
+    case Enum.split_while(path, &(&1 != "dropbox")) do
+      {_prefix, []} -> :ok
+      {_prefix, ["dropbox" | below]} -> creation_refused(kind, below, path, options)
+    end
+  end
+
+  defp creation_refused(:document, _below, _path, _options), do: {:error, :forbidden}
+
+  defp creation_refused(_kind, below, path, %{store: store, context: context}) do
+    if length(below) > 1 and
+         match?({:ok, _held}, store.resolve(Enum.drop(path, -1), context)),
+       do: {:error, :method_not_allowed},
+       else: {:error, :forbidden}
+  end
+
+  @doc """
+  The attachment properties of a resource.
+
+  ### Arguments
+
+  * `resource` is the resource being described.
+
+  * `collection` is its parent, unused here.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `CS:dropbox-home-URL` for a principal — where their attachment
+    area lives — and `[]` for everything else.
+
+  """
+  @impl Dav.Web.Hook
+  @spec properties(Resource.t(), Resource.t() | nil, map()) :: [{Xml.qname(), Xml.value()}]
+  def properties(resource, _collection, options) do
+    if Acl.principal?(resource), do: dropbox_home(resource, options), else: []
+  end
+
+  defp dropbox_home(resource, %{store: store, context: context}) do
+    principal = resource.owner || Resource.href(resource)
+
+    with true <- function_exported?(store, :addresses, 2),
+         {:ok, [address | _rest]} <- store.addresses(principal, context),
+         {:ok, %Resource{} = home} <- store.principal(address, context) do
+      area = %Resource{path: home.path ++ ["dropbox"], collection?: true}
+
+      [{{@calendarserver, "dropbox-home-URL"}, {:hrefs, [Resource.href(area)]}}]
+    else
+      _unknown -> []
+    end
+  end
+
+  defp permitted_reader?(owner_home, path, options) do
+    match?(%Resource{path: ^owner_home}, caller_home(options)) or
+      invited_reader?(owner_home, path, options)
+  end
+
+  # An attendee of the event, or a sharee of the calendar holding it,
+  # reads the file for as long as the reference stands.
+  defp invited_reader?(owner_home, path, options) do
+    addresses = caller_addresses(options)
+
+    for(
+      collection <- collections_of(owner_home, options),
+      member <- members_of(collection, options),
+      calendar = read_calendar(member, options),
+      calendar != nil,
+      references?(calendar, path, owner_home),
+      do: {collection, calendar}
+    )
+    |> Enum.any?(fn {collection, calendar} ->
+      attendee_of?(calendar, addresses) or
+        Sharing.granted_on(collection, options) != nil
+    end)
+  end
+
+  defp references?(calendar, path, home) do
+    Enum.any?(calendar.components, fn component ->
+      component.name != "VTIMEZONE" and
+        Enum.any?(component.properties, fn property ->
+          property.name == "ATTACH" and dropbox_path(property.value, home) == path
+        end)
+    end)
+  end
+
+  defp attendee_of?(calendar, addresses) do
+    for component <- calendar.components,
+        component.name != "VTIMEZONE",
+        property <- component.properties,
+        property.name == "ATTENDEE",
+        is_binary(property.value),
+        reduce: false do
+      found -> found or String.downcase(property.value) in addresses
+    end
+  end
+
+  defp caller_addresses(%{store: store, context: context} = options) do
+    with principal when is_binary(principal) <- Map.get(options, :principal),
+         true <- function_exported?(store, :addresses, 2),
+         {:ok, addresses} <- store.addresses(principal, context) do
+      Enum.map(addresses, &String.downcase/1)
+    else
+      _unknown_caller -> []
     end
   end
 
@@ -416,8 +637,10 @@ defmodule Dav.Cal.Attachments do
         rewrite(calendar, rids_of(conn), fn component ->
           %{component | properties: component.properties ++ [attach(conn, id, url, body)]}
         end)
+        |> sequenced()
 
       write_back(resource, updated, options)
+      announced(resource, calendar, updated, options)
 
       conn
       |> put_resp_header("location", url)
@@ -439,9 +662,11 @@ defmodule Dav.Cal.Attachments do
         rewrite(calendar, :every, fn component ->
           %{component | properties: replaced(component.properties, old, replacement)}
         end)
+        |> sequenced()
 
       write_back(resource, updated, options)
       collect_garbage(Enum.drop(resource.path, -2), options)
+      announced(resource, calendar, updated, options)
 
       conn
       |> put_resp_header("location", url)
@@ -459,9 +684,11 @@ defmodule Dav.Cal.Attachments do
         rewrite(calendar, rids_of(conn), fn component ->
           %{component | properties: Enum.reject(component.properties, &attach_with?(&1, old))}
         end)
+        |> sequenced()
 
       write_back(resource, updated, options)
       collect_garbage(Enum.drop(resource.path, -2), options)
+      announced(resource, calendar, updated, options)
       answered(conn, resource, 200, options)
     else
       {:error, condition} -> refused(conn, condition)
@@ -629,6 +856,77 @@ defmodule Dav.Cal.Attachments do
 
   defp write_back(%Resource{path: path}, calendar, %{store: store, context: context}) do
     store.put(path, ICalendar.write(calendar), "text/calendar; charset=utf-8", context)
+  end
+
+  # A scheduled event's attachments are part of what the attendees
+  # were invited to: the change raises `SEQUENCE` the way any
+  # significant organizer change does. An unscheduled event keeps its
+  # numbering.
+  defp sequenced(calendar) do
+    case organizer_of(calendar) do
+      nil -> calendar
+      _scheduled -> %{calendar | components: renumbered_all(calendar)}
+    end
+  end
+
+  defp renumbered_all(calendar) do
+    next = 1 + highest_sequence(calendar)
+
+    Enum.map(calendar.components, fn component ->
+      if component.name == "VTIMEZONE", do: component, else: renumbered(component, next)
+    end)
+  end
+
+  defp highest_sequence(calendar) do
+    for component <- calendar.components,
+        component.name != "VTIMEZONE",
+        property <- component.properties,
+        property.name == "SEQUENCE",
+        {number, _rest} <- [Integer.parse(property.value || "0")],
+        reduce: 0 do
+      highest -> max(highest, number)
+    end
+  end
+
+  defp renumbered(component, next) do
+    stated = %{name: "SEQUENCE", parameters: %{}, value: Integer.to_string(next)}
+
+    properties =
+      Enum.reject(component.properties, &(&1.name == "SEQUENCE")) ++ [stated]
+
+    %{component | properties: properties}
+  end
+
+  # A stored change the plug never saw: the other hooks hear about it
+  # here, so a scheduled event's new version is delivered to its
+  # attendees. Only a scheduled write is announced — and not to this
+  # hook, whose work is already done.
+  defp announced(resource, previous, updated, %{store: store, context: context} = options) do
+    with address when is_binary(address) <- organizer_of(updated),
+         {:ok, current} <- store.resolve(resource.path, context),
+         {:ok, data} <- store.read(current, context) do
+      collection =
+        case store.resolve(Enum.drop(resource.path, -1), context) do
+          {:ok, parent} -> parent
+          _no_parent -> nil
+        end
+
+      change = %{
+        resource: current,
+        body: IO.iodata_to_binary(data),
+        previous: ICalendar.write(previous),
+        collection: collection,
+        merge: false
+      }
+
+      for hook <- Map.get(options, :hooks, []),
+          hook != __MODULE__,
+          hook.applies?(collection),
+          function_exported?(hook, :written, 2),
+          do: hook.written(change, options)
+    end
+
+    :ok
   end
 
   defp answered(conn, resource, status, %{store: store, context: context} = options) do

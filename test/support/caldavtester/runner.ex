@@ -209,15 +209,19 @@ defmodule Dav.CalDAVTester.Runner do
     end
   end
 
-  # Any `$` left after expansion is a variable that was never bound,
-  # and a URI that is not a path cannot be requested at all. Both mean
-  # the same thing — this test depends on a request that did not run.
+  # Any `$name:` left after expansion is a variable that was never
+  # bound, and a URI that is not a path cannot be requested at all.
+  # Both mean the same thing — this test depends on a request that did
+  # not run. A bare `$name` with no colon is different: that is not
+  # the suite's variable syntax, and upstream sends it through
+  # literally — some fixtures rely on the server refusing the request
+  # before ever reading the malformed value.
   defp unbound(request, state) do
     request
     |> uris(state)
     |> Enum.find_value(fn uri ->
       cond do
-        String.contains?(uri, "$") -> String.slice(uri, 0, 120)
+        Regex.match?(~r/\$[A-Za-z0-9_.\-]+:/, uri) -> String.slice(uri, 0, 120)
         not String.starts_with?(uri, "/") -> String.slice(uri, 0, 120)
         true -> nil
       end

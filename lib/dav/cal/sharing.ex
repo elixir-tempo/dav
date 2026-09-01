@@ -420,17 +420,46 @@ defmodule Dav.Cal.Sharing do
   # The access this caller was invited with, or `nil` when they are
   # not a sharee — the owner, or somebody looking at their own
   # calendar, is bound by nothing recorded here.
-  defp granted_to(resource, %{store: store, context: context} = options) do
-    with who when is_binary(who) <- Map.get(options, :principal),
-         %Resource{} = original <- linked_original(resource, options) do
-      named = [who | addresses_of(who, options)]
-
-      case Enum.find(current(original, store, context), &(&1.href in named)) do
-        nil -> proxied(original, named, options)
-        invitation -> invitation.access
-      end
-    else
+  defp granted_to(resource, options) do
+    case linked_original(resource, options) do
+      %Resource{} = original -> granted_on(original, options)
       _owner_or_unshared -> nil
+    end
+  end
+
+  @doc """
+  The access this caller holds on a shared calendar's original.
+
+  ### Arguments
+
+  * `original` is the calendar as its owner holds it — not a sharee's
+    view of it.
+
+  * `options` are the plug options, carrying the store, its context
+    and the calling principal.
+
+  ### Returns
+
+  * `"read"` or `"read-write"` when the caller was invited to the
+    calendar, or holds proxy access to its owner.
+
+  * `nil` when the caller is nobody the sharing records name — the
+    owner included.
+
+  """
+  @spec granted_on(Resource.t(), map()) :: String.t() | nil
+  def granted_on(%Resource{} = original, %{store: store, context: context} = options) do
+    case Map.get(options, :principal) do
+      who when is_binary(who) ->
+        named = [who | addresses_of(who, options)]
+
+        case Enum.find(current(original, store, context), &(&1.href in named)) do
+          nil -> proxied(original, named, options)
+          invitation -> invitation.access
+        end
+
+      _anonymous ->
+        nil
     end
   end
 

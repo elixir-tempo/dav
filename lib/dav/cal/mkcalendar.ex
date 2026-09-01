@@ -30,6 +30,7 @@ defmodule Dav.Cal.Mkcalendar do
 
   alias Dav.Cal
   alias Dav.Cal.Sharing
+  alias Dav.Web.Hook
   alias Dav.Web.Properties
   alias Dav.Web.Store
   alias Dav.Xml
@@ -40,6 +41,7 @@ defmodule Dav.Cal.Mkcalendar do
 
     with :ok <- supported(store),
          {:ok, properties} <- requested(body),
+         :ok <- Hook.creation(path, :calendar, options),
          :ok <- vacant(path, options),
          :ok <- unretired(path, options),
          :ok <- settable(properties),
@@ -53,6 +55,9 @@ defmodule Dav.Cal.Mkcalendar do
 
       {:error, :retired} ->
         send_resp(conn, 403, "")
+
+      {:error, :method_not_allowed} ->
+        send_resp(conn, 405, "")
 
       {:error, :body} ->
         send_resp(conn, 415, "")

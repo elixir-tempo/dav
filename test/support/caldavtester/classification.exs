@@ -98,12 +98,6 @@
   {"servertoserveroutgoing.xml", nil} => {:apple, "iSchedule is a draft, never an RFC"},
   {"timezones.xml", "Timezone cache - aliases"} => {:apple, "timezone service aliasing"},
   {"attachments.xml", "Too many"} => {:apple, "deployment attachment-count limit"},
-  {"managed-attachments-dropbox.xml", nil} =>
-    {:apple, "legacy dropbox write restrictions; see CONFORMANCE.md"},
-  {"managed-attachments-implicit.xml", nil} =>
-    {:apple, "attachment propagation through scheduling; see CONFORMANCE.md"},
-  {"managed-attachments-sharing.xml", nil} =>
-    {:apple, "sharee attachment semantics; see CONFORMANCE.md"},
   {"duplicate_uids.xml", nil} =>
     {:apple, "cross-calendar UID refusal for non-scheduling objects"},
   {"put.xml", "PUT with relaxed parsing"} => {:apple, "acceptance of malformed durations"},

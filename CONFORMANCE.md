@@ -9,11 +9,11 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | Class | Failing | Meaning |
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
-| Apple/interop | 64 | the room auto-scheduling tail plus the managed-attachments companion files — see below |
+| Apple/interop | 12 | the open tail of the room auto-scheduling work — see below |
 | Incidental | 15 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 
-Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately, twice. Declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 12 still fail on fine detail — the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules across rounds, a few `SEQUENCE` propagation cases, and parts of the `accept-if-free` delegate flow in `implicitauto10`. Declaring `managed-attachments` brought the attachment files in (about 315 tests); the core and recurrence files pass in full and 52 remain across the three companion files — see the attachments model below. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
+Every suite classified `:rfc` passes in full. The Apple queue reopened deliberately, twice. Declaring `auto-accept` brought seventeen previously excluded room-scheduling files into the corpus (about 420 tests), of which 12 still fail on fine detail — the `SCHEDULE-STATUS` 1.2-versus-2.0 delivery-mark rules across rounds, a few `SEQUENCE` propagation cases, and parts of the `accept-if-free` delegate flow in `implicitauto10`. Declaring `managed-attachments` brought the attachment files in (about 315 tests), and all five — core, recurrence, implicit scheduling, sharing and the legacy dropbox restrictions — now pass in full; see the attachments model below. The baseline of passing tests per scenario lives in `test/support/caldavtester/baseline.exs` (regenerate with `mix run priv/baseline.exs`); a unit test fails the build if any scenario regresses below it, and reports improvements so the baseline is ratcheted rather than left stale. `test/support/caldavtester/classification.exs` holds the per-suite classification and is the file to update when a class turns out to be wrong.
 
 ## How the drive was run
 
@@ -97,7 +97,11 @@ Apple's managed attachments (`Dav.Cal.Attachments`, declaring `calendar-managed-
 
 * **The attachment area answers `403`, not `404`.** A `GET` under someone else's `dropbox`, or for a path that is not there, is refused with `DAV:need-privileges` rather than confirming what exists — via the `readable/2` hook seam.
 
-* The three still-failing companion files are classified `:apple` and are the open queue: `managed-attachments-implicit.xml` (24 — attachments must propagate to attendee copies with `SEQUENCE` bumps, and attendees may read the organizer's files), `managed-attachments-sharing.xml` (18 — sharee operations store into the sharer's home), and `managed-attachments-dropbox.xml` (legacy dropbox write restrictions and the `dropbox-home-URL` principal property).
+* **Attachments travel with the schedule.** An attachment `POST` on a scheduled event raises `SEQUENCE` and runs the written-hook fan-out, so the new version is delivered to the attendees — whose copies carry the organizer's `ATTACH` verbatim, id included. An attendee may `GET` the organizer's file for as long as the organizer's copy names them an attendee; their own `POST`s are refused with `CALDAV:valid-attachment-add`/`-update`/`-remove`, and a `PUT` that edits the `ATTACH` set on their copy fails silently — the properties are restored from the copy the write replaced. A dropped attendee's `CANCEL` carries `generateCancel`'s `seq + 1`, unless somebody was asked this round or the client renumbered its own save — either already raised it.
+
+* **A sharee acts in the sharer's home.** Attachment `POST`s through a sharee's view are settled onto the origin path first (`c:Dav.Web.Store.origin/2`), so files land in the sharer's dropbox under the sharer's URLs. A read-write sharee manages attachments; a read-only sharee is refused `DAV:need-privileges`; and sharees read the files of any event in a calendar shared to them — `Dav.Cal.Sharing.granted_on/2` is the public seam that answers what access a caller holds on an original.
+
+* **The attachment area is the server's to write.** A client `PUT`, `MKCOL` or `MKCALENDAR` under a `dropbox` is refused — `403` flat, `405` inside an existing attachment directory — via the `creatable/3` hook seam, and `PROPFIND` of a refused path answers `403` `DAV:need-privileges` like the `GET` path rather than confirming what exists. Principals advertise `CS:dropbox-home-URL`.
 
 * The harness's `grabcalparameter` grab was an unimplemented stub until this drive — `$managed_id1:` never bound, so every fixture that carried an id between requests either skipped or failed. If a suite family fails uniformly on "unresolved" variables, check the grab implementations before the server.
 
@@ -119,7 +123,7 @@ RFC 6578 collection synchronisation, in `Dav.Web.Sync` and the store seams `c:Da
 
 ## Hook seams added for conformance
 
-Optional callbacks on `Dav.Web.Hook`, each added when a behaviour had no seam to live in: `patchable/3` (semantic PROPPATCH validation — free-busy-set hrefs must exist, the default-calendar URL must be an owned calendar), `removable/3` (delete authorisation beyond access control), `relocated/3` (repairing pointers after a MOVE), `inherited/3` (property floors for shared views). On `Dav.Web.Store`: `unattended?/2` (which addresses are auto-managed), `sync_token/2` and `changes/4` (RFC 6578 change history).
+Optional callbacks on `Dav.Web.Hook`, each added when a behaviour had no seam to live in: `patchable/3` (semantic PROPPATCH validation — free-busy-set hrefs must exist, the default-calendar URL must be an owned calendar), `removable/3` (delete authorisation beyond access control), `relocated/3` (repairing pointers after a MOVE), `inherited/3` (property floors for shared views), `readable/2` (read refusals for private material — the attachment area), `creatable/3` (creation refusals for server-owned parts of the tree). On `Dav.Web.Store`: `unattended?/2` (which addresses are auto-managed), `sync_token/2` and `changes/4` (RFC 6578 change history).
 
 ## The incidental class
 
