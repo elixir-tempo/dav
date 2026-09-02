@@ -24,6 +24,7 @@ defmodule Dav.Cal.Attachments do
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Sharing
   alias Dav.Web.Acl
+  alias Dav.Web.Hook
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -394,12 +395,16 @@ defmodule Dav.Cal.Attachments do
         do: path
   end
 
-  defp collections_of(home, %{store: store, context: context}) do
+  defp collections_of(home, %{store: store, context: context} = options) do
     with {:ok, root} <- store.resolve(home, context),
          {:ok, children} <- store.children(root, context) do
+      # An extension's own area is not the user's calendar data: a copy
+      # waiting in the trash does not keep an attachment alive, any
+      # more than it shows up in a listing.
       for collection <- children,
           collection.collection?,
           List.last(collection.path) != "dropbox",
+          not Hook.concealed?(collection, options),
           do: collection
     else
       _no_home -> []

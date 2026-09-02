@@ -472,7 +472,8 @@ defmodule Dav.Web.Hook do
                       readable: 2,
                       creatable: 3,
                       disclosed: 3,
-                      rendered: 2
+                      rendered: 2,
+                      hidden?: 2
 
   @doc """
   Ask every hook whether a client may create a resource at this path.
@@ -540,4 +541,79 @@ defmodule Dav.Web.Hook do
         }
 
   @callback written(change :: change(), options :: map()) :: :ok
+
+  @doc """
+  Whether a resource is an extension's own working area, and so not
+  part of what a client is shown.
+
+  Optional. A collection an extension keeps for its own purposes — the
+  trash a deleted event waits in — is a real resource with real
+  members, but listing it in a `PROPFIND` or reporting its members as
+  changes would show a client a place it did not put anything and
+  cannot use.
+
+  ### Arguments
+
+  * `resource` is the member being considered.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `true` to leave it out of listings and change reports.
+
+  """
+  @callback hidden?(resource :: Resource.t(), options :: map()) :: boolean()
+
+  @doc """
+  Whether any hook conceals this resource.
+
+  ### Arguments
+
+  * `resource` is the member being considered.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `true` when some hook claims it as its own working area.
+
+  """
+  @spec concealed?(Resource.t(), map()) :: boolean()
+  def concealed?(resource, options) do
+    options
+    |> Map.get(:hooks, [])
+    |> Enum.any?(
+      &(Code.ensure_loaded?(&1) and function_exported?(&1, :hidden?, 2) and
+          &1.hidden?(resource, options))
+    )
+  end
+
+  @doc """
+  Tell every hook that applies about a write.
+
+  The fan-out `Dav.Web.Plug` performs after a `PUT`, shared so that an
+  extension writing calendar data of its own — restoring a trashed
+  object, say — announces it the same way rather than announcing it
+  differently.
+
+  ### Arguments
+
+  * `change` is the write, as `t:change/0`.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `:ok`.
+
+  """
+  @spec saving(change(), map()) :: :ok
+  def saving(%{collection: collection} = change, options) do
+    for hook <- Map.get(options, :hooks, []), hook.applies?(collection) do
+      hook.written(change, options)
+    end
+
+    :ok
+  end
 end

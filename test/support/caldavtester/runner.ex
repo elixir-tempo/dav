@@ -1511,7 +1511,8 @@ defmodule Dav.CalDAVTester.Runner do
         Cal.Delegation,
         Cal.Access,
         Cal.Rollup,
-        Cal.Split
+        Cal.Split,
+        Cal.Trash
       ],
       authentication: :required,
       well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],

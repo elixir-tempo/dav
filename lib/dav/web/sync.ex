@@ -27,6 +27,7 @@ defmodule Dav.Web.Sync do
   @behaviour Dav.Web.Report
 
   alias Dav.Web.Hook
+  alias Dav.Web.Hook
   alias Dav.Web.Properties
   alias Dav.Web.Resource
   alias Dav.Web.Store
@@ -42,9 +43,14 @@ defmodule Dav.Web.Sync do
            happened(target, token_of(document), scope_of(document, depth), options) do
       wanted = requested(document)
 
+      # An extension's own working area is not a client's business: a
+      # calendar's trash is reported neither as a member nor as a
+      # change, the same way it is left out of a listing.
+      shown = Enum.reject(changed, &Hook.concealed?(&1, options))
+
       responses =
         arrival(target, token_of(document), wanted, fresh, options) ++
-          Enum.map(changed, &answered(versioned(&1, fresh), wanted, options)) ++
+          Enum.map(shown, &answered(versioned(&1, fresh), wanted, options)) ++
           Enum.map(removed, &gone/1)
 
       {:ok, {:multistatus, responses, [{{Xml.dav(), "sync-token"}, fresh}]}}

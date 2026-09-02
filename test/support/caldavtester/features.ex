@@ -141,6 +141,9 @@ defmodule Dav.CalDAVTester.Features do
                 # Access lists on individual calendar objects,
                 # consulted object by object inside reports.
                 "per-object-ACLs",
+                # Apple's trash collection: a deleted object is kept
+                # where its owner can recover it, in `Dav.Cal.Trash`.
+                "trash-collection",
                 # Apple's recurrence splitting, in `Dav.Cal.Split`:
                 # `POST ?action=split&rid=` divides a recurring event
                 # into past and future resources.

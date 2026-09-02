@@ -131,5 +131,15 @@
   {"implicitsequence.xml", nil} => {:rfc, "RFC 5546 section 2.1.4 SEQUENCE"},
   {"implicittimezones.xml", nil} => {:rfc, "RFC 5545 time zone handling in scheduling"},
   {"implicittodo.xml", nil} => {:rfc, "RFC 6638 scheduling for VTODO"},
-  {"implicitcalendartransp.xml", nil} => {:rfc, "RFC 6638 section 9.1 schedule-calendar-transp"}
+  {"implicitcalendartransp.xml", nil} => {:rfc, "RFC 6638 section 9.1 schedule-calendar-transp"},
+
+  # --- apple: the trash's open edges -------------------------------------
+  {"trash.xml", "Organizer trashes event"} =>
+    {:apple, "recovery re-invites with a raised SEQUENCE; see CONFORMANCE.md"},
+  {"trash.xml", "Sharee trashes event"} =>
+    {:apple, "a sharee's delete keeps their view, not the owner's full copy"},
+  {"trash.xml", "Attendee trashes event, then Organizer splits it"} =>
+    {:apple, "splitting an event with a trashed attendee copy"},
+  {"trash.xml", "Attachments and trash"} =>
+    {:apple, "a trashed event's attachment file is reclaimed; see CONFORMANCE.md"}
 }

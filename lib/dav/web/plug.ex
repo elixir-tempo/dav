@@ -703,9 +703,7 @@ defmodule Dav.Web.Plug do
       merge: merging
     }
 
-    for hook <- options.hooks, hook.applies?(collection), do: hook.written(change, options)
-
-    :ok
+    Hook.saving(change, options)
   end
 
   # RFC 6638 section 3.2.10: a write conditional on the Schedule-Tag
@@ -980,9 +978,10 @@ defmodule Dav.Web.Plug do
     {:ok, [resource]}
   end
 
-  defp gather(%Resource{} = collection, _depth, %{store: store, context: context}) do
+  defp gather(%Resource{} = collection, _depth, %{store: store, context: context} = options) do
     {:ok, children} = store.children(collection, context)
-    {:ok, [collection | children]}
+
+    {:ok, [collection | Enum.reject(children, &Hook.concealed?(&1, options))]}
   end
 
   ## --- REPORT -----------------------------------------------------
