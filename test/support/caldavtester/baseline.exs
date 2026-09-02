@@ -116,7 +116,7 @@
   "proxyauthz.xml" => 0,
   "put.xml" => 42,
   "quota.xml" => 0,
-  "recurrence-splitting.xml" => 0,
+  "recurrence-splitting.xml" => 106,
   "recurrenceput.xml" => 19,
   "reports.xml" => 87,
   "resourceid.xml" => 6,

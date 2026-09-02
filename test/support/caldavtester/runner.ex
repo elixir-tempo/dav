@@ -699,7 +699,7 @@ defmodule Dav.CalDAVTester.Runner do
   end
 
   defp grab({:property, property, variable}, conn, _request, state) do
-    bind(state, variable, first_text(conn, [property]))
+    bind(state, variable, conn |> all_texts([property]) |> List.first())
   end
 
   # A name may be a path — `{ns}outer/{ns}inner` — naming a nested
@@ -709,10 +709,16 @@ defmodule Dav.CalDAVTester.Runner do
   # other — left as written it matches no element, so every grab in
   # Apple's namespace came back empty and the variables they fed
   # travelled on as their own literal names.
-  defp grab({:element, name, variable}, conn, _request, state) do
+  defp grab({:element, name, variables}, conn, _request, state) do
     path = name |> ServerInfo.expand(state.substitutions) |> steps()
+    texts = all_texts(conn, path)
 
-    bind(state, variable, first_text(conn, path))
+    variables
+    |> List.wrap()
+    |> Enum.with_index()
+    |> Enum.reduce(state, fn {variable, index}, state ->
+      bind(state, variable, Enum.at(texts, index))
+    end)
   end
 
   defp grab({:calendar_property, name, variable}, conn, _request, state) do
@@ -743,27 +749,28 @@ defmodule Dav.CalDAVTester.Runner do
   end
 
   # Names are in Clark notation, matching how the scenarios write them.
-  defp first_text(conn, path) do
+  defp all_texts(conn, path) do
     case Xml.parse(conn.resp_body) do
-      {:ok, document} -> document |> follow(path) |> text_of()
-      _unreadable -> nil
+      {:ok, document} -> document |> gather(path) |> Enum.map(&text_of/1)
+      _unreadable -> []
     end
   end
 
-  defp follow(element, []), do: element
+  # Every element the path reaches, in document order — `follow/2`'s
+  # semantics, without stopping at the first.
+  defp gather(nil, _path), do: []
+  defp gather(element, []), do: [element]
 
-  defp follow(nil, _path), do: nil
-
-  # The first step may name the document's own root — a `CS:shared-as`
-  # response *is* that element, and looking only among its descendants
-  # finds nothing. Every later step descends normally.
-  defp follow(element, [name | rest]) do
+  defp gather(element, [name | rest]) do
     wanted = String.trim(name)
 
     if clark(element.name) == wanted do
-      follow(element, rest)
+      gather(element, rest)
     else
-      element |> all() |> Enum.find(&(clark(&1.name) == wanted)) |> follow(rest)
+      element
+      |> all()
+      |> Enum.filter(&(clark(&1.name) == wanted))
+      |> Enum.flat_map(&gather(&1, rest))
     end
   end
 
@@ -1503,7 +1510,8 @@ defmodule Dav.CalDAVTester.Runner do
         Cal.Attachments,
         Cal.Delegation,
         Cal.Access,
-        Cal.Rollup
+        Cal.Rollup,
+        Cal.Split
       ],
       authentication: :required,
       well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],
@@ -1512,7 +1520,7 @@ defmodule Dav.CalDAVTester.Runner do
       compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling
            calendarserver-home-sync calendar-query-extended calendar-managed-attachments
-           calendar-proxy calendarserver-private-events),
+           calendar-proxy calendarserver-private-events calendarserver-recurrence-split),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness

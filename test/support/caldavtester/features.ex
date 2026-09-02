@@ -140,7 +140,11 @@ defmodule Dav.CalDAVTester.Features do
                 "ACL Method",
                 # Access lists on individual calendar objects,
                 # consulted object by object inside reports.
-                "per-object-ACLs"
+                "per-object-ACLs",
+                # Apple's recurrence splitting, in `Dav.Cal.Split`:
+                # `POST ?action=split&rid=` divides a recurring event
+                # into past and future resources.
+                "recurrence-splitting"
               ]
 
   @doc """

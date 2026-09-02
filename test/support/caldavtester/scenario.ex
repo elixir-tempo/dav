@@ -351,8 +351,11 @@ defmodule Dav.CalDAVTester.Scenario do
   defp grab("grabproperty", element),
     do: {:property, Document.text(element, "property"), variable(element)}
 
+  # `grabelement` may carry several `<variable>` children: the nth
+  # matching element's text lands in the nth variable — the splitting
+  # suites grab both multistatus hrefs from one response this way.
   defp grab("grabelement", element),
-    do: {:element, Document.text(element, "name"), variable(element)}
+    do: {:element, Document.text(element, "name"), variables(element)}
 
   defp grab("grabcalproperty", element),
     do: {:calendar_property, Document.text(element, "name"), variable(element)}
@@ -367,6 +370,10 @@ defmodule Dav.CalDAVTester.Scenario do
       nil -> nil
       found -> String.trim(found.text)
     end
+  end
+
+  defp variables(element) do
+    for found <- Document.children(element, "variable"), do: String.trim(found.text)
   end
 
   defp features(element, name) do
