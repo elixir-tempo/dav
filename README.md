@@ -118,7 +118,21 @@ Vendored under `rfc/` in the repository: 41 RFCs with their errata, and Apple's 
 
 ## Installation
 
-Not yet published.
+```elixir
+def deps do
+  [
+    {:dav, "~> 0.1"}
+  ]
+end
+```
+
+`Dav.Web.Plug` is a plug: mount it where the DAV tree should live, and give it a store.
+
+```elixir
+forward "/dav", to: Dav.Web.Plug, init_opts: [store: MyApp.Store, context: MyApp.Repo]
+```
+
+The store is yours — `Dav.Web.Store` is a behaviour with two required callbacks, `resolve/2` and `children/2`, and everything else optional. What the store implements decides what the server advertises.
 
 ## License
 
