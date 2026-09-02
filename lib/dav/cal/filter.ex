@@ -31,13 +31,18 @@ defmodule Dav.Cal.Filter do
 
   """
 
+  alias Dav.Cal.TimeRange
   alias Dav.Xml
 
   @typedoc "A `text-match` condition."
   @type text_match :: %{value: String.t(), collation: String.t(), negate?: boolean()}
 
-  @typedoc "A half-open range of instants, either end open."
-  @type time_range :: {String.t() | nil, String.t() | nil}
+  @typedoc """
+  A half-open window of instants, either end open — read once, when
+  the filter is built from its XML, and `:unusable` when the request
+  spelled a bound the specification does not allow.
+  """
+  @type time_range :: TimeRange.window() | :unusable
 
   @typedoc "A filter over a component, property or parameter."
   @type t :: %__MODULE__{
@@ -147,10 +152,24 @@ defmodule Dav.Cal.Filter do
   defp kind_of(%{name: {_namespace, "param-filter"}}), do: :param
   defp kind_of(_other), do: nil
 
+  # The one place a `time-range`'s text becomes instants. RFC 4791
+  # section 9.9 requires each bound to be "a date with UTC time", so a
+  # bound spelled any other way names no instant and the filter that
+  # carries it is refused by `valid?/1` rather than matched.
   defp time_range(%{children: children}) do
     case Enum.find(children, &local?(&1, "time-range")) do
-      nil -> nil
-      element -> {attribute(element, "start"), attribute(element, "end")}
+      nil ->
+        nil
+
+      element ->
+        bounds = {attribute(element, "start"), attribute(element, "end")}
+
+        with true <- Enum.all?(Tuple.to_list(bounds), &utc_bound?/1),
+             {:ok, window} <- TimeRange.bounds(bounds) do
+          window
+        else
+          _unusable -> :unusable
+        end
     end
   end
 
@@ -369,6 +388,7 @@ defmodule Dav.Cal.Filter do
   defp within(options, parent), do: Keyword.put(options, :parent, parent)
 
   defp in_range?(%__MODULE__{time_range: nil}, _target, _options), do: true
+  defp in_range?(%__MODULE__{time_range: :unusable}, _target, _options), do: false
 
   defp in_range?(%__MODULE__{time_range: range}, target, options) do
     case Keyword.get(options, :time_range) do
@@ -437,8 +457,8 @@ defmodule Dav.Cal.Filter do
   # server would have to pick a zone on the client's behalf, and two
   # servers picking differently would answer the same query with
   # different events.
-  defp utc?(nil), do: true
-  defp utc?({start, finish}), do: utc_bound?(start) and utc_bound?(finish)
+  defp utc?(:unusable), do: false
+  defp utc?(_window), do: true
 
   defp utc_bound?(nil), do: true
 

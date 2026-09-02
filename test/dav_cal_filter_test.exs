@@ -3,6 +3,7 @@ defmodule Dav.Cal.FilterTest do
 
   alias Dav.Cal.Filter
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.TimeRange
   alias Dav.Xml
 
   doctest Dav.Cal.Filter
@@ -29,7 +30,8 @@ defmodule Dav.Cal.FilterTest do
       assert filter.name == "VCALENDAR"
       assert [event] = filter.children
       assert event.name == "VEVENT"
-      assert event.time_range == {"20260601T000000Z", "20260701T000000Z"}
+      assert {:ok, window} = TimeRange.bounds({"20260601T000000Z", "20260701T000000Z"})
+      assert event.time_range == window
     end
 
     test "a time range may be open at either end" do
@@ -38,7 +40,8 @@ defmodule Dav.Cal.FilterTest do
           ~s(<C:comp-filter name="VCALENDAR"><C:time-range start="20260601T000000Z"/></C:comp-filter>)
         )
 
-      assert filter.time_range == {"20260601T000000Z", nil}
+      assert {:ok, window} = TimeRange.bounds({"20260601T000000Z", nil})
+      assert filter.time_range == window
     end
 
     test "the grammar allows exactly one comp-filter in a filter" do
@@ -241,7 +244,7 @@ defmodule Dav.Cal.FilterTest do
       refute Filter.match?(filter, calendar, time_range: fn _component, _range -> false end)
     end
 
-    test "the evaluator is given the range as written" do
+    test "the evaluator is given the window already read" do
       {:ok, filter} =
         parse(
           ~s(<C:comp-filter name="VCALENDAR"><C:time-range start="20260601T000000Z" end="20260701T000000Z"/></C:comp-filter>)
@@ -249,9 +252,11 @@ defmodule Dav.Cal.FilterTest do
 
       {:ok, calendar} = ICalendar.parse("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n")
 
+      {:ok, window} = TimeRange.bounds({"20260601T000000Z", "20260701T000000Z"})
+
       Filter.match?(filter, calendar,
         time_range: fn _component, range ->
-          assert range == {"20260601T000000Z", "20260701T000000Z"}
+          assert range == window
           true
         end
       )

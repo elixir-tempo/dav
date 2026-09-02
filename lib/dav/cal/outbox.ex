@@ -51,6 +51,7 @@ defmodule Dav.Cal.Outbox do
   alias Dav.Cal.FreeBusy
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
+  alias Dav.Cal.TimeRange
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -458,6 +459,14 @@ defmodule Dav.Cal.Outbox do
     range = {property(request, "DTSTART"), property(request, "DTEND")}
     organiser = property(request, "ORGANIZER")
 
+    # The request's window is read once here. Below this, every
+    # calendar scanned and every period clipped works in instants.
+    window =
+      case TimeRange.bounds(range) do
+        {:ok, read} -> read
+        :error -> {nil, nil}
+      end
+
     options =
       options
       |> Map.put(:mask_uid, property(request, "X-CALENDARSERVER-MASK-UID"))
@@ -479,7 +488,7 @@ defmodule Dav.Cal.Outbox do
     responses =
       for(
         property <- asked,
-        do: answer(property.value, property.parameters, organiser, range, options)
+        do: answer(property.value, property.parameters, organiser, {range, window}, options)
       ) ++ for property <- overflow, do: {property.value, @no_inbox, nil}
 
     conn
@@ -492,7 +501,7 @@ defmodule Dav.Cal.Outbox do
   # different — whether an event makes *them* busy is theirs to say —
   # so answering for someone else while scoped to the requester
   # reports the requester's own view of time that is not theirs.
-  defp answer(attendee, parameters, organiser, range, options) do
+  defp answer(attendee, parameters, organiser, asked, options) do
     options = as_attendee(attendee, options)
 
     case calendars_of(attendee, options) do
@@ -512,7 +521,7 @@ defmodule Dav.Cal.Outbox do
 
       calendars ->
         {attendee, @success,
-         busy(calendars, {attendee, parameters}, organiser, range, detailed(attendee, options))}
+         busy(calendars, {attendee, parameters}, organiser, asked, detailed(attendee, options))}
     end
   end
 
@@ -655,7 +664,7 @@ defmodule Dav.Cal.Outbox do
     end
   end
 
-  defp busy(calendars, {address, _parameters} = attendee, organiser, range, options) do
+  defp busy(calendars, {address, _parameters} = attendee, organiser, {range, window}, options) do
     {periods, events} =
       calendars
       |> Enum.flat_map(fn calendar ->
@@ -664,7 +673,7 @@ defmodule Dav.Cal.Outbox do
         calendar
         |> children(options)
         |> Enum.reject(&(&1.collection? or Delegation.busy_excluded?(&1, options)))
-        |> Enum.map(&periods(&1, range, borrowed, address, organiser, options))
+        |> Enum.map(&periods(&1, window, borrowed, address, organiser, options))
       end)
       |> Enum.reduce({[], []}, fn {periods, events}, {all_periods, all_events} ->
         {all_periods ++ periods, all_events ++ events}
@@ -680,7 +689,7 @@ defmodule Dav.Cal.Outbox do
 
   defp periods(
          object,
-         range,
+         window,
          borrowed?,
          address,
          organiser,
@@ -697,7 +706,7 @@ defmodule Dav.Cal.Outbox do
       trimmed = %{calendar | components: components}
       level = Dav.Cal.Access.level(object, options)
 
-      {FreeBusy.periods_of(trimmed, range), shown(trimmed, level, range, options)}
+      {FreeBusy.periods_of(trimmed, window), shown(trimmed, level, window, options)}
     else
       _unreadable -> {[], []}
     end
@@ -706,12 +715,12 @@ defmodule Dav.Cal.Outbox do
   # The events an extended answer shows: the ones whose time actually
   # lands in the window, alarms left out — they are the owner's, not
   # the asker's business.
-  defp shown(calendar, level, range, options) do
+  defp shown(calendar, level, window, options) do
     if Map.get(options, :detailed_freebusy, false) do
       for component <- calendar.components,
           component.name == "VEVENT",
           not hidden?(calendar, component, level, options),
-          FreeBusy.periods_of(%{calendar | components: [component]}, range) != [],
+          FreeBusy.periods_of(%{calendar | components: [component]}, window) != [],
           do: presentable(component, options)
     else
       []

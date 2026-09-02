@@ -98,8 +98,12 @@ defmodule Dav.Cal.Expand do
   def apply(data, nil, _floating), do: data
 
   def apply(data, range, floating) do
-    case ICalendar.parse(data) do
-      {:ok, calendar} -> calendar |> expanded(range, floating) |> ICalendar.write()
+    # The window the report asked for is read once, here, and every
+    # component is then expanded against instants.
+    with {:ok, window} <- TimeRange.bounds(range),
+         {:ok, calendar} <- ICalendar.parse(data) do
+      calendar |> expanded(window, floating) |> ICalendar.write()
+    else
       _unreadable -> data
     end
   end

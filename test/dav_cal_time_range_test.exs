@@ -18,84 +18,91 @@ defmodule Dav.Cal.TimeRangeTest do
 
   defp overlaps?(lines, range), do: TimeRange.overlaps?(event(lines), range)
 
+  # Windows reach the API as instants, so the tests read theirs the
+  # same way a request does.
+  defp window(range) do
+    {:ok, window} = TimeRange.bounds(range)
+    window
+  end
+
   @day {"20260615T000000Z", "20260616T000000Z"}
 
   describe "with DTEND" do
     test "an event inside the range overlaps" do
-      assert overlaps?(["DTSTART:20260615T090000Z", "DTEND:20260615T100000Z"], @day)
+      assert overlaps?(["DTSTART:20260615T090000Z", "DTEND:20260615T100000Z"], window(@day))
     end
 
     test "an event wholly before it does not" do
-      refute overlaps?(["DTSTART:20260614T090000Z", "DTEND:20260614T100000Z"], @day)
+      refute overlaps?(["DTSTART:20260614T090000Z", "DTEND:20260614T100000Z"], window(@day))
     end
 
     test "an event ending exactly at the range start does not overlap" do
       # `start < DTEND` is strict: an event that finishes as the window
       # opens is not in it.
-      refute overlaps?(["DTSTART:20260614T230000Z", "DTEND:20260615T000000Z"], @day)
+      refute overlaps?(["DTSTART:20260614T230000Z", "DTEND:20260615T000000Z"], window(@day))
     end
 
     test "an event starting exactly at the range end does not overlap" do
       # `end > DTSTART`, and end is non-inclusive.
-      refute overlaps?(["DTSTART:20260616T000000Z", "DTEND:20260616T010000Z"], @day)
+      refute overlaps?(["DTSTART:20260616T000000Z", "DTEND:20260616T010000Z"], window(@day))
     end
 
     test "an event spanning the whole range overlaps" do
-      assert overlaps?(["DTSTART:20260601T000000Z", "DTEND:20260701T000000Z"], @day)
+      assert overlaps?(["DTSTART:20260601T000000Z", "DTEND:20260701T000000Z"], window(@day))
     end
   end
 
   describe "with DURATION" do
     test "a positive duration behaves like DTEND" do
-      assert overlaps?(["DTSTART:20260615T090000Z", "DURATION:PT1H"], @day)
-      refute overlaps?(["DTSTART:20260614T220000Z", "DURATION:PT1H"], @day)
+      assert overlaps?(["DTSTART:20260615T090000Z", "DURATION:PT1H"], window(@day))
+      refute overlaps?(["DTSTART:20260614T220000Z", "DURATION:PT1H"], window(@day))
     end
 
     test "a zero duration at the range start does overlap" do
       # The row that catches people: for a zero-length event the
       # comparison is `start <= DTSTART`, not `<`.
-      assert overlaps?(["DTSTART:20260615T000000Z", "DURATION:PT0S"], @day)
+      assert overlaps?(["DTSTART:20260615T000000Z", "DURATION:PT0S"], window(@day))
     end
   end
 
   describe "with neither" do
     test "a date-time DTSTART is an instant" do
-      assert overlaps?(["DTSTART:20260615T090000Z"], @day)
-      refute overlaps?(["DTSTART:20260616T090000Z"], @day)
+      assert overlaps?(["DTSTART:20260615T090000Z"], window(@day))
+      refute overlaps?(["DTSTART:20260616T090000Z"], window(@day))
     end
 
     test "an instant exactly at the range start overlaps" do
-      assert overlaps?(["DTSTART:20260615T000000Z"], @day)
+      assert overlaps?(["DTSTART:20260615T000000Z"], window(@day))
     end
 
     test "a date-valued DTSTART lasts a day" do
-      assert overlaps?(["DTSTART;VALUE=DATE:20260615"], @day)
+      assert overlaps?(["DTSTART;VALUE=DATE:20260615"], window(@day))
     end
 
     test "and the day before does not reach into the range" do
-      refute overlaps?(["DTSTART;VALUE=DATE:20260614"], @day)
+      refute overlaps?(["DTSTART;VALUE=DATE:20260614"], window(@day))
     end
   end
 
   describe "open ranges" do
     test "an open end means everything after the start" do
-      assert overlaps?(["DTSTART:20270101T000000Z"], {"20260615T000000Z", nil})
-      refute overlaps?(["DTSTART:20260101T000000Z"], {"20260615T000000Z", nil})
+      assert overlaps?(["DTSTART:20270101T000000Z"], window({"20260615T000000Z", nil}))
+      refute overlaps?(["DTSTART:20260101T000000Z"], window({"20260615T000000Z", nil}))
     end
 
     test "an open start means everything before the end" do
-      assert overlaps?(["DTSTART:20260101T000000Z"], {nil, "20260615T000000Z"})
-      refute overlaps?(["DTSTART:20270101T000000Z"], {nil, "20260615T000000Z"})
+      assert overlaps?(["DTSTART:20260101T000000Z"], window({nil, "20260615T000000Z"}))
+      refute overlaps?(["DTSTART:20270101T000000Z"], window({nil, "20260615T000000Z"}))
     end
   end
 
   describe "what cannot be placed" do
     test "a component with no DTSTART never overlaps" do
-      refute overlaps?(["SUMMARY:Undated"], @day)
+      refute overlaps?(["SUMMARY:Undated"], window(@day))
     end
 
     test "an unreadable DTSTART is not a crash" do
-      refute overlaps?(["DTSTART:not-a-date"], @day)
+      refute overlaps?(["DTSTART:not-a-date"], window(@day))
     end
   end
 
@@ -107,7 +114,7 @@ defmodule Dav.Cal.TimeRangeTest do
                  "DTEND:20260601T100000Z",
                  "RRULE:FREQ=WEEKLY;COUNT=5"
                ],
-               {"20260601T000000Z", "20260602T000000Z"}
+               window({"20260601T000000Z", "20260602T000000Z"})
              )
     end
 
@@ -122,7 +129,7 @@ defmodule Dav.Cal.TimeRangeTest do
                  "DTEND:20260601T100000Z",
                  "RRULE:FREQ=WEEKLY;COUNT=5"
                ],
-               {"20260615T000000Z", "20260616T000000Z"}
+               window({"20260615T000000Z", "20260616T000000Z"})
              )
     end
   end
@@ -140,9 +147,9 @@ defmodule Dav.Cal.TimeRangeTest do
       [event] = calendar.components
 
       # 16:00-17:00 UTC: inside an afternoon window...
-      assert TimeRange.overlaps?(event, {"20260615T150000Z", "20260615T180000Z"})
+      assert TimeRange.overlaps?(event, window({"20260615T150000Z", "20260615T180000Z"}))
       # ...and outside a morning one, which a UTC reading would match.
-      refute TimeRange.overlaps?(event, {"20260615T080000Z", "20260615T100000Z"})
+      refute TimeRange.overlaps?(event, window({"20260615T080000Z", "20260615T100000Z"}))
     end
 
     test "an unresolvable zone leaves the time as written" do
@@ -153,7 +160,7 @@ defmodule Dav.Cal.TimeRangeTest do
       {:ok, calendar} = ICalendar.parse(ics)
       [event] = calendar.components
 
-      assert TimeRange.overlaps?(event, {"20260615T080000Z", "20260615T100000Z"})
+      assert TimeRange.overlaps?(event, window({"20260615T080000Z", "20260615T100000Z"}))
     end
   end
 
@@ -171,13 +178,13 @@ defmodule Dav.Cal.TimeRangeTest do
       # 01:00 in New York is 06:00 UTC.
       assert TimeRange.overlaps?(
                event,
-               {"20270101T055000Z", "20270101T070000Z"},
+               window({"20270101T055000Z", "20270101T070000Z"}),
                "America/New_York"
              )
 
       refute TimeRange.overlaps?(
                event,
-               {"20270101T003000Z", "20270101T004000Z"},
+               window({"20270101T003000Z", "20270101T004000Z"}),
                "America/New_York"
              )
     end
@@ -193,13 +200,13 @@ defmodule Dav.Cal.TimeRangeTest do
       # The day begins at 05:00Z, so a window ending then excludes it.
       refute TimeRange.overlaps?(
                event,
-               {"20270101T050000Z", "20270102T050000Z"},
+               window({"20270101T050000Z", "20270102T050000Z"}),
                "America/New_York"
              )
 
       assert TimeRange.overlaps?(
                event,
-               {"20270102T050000Z", "20270103T050000Z"},
+               window({"20270102T050000Z", "20270103T050000Z"}),
                "America/New_York"
              )
     end
@@ -224,36 +231,36 @@ defmodule Dav.Cal.TimeRangeTest do
       # there is no evidence the task falls outside any window.
       assert TimeRange.overlaps?(
                todo(["SUMMARY:someday"]),
-               {"20260101T000000Z", "20260102T000000Z"}
+               window({"20260101T000000Z", "20260102T000000Z"})
              )
     end
 
     test "a task with only a DUE is placed by it" do
       task = todo(["DUE:20260615T170000Z"])
 
-      assert TimeRange.overlaps?(task, {"20260615T000000Z", "20260616T000000Z"})
-      refute TimeRange.overlaps?(task, {"20260101T000000Z", "20260102T000000Z"})
+      assert TimeRange.overlaps?(task, window({"20260615T000000Z", "20260616T000000Z"}))
+      refute TimeRange.overlaps?(task, window({"20260101T000000Z", "20260102T000000Z"}))
     end
 
     test "a task with only a COMPLETED is placed by it" do
       task = todo(["COMPLETED:20260615T170000Z"])
 
-      assert TimeRange.overlaps?(task, {"20260615T000000Z", "20260616T000000Z"})
-      refute TimeRange.overlaps?(task, {"20260101T000000Z", "20260102T000000Z"})
+      assert TimeRange.overlaps?(task, window({"20260615T000000Z", "20260616T000000Z"}))
+      refute TimeRange.overlaps?(task, window({"20260101T000000Z", "20260102T000000Z"}))
     end
 
     test "a task with only a CREATED is in range from then on" do
       task = todo(["CREATED:20260615T170000Z"])
 
-      assert TimeRange.overlaps?(task, {"20260616T000000Z", "20260617T000000Z"})
-      refute TimeRange.overlaps?(task, {"20260101T000000Z", "20260102T000000Z"})
+      assert TimeRange.overlaps?(task, window({"20260616T000000Z", "20260617T000000Z"}))
+      refute TimeRange.overlaps?(task, window({"20260101T000000Z", "20260102T000000Z"}))
     end
 
     test "DTSTART with DURATION uses the whole span" do
       task = todo(["DTSTART:20260615T090000Z", "DURATION:PT2H"])
 
-      assert TimeRange.overlaps?(task, {"20260615T100000Z", "20260615T103000Z"})
-      refute TimeRange.overlaps?(task, {"20260615T120000Z", "20260615T130000Z"})
+      assert TimeRange.overlaps?(task, window({"20260615T100000Z", "20260615T103000Z"}))
+      refute TimeRange.overlaps?(task, window({"20260615T120000Z", "20260615T130000Z"}))
     end
   end
 end

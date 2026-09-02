@@ -97,15 +97,19 @@ defmodule Dav.Cal.FreeBusy do
   # The report is simply not supported on either.
   defp query(collection, body, depth, options) do
     with {:ok, document} <- Xml.parse(body),
-         {:ok, range} <- range_of(document) do
+         {:ok, range} <- range_of(document),
+         {:ok, window} <- TimeRange.bounds(range) do
       periods =
         collection
         |> objects(depth, options)
         |> Enum.reject(fn {object, _floating} -> Delegation.busy_excluded?(object, options) end)
-        |> Enum.flat_map(fn {object, floating} -> busy(object, range, floating, options) end)
+        |> Enum.flat_map(fn {object, floating} -> busy(object, window, floating, options) end)
         |> coalesce()
 
       {:ok, {:body, "text/calendar", write(periods, range, [])}}
+    else
+      :error -> {:error, :malformed}
+      refusal -> refusal
     end
   end
 
@@ -329,12 +333,10 @@ defmodule Dav.Cal.FreeBusy do
 
   # A period is `start/end` or `start/duration`, and is reported only
   # for the part of it inside the window.
-  defp within(period, {from, to}) do
+  defp within(period, {lower, upper}) do
     with [start, rest] <- String.split(period, "/", parts: 2),
          {:ok, began} <- Tempo.from_iso8601(start),
-         {:ok, ended} <- finish(began, rest),
-         {:ok, lower} <- moment(from),
-         {:ok, upper} <- moment(to) do
+         {:ok, ended} <- finish(began, rest) do
       clipped = {later_of(began, lower), earlier_of(ended, upper)}
       if earlier?(elem(clipped, 0), elem(clipped, 1)), do: {:ok, clipped}, else: :error
     else
@@ -357,9 +359,6 @@ defmodule Dav.Cal.FreeBusy do
   rescue
     _not_a_duration -> value
   end
-
-  defp moment(nil), do: {:ok, nil}
-  defp moment(value), do: Tempo.from_iso8601(value)
 
   # "Servers SHOULD coalesce consecutive or overlapping busy time
   # periods of the same type." Different types may overlap and are
@@ -410,7 +409,7 @@ defmodule Dav.Cal.FreeBusy do
 
   * `calendar` is a component from `Dav.Cal.ICalendar.parse/1`.
 
-  * `range` is the `{start, finish}` window.
+  * `range` is the window, as read by `Dav.Cal.TimeRange.bounds/1`.
 
   ### Returns
 
@@ -420,12 +419,13 @@ defmodule Dav.Cal.FreeBusy do
 
       iex> ics = "BEGIN:VCALENDAR\\r\\nBEGIN:VEVENT\\r\\nDTSTART:20260615T090000Z\\r\\nDTEND:20260615T100000Z\\r\\nEND:VEVENT\\r\\nEND:VCALENDAR\\r\\n"
       iex> {:ok, calendar} = Dav.Cal.ICalendar.parse(ics)
-      iex> [{type, {_from, _to}}] = Dav.Cal.FreeBusy.periods_of(calendar, {"20260601T000000Z", "20260701T000000Z"})
+      iex> {:ok, window} = Dav.Cal.TimeRange.bounds({"20260601T000000Z", "20260701T000000Z"})
+      iex> [{type, {_from, _to}}] = Dav.Cal.FreeBusy.periods_of(calendar, window)
       iex> type
       "BUSY"
 
   """
-  @spec periods_of(ICalendar.component(), {String.t() | nil, String.t() | nil}, String.t() | nil) ::
+  @spec periods_of(ICalendar.component(), TimeRange.window(), String.t() | nil) ::
           [{String.t(), {Tempo.t(), Tempo.t()}}]
   def periods_of(calendar, range, floating \\ nil) do
     considered = Enum.filter(calendar.components, &(&1.name in @considered))

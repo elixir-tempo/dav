@@ -3345,14 +3345,18 @@ defmodule Dav.Cal.Scheduling do
     end
   end
 
+  # The window a conflict is judged over — a year from the event's own
+  # day — read into instants here so the occurrence walks below never
+  # see it as text.
   defp conflict_window(component) do
-    case value(component, "DTSTART") do
-      <<year::binary-size(4), rest::binary-size(4), _tail::binary>> ->
-        {year <> rest <> "T000000Z",
-         Integer.to_string(String.to_integer(year) + 1) <> rest <> "T000000Z"}
-
-      _absent_or_short ->
-        nil
+    with <<year::binary-size(4), rest::binary-size(4), _tail::binary>> <-
+           value(component, "DTSTART"),
+         opens = year <> rest <> "T000000Z",
+         closes = Integer.to_string(String.to_integer(year) + 1) <> rest <> "T000000Z",
+         {:ok, window} <- TimeRange.bounds({opens, closes}) do
+      window
+    else
+      _absent_or_short -> nil
     end
   end
 
