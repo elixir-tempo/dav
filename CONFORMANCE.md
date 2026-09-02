@@ -9,7 +9,7 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | Class | Failing | Meaning |
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
-| Apple/interop | 53 | the open tail of the room auto-scheduling work, and the trash's edges — see below |
+| Apple/interop | 58 | the open tail of the room auto-scheduling work, and the trash's edges — see below |
 | Incidental | 15 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 
@@ -207,7 +207,21 @@ Two general fixes came out of this batch. A `PROPFIND` naming something that is 
 
 It is **not** applied to everyone. The reference repairs only clients it knows to be wrong, identified by `User-Agent`, and the suite proves the distinction: one suite sends `iOS/8.1.1 (12B410) dataaccessd/1.0` and requires the repair, another sends `iOS/8.10 (Previously iOS/8.1.1 version) dataaccessd/1.0` — which *contains* the first version as a substring — and requires that it is left alone. So the match is exact, and the list is a deployment's to state: `Dav.Web.Plug`'s `:client_repairs` option names the `User-Agent` strings this server repairs after, empty by default. A library has no business hard-coding which vendor's build is broken this year.
 
-`schedule-changes` was tried in the same batch and withdrawn. Declaring it switches on stricter `<verify>` blocks inside tests that already ran in `implicittodo.xml` and `privatecomments.xml`, so it costs seven passing tests until `CS:schedule-changes` — an Inbox item describing what the message it carries actually changed — is implemented. That is its own batch, not a declaration.
+## What a message changed
+
+`CS:schedule-changes`, in `Dav.Cal.Changes` (`schedule-changes` declared; `implicitschedulechanges.xml` 42 of 47). An iTIP message says what the event *is*; it does not say what is different about it, so a client showing an Inbox of updates has to diff each one against the copy it already holds to tell "the time moved" from "somebody accepted". The server does that work once and records it beside the message.
+
+* **Described before the recipient's copy is touched.** The message is deposited in the Inbox before the calendar copy is written, which is the only moment the previous version is still there to compare against.
+
+* **Four actions.** `create` for a message about something the recipient does not hold, `update` for one that changes what they do, `cancel` for a withdrawal, and `reply` for an answer — which also names the attendee it came from.
+
+* **Lines are matched by value, not by position.** A `REPLY` carries one attendee's line where the copy holds five; pairing them in order compares one person's answer with another's. An answer speaks only of the lines it carries, so a line it omits is silence rather than removal — while an update compares both directions, because there an absent line *is* a removal.
+
+* **Occurrences are named in UTC**, through the same `Dav.Cal.Scheduling.utc_form/2` the rest of the scheduling engine matches instances with, and a message about the master also names the overrides the recipient holds — an answer to the series answers for them too.
+
+Bookkeeping the server maintains on every write (`DTSTAMP`, `SEQUENCE`, `SCHEDULE-STATUS` and their kin) is never reported: it is true of every message and interesting in none.
+
+Declaring this feature was tried once before it was built and withdrawn, because it switches on stricter `<verify>` blocks inside tests that already ran in `implicittodo.xml` and `privatecomments.xml` — a declaration that cost seven passing tests. With the property implemented those pass, and `implicitscenario1.xml` gained five more.
 
 ## Small features from the same drive
 

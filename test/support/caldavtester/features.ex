@@ -150,6 +150,10 @@ defmodule Dav.CalDAVTester.Features do
                 # Apple's default alarms: the alarm a home or calendar
                 # says to put on events stored without one.
                 "default-alarms",
+                # Apple's `CS:schedule-changes`: an Inbox item says
+                # what the message it carries actually changed, in
+                # `Dav.Cal.Changes`.
+                "schedule-changes",
                 # Sharing a calendar with a group principal, so that
                 # every member of the group holds the share.
                 "share-calendars-to-groups",

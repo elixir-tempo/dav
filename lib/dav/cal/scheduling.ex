@@ -38,6 +38,7 @@ defmodule Dav.Cal.Scheduling do
   @behaviour Dav.Web.Hook
 
   alias Dav.Cal
+  alias Dav.Cal.Changes
   alias Dav.Cal.Delegation
   alias Dav.Cal.FreeBusy
   alias Dav.Cal.ICalendar
@@ -83,6 +84,8 @@ defmodule Dav.Cal.Scheduling do
   # Apple's private comments. An attendee writes the first on their own
   # copy; the organiser's copy carries the second, one per attendee who
   # has said anything, tagged with whose it is.
+  @calendarserver "http://calendarserver.org/ns/"
+
   @private_comment "X-CALENDARSERVER-PRIVATE-COMMENT"
   @attendee_comment "X-CALENDARSERVER-ATTENDEE-COMMENT"
   @attendee_ref "X-CALENDARSERVER-ATTENDEE-REF"
@@ -3731,7 +3734,36 @@ defmodule Dav.Cal.Scheduling do
   # in UTC by another — the reference compares recurrence identifiers
   # as UTC instants (`getRecurrenceIDUTC`) for exactly this reason. A
   # floating or already-UTC value is returned as written.
-  defp utc_form(rid, parameters) do
+  @doc """
+  A `RECURRENCE-ID` written as UTC.
+
+  An identifier carries the zone its event is written in, and two
+  spellings of one moment do not compare equal. Everything that
+  matches instances across copies — and everything that names one to a
+  client — uses this form.
+
+  ### Arguments
+
+  * `rid` is the identifier as written.
+
+  * `parameters` are the property's parameters, for its `TZID`.
+
+  ### Returns
+
+  * The identifier in UTC, or as written when it carries no zone or
+    is already UTC.
+
+  ### Examples
+
+      iex> Dav.Cal.Scheduling.utc_form("20270101T100000", %{"TZID" => "America/New_York"})
+      "20270101T150000Z"
+
+      iex> Dav.Cal.Scheduling.utc_form("20270101T150000Z", %{})
+      "20270101T150000Z"
+
+  """
+  @spec utc_form(String.t(), %{optional(String.t()) => String.t()}) :: String.t()
+  def utc_form(rid, parameters) do
     with zone when is_binary(zone) <- Map.get(parameters, "TZID"),
          [_full, y, mo, d, h, mi, sec] <-
            Regex.run(~r/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/, rid),
@@ -4090,13 +4122,37 @@ defmodule Dav.Cal.Scheduling do
         :ok
 
       inbox ->
+        # Described before the recipient's own copy is touched: the
+        # message says what the event is, and only the copy they still
+        # hold says what is different about it.
+        described =
+          Changes.describe(
+            method,
+            told,
+            held_by(home, uid, options),
+            originator(method, components)
+          )
+
         deposit(
           inbox,
           message(method, told, zones),
           uid,
           options,
-          addressing(method, components, recipient)
+          addressing(method, components, recipient) ++
+            [{:set, {@calendarserver, "schedule-changes"}, described}]
         )
+    end
+  end
+
+  # The recipient's copy as it stands, before this message lands.
+  defp held_by(home, uid, options) do
+    with %Resource{} = calendar <- holding_calendar(home, uid, options),
+         %Resource{} = object <- object_with(calendar, uid, options),
+         {:ok, body} <- read(object, options),
+         {:ok, stored} <- ICalendar.parse(body) do
+      schedulable(stored)
+    else
+      _nothing_held -> []
     end
   end
 

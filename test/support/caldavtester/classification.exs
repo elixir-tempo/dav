@@ -166,5 +166,15 @@
   {"sharing-unshare-groups.xml", nil} =>
     {:apple, "uninviting where group and direct shares overlap; see CONFORMANCE.md"},
   {"sharing-groups-changes.xml", nil} =>
-    {:apple, "membership changes propagating to shares; see CONFORMANCE.md"}
+    {:apple, "membership changes propagating to shares; see CONFORMANCE.md"},
+
+  # --- apple: the schedule-changes tail ----------------------------------
+  {"implicitschedulechanges.xml", "Organizer Changes"} =>
+    {:apple, "a changed DTEND is not named among the changed properties"},
+  {"implicitschedulechanges.xml", "Private Comment"} =>
+    {:apple, "an ATTENDEE changed by a comment round is not named"},
+  {"implicitschedulechanges.xml", "Attendee instance change"} =>
+    {:apple, "an instance answer's ATTENDEE change is not named"},
+  {"implicitschedulechanges.xml", "Multi-instance change"} =>
+    {:apple, "a changed DTEND across instances is not named"}
 }
