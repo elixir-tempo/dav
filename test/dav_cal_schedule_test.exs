@@ -681,21 +681,25 @@ defmodule Dav.Cal.ScheduleTest do
         ) <> "\r\n"
 
       written = DavPlug.call(conn("PUT", "/alice/calendar/v.ics", event), context.options)
-      [reported] = Conn.get_resp_header(written, "etag")
 
+      # RFC 4791 section 5.3.4: scheduling rewrites the organiser's
+      # copy after the write — stamping `SCHEDULE-STATUS`, settling
+      # participation — so the stored version is not the one the
+      # client sent, and no `ETag` may be returned for it. A validator
+      # answered here would describe a version that never existed, and
+      # a client sending it back would have its own write refused for
+      # a change the server made itself.
+      assert [] == Conn.get_resp_header(written, "etag")
+
+      # The version the store holds is still available to ask for, and
+      # is the one a conditional write must quote.
       stored = DavPlug.call(conn("GET", "/alice/calendar/v.ics", ""), context.options)
-
-      # Scheduling rewrites the organiser's copy after the write —
-      # stamping SCHEDULE-STATUS, settling participation — so an ETag
-      # captured before the hooks ran describes a version that no
-      # longer exists. A client sent that validator back and had its
-      # own write refused for a change the server made itself.
-      assert [reported] == Conn.get_resp_header(stored, "etag")
+      [held] = Conn.get_resp_header(stored, "etag")
 
       again =
         DavPlug.call(
           conn("PUT", "/alice/calendar/v.ics", event)
-          |> Conn.put_req_header("if-match", reported),
+          |> Conn.put_req_header("if-match", held),
           context.options
         )
 

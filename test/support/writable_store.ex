@@ -493,9 +493,15 @@ defmodule Dav.Test.WritableStore do
 
   # The properties Apple keeps per person even on a shared thing: a
   # proxy's calendar colour is their own, layered over the owner's.
+  @caldav "urn:ietf:params:xml:ns:caldav"
+
   @per_user [
     {"http://apple.com/ns/ical/", "calendar-color"},
-    {"http://apple.com/ns/ical/", "calendar-order"}
+    {"http://apple.com/ns/ical/", "calendar-order"},
+    {@caldav, "default-alarm-vevent-datetime"},
+    {@caldav, "default-alarm-vevent-date"},
+    {@caldav, "default-alarm-vtodo-datetime"},
+    {@caldav, "default-alarm-vtodo-date"}
   ]
 
   @impl Dav.Web.Store
