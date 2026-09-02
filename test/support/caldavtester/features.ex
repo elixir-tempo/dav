@@ -144,6 +144,9 @@ defmodule Dav.CalDAVTester.Features do
                 # Apple's trash collection: a deleted object is kept
                 # where its owner can recover it, in `Dav.Cal.Trash`.
                 "trash-collection",
+                # Apple's private comments: an attendee's note to the
+                # organiser, kept out of everyone else's copy.
+                "private-comments",
                 # Apple's recurrence splitting, in `Dav.Cal.Split`:
                 # `POST ?action=split&rid=` divides a recurring event
                 # into past and future resources.

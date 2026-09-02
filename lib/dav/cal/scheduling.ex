@@ -80,7 +80,14 @@ defmodule Dav.Cal.Scheduling do
   # back — but they are nobody else's news: `X-APPLE-NEEDS-REPLY`
   # says whether the holder still owes an answer, which is a
   # different fact for every participant.
-  @per_copy ~w(X-APPLE-NEEDS-REPLY X-APPLE-TRAVEL-DURATION X-APPLE-TRAVEL-START X-APPLE-TRAVEL-RETURN-DURATION X-APPLE-TRAVEL-RETURN)
+  # Apple's private comments. An attendee writes the first on their own
+  # copy; the organiser's copy carries the second, one per attendee who
+  # has said anything, tagged with whose it is.
+  @private_comment "X-CALENDARSERVER-PRIVATE-COMMENT"
+  @attendee_comment "X-CALENDARSERVER-ATTENDEE-COMMENT"
+  @attendee_ref "X-CALENDARSERVER-ATTENDEE-REF"
+
+  @per_copy ~w(X-APPLE-NEEDS-REPLY X-APPLE-TRAVEL-DURATION X-APPLE-TRAVEL-START X-APPLE-TRAVEL-RETURN-DURATION X-APPLE-TRAVEL-RETURN X-CALENDARSERVER-PRIVATE-COMMENT)
   @doc """
   Whether this hook applies — only inside a calendar collection.
 
@@ -2187,12 +2194,13 @@ defmodule Dav.Cal.Scheduling do
   end
 
   # What this writer's copy says through the extensions that travel:
-  # the shared `X-` properties, and the public parameters on their own
-  # `ATTENDEE` line.
+  # the shared `X-` properties, the private comment — which travels to
+  # the organiser alone but is still something said — and the public
+  # parameters on their own `ATTENDEE` line.
   defp travelling_view(component, addresses, allowed) do
     properties =
       for property <- component.properties,
-          travels?(property.name, allowed),
+          travels?(property.name, allowed) or property.name == @private_comment,
           do: {property.name, property.value}
 
     parameters =
@@ -3610,7 +3618,7 @@ defmodule Dav.Cal.Scheduling do
             |> unstamped()
             |> without_alarms()
             |> unagented()
-            |> unextended(extensions(options))
+            |> unextended(extensions(options) ++ confided(method))
 
     told =
       for component <- normalised, value(component, "RECURRENCE-ID") in announced, do: component
@@ -3960,6 +3968,13 @@ defmodule Dav.Cal.Scheduling do
 
     %{property | parameters: kept}
   end
+
+  # An attendee's private comment is addressed to the organiser and to
+  # nobody else, so it travels in a `REPLY` and in no other message.
+  # The organiser's copy records it against the attendee who wrote it
+  # rather than keeping it as written — see `commented/2`.
+  defp confided("REPLY"), do: [@private_comment]
+  defp confided(_other_method), do: []
 
   defp private?(name, allowed) do
     # The reset marker is the server's own signal to the recipient's
@@ -4694,6 +4709,53 @@ defmodule Dav.Cal.Scheduling do
       | properties: Enum.map(component.properties, &participation(&1, answers, allowed))
     }
     |> carried(replies, allowed)
+    |> commented(replies)
+  end
+
+  # The organiser's copy holds one comment per attendee who has left
+  # one, tagged with whose it is. A reply that carries no comment from
+  # an attendee who had left one is that attendee taking it back, so
+  # the tagged line goes rather than lingering as something they no
+  # longer say.
+  defp commented(component, replies) do
+    # One reply may speak for several instances, and the comment rides
+    # on whichever of them the attendee wrote it against. Taking the
+    # last word would lose it whenever another instance followed.
+    spoken =
+      Enum.reduce(replies, %{}, fn reply, seen ->
+        address = replying_address(reply)
+        said = Enum.find(reply.properties, &(&1.name == @private_comment))
+
+        Map.update(seen, address, said, &(&1 || said))
+      end)
+
+    kept =
+      Enum.reject(component.properties, fn property ->
+        property.name == @attendee_comment and
+          Map.has_key?(spoken, Map.get(property.parameters, @attendee_ref))
+      end)
+
+    added =
+      for {address, said} <- spoken,
+          is_binary(address),
+          is_map(said),
+          said.value != "",
+          do: %{
+            name: @attendee_comment,
+            parameters: %{@attendee_ref => address},
+            value: said.value
+          }
+
+    %{component | properties: kept ++ added}
+  end
+
+  # Whose reply this is: an iTIP `REPLY` speaks for exactly one
+  # attendee, and that line is the one it carries.
+  defp replying_address(reply) do
+    case Enum.find(reply.properties, &(&1.name == "ATTENDEE")) do
+      %{value: address} -> address
+      _no_attendee -> nil
+    end
   end
 
   # An extension that travels between participants travels *back*. An

@@ -9,7 +9,7 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | Class | Failing | Meaning |
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
-| Apple/interop | 11 | the open tail of the room auto-scheduling work, and the trash's edges — see below |
+| Apple/interop | 17 | the open tail of the room auto-scheduling work, and the trash's edges — see below |
 | Incidental | 15 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 
@@ -158,6 +158,18 @@ Apple's trash collection, in `Dav.Cal.Trash` (`trash-collection` declared). A de
 * **The trash is the server's area, not the client's.** It is made the first time something is deleted rather than sitting in every home, it is not a calendar (so no report or free-busy scan reaches into it), and a new `c:Dav.Web.Hook.hidden?/2` seam keeps it out of `PROPFIND` listings and `DAV:sync-collection` reports. That seam is load-bearing in a second place: the managed-attachment sweep asks it too, so a copy waiting in the trash does not keep an attachment file alive — which is what upstream's own suites require, at the cost of the one test below.
 
 The five open tests are cited in `test/support/caldavtester/classification.exs`: recovery does not re-invite with a raised `SEQUENCE`; a sharee's recovered copy carries their view rather than the owner's per-user data (the owner's copy is gone by the time the hook sees the deletion); splitting an event whose attendee copy is trashed; and a recovered event's `ATTACH` no longer resolves, because the sweep reclaimed the file when the event was trashed.
+
+## Private comments
+
+Apple's private comments (`private-comments` declared, `calendarserver-private-comments` in the `DAV` header), in `Dav.Cal.Scheduling`. `privatecomments.xml` passes 68 of 74.
+
+* **Two properties, two audiences.** An attendee writes `X-CALENDARSERVER-PRIVATE-COMMENT` on their own copy, where it stays — it is per-copy, so no other participant's copy ever carries it. The organiser's copy holds `X-CALENDARSERVER-ATTENDEE-COMMENT` instead, one per attendee who has said anything, tagged `X-CALENDARSERVER-ATTENDEE-REF` with whose it is; a reply that carries no comment from someone who had left one takes their line away.
+
+* **A comment is an answer.** It travels in a `REPLY` and in no other message, and a save that changes only the comment still replies — before that rule the organiser never heard about a comment added by an attendee whose `PARTSTAT` had not moved.
+
+Two general defects surfaced here and are fixed for every caller: a parameter value holding `:`, `;` or `,` is now quoted on output as RFC 5545 section 3.1 requires — an unquoted `X-CALENDARSERVER-ATTENDEE-REF=urn:x-uid:…` read back as the parameter `urn` — and both comment properties are typed as iCalendar TEXT, so an escaped comma no longer truncates the value.
+
+The six open tests are cited in the classification file: they turn on restamping the organiser's copy when only a comment changed, on withdrawing a comment, and on a client that sends the organiser's own comment back.
 
 ## Small features from the same drive
 

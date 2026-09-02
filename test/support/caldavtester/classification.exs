@@ -141,5 +141,16 @@
   {"trash.xml", "Attendee trashes event, then Organizer splits it"} =>
     {:apple, "splitting an event with a trashed attendee copy"},
   {"trash.xml", "Attachments and trash"} =>
-    {:apple, "a trashed event's attachment file is reclaimed; see CONFORMANCE.md"}
+    {:apple, "a trashed event's attachment file is reclaimed; see CONFORMANCE.md"},
+
+  # --- apple: the private-comment tail -----------------------------------
+  {"privatecomments.xml", "Change Comment"} =>
+    {:apple, "the organiser's copy is restamped when only a comment changed"},
+  {"privatecomments.xml", "Remove Comment"} =>
+    {:apple, "withdrawing a comment leaves the organiser's line in place"},
+  {"privatecomments.xml", "Two Comments"} => {:apple, "two attendees' comments on one instance"},
+  {"privatecomments.xml", "Handle old clients"} =>
+    {:apple, "a client that sends the organiser's comment back to itself"},
+  {"privatecomments.xml", "No duplicates"} =>
+    {:apple, "a re-sent identical comment is a second reply"}
 }

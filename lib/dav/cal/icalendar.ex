@@ -38,7 +38,8 @@ defmodule Dav.Cal.ICalendar do
   # Everything else — RRULE, EXDATE, GEO, FREEBUSY — uses `;` and `,`
   # structurally.
   @text_valued ~w(SUMMARY DESCRIPTION LOCATION COMMENT CONTACT
-                  CATEGORIES RESOURCES RELATED-TO TZNAME X-WR-CALNAME)
+                  CATEGORIES RESOURCES RELATED-TO TZNAME X-WR-CALNAME
+                  X-CALENDARSERVER-PRIVATE-COMMENT X-CALENDARSERVER-ATTENDEE-COMMENT)
 
   @typedoc "One `NAME;PARAM=value:value` line."
   @type property :: %{
@@ -310,11 +311,19 @@ defmodule Dav.Cal.ICalendar do
   defp decode_parameter(<<character::utf8, rest::binary>>, seen),
     do: decode_parameter(rest, seen <> <<character::utf8>>)
 
+  # RFC 5545 section 3.1: a parameter value holding `:`, `;` or `,`
+  # must be quoted, or the reader takes the first one as the end of
+  # the parameter — an `X-CALENDARSERVER-ATTENDEE-REF=urn:x-uid:…`
+  # written bare comes back as the parameter `urn` and a value that
+  # was the rest of the address.
   defp encode_parameter(value) do
-    value
-    |> String.replace("^", "^^")
-    |> String.replace("\n", "^n")
-    |> String.replace("\"", "^'")
+    escaped =
+      value
+      |> String.replace("^", "^^")
+      |> String.replace("\n", "^n")
+      |> String.replace("\"", "^'")
+
+    if String.contains?(escaped, [":", ";", ","]), do: ~s("#{escaped}"), else: escaped
   end
 
   defp unquote_value(<<?", rest::binary>>) do

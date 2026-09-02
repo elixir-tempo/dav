@@ -1518,10 +1518,11 @@ defmodule Dav.CalDAVTester.Runner do
       well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],
       administrators: [substitutions["$principaluri_admin:"]],
       principals: [substitutions["$principalcollection:"]],
-      compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
+      compliance:
+        ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling
            calendarserver-home-sync calendar-query-extended calendar-managed-attachments
-           calendar-proxy calendarserver-private-events calendarserver-recurrence-split),
+           calendar-proxy calendarserver-private-events calendarserver-private-comments calendarserver-recurrence-split),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness

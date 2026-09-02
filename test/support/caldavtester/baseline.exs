@@ -109,7 +109,7 @@
   "polls.xml" => 0,
   "prefer.xml" => 31,
   "pretest.xml" => 6,
-  "privatecomments.xml" => 0,
+  "privatecomments.xml" => 68,
   "privateevents.xml" => 174,
   "propfind.xml" => 26,
   "proppatch.xml" => 8,
