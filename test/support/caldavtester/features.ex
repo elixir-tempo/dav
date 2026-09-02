@@ -154,6 +154,12 @@ defmodule Dav.CalDAVTester.Features do
                 # what the message it carries actually changed, in
                 # `Dav.Cal.Changes`.
                 "schedule-changes",
+                # RFC 4331 quota: how much room a collection has and
+                # how much of it is used.
+                "quota",
+                # Calendar objects count towards it, not attachments
+                # alone — the store totals what it holds.
+                "quota-on-resources",
                 # Sharing a calendar with a group principal, so that
                 # every member of the group holds the share.
                 "share-calendars-to-groups",

@@ -656,6 +656,47 @@ defmodule Dav.Test.WritableStore do
 
   # A principal's identity is its stable uid; anything else gets one
   # minted the first time somebody asks, and keeps it across `MOVE`.
+  # The reference deployment bounds each person's calendar home at a
+  # hundred mebibytes and leaves the tree above it unbounded, which is
+  # what `quota.xml` checks: the properties appear on the home and
+  # below it, and nowhere higher.
+  @limit 104_857_600
+
+  @impl Dav.Web.Store
+  def quota(%Resource{collection?: true, path: path}, agent) do
+    # A shared calendar is one calendar seen from two homes, and what
+    # it holds is charged where it lives: a sharee looking at the view
+    # is told the sharer's usage, which is the usage of the thing they
+    # are both writing into.
+    path = underlying(agent, path)
+
+    if within_a_home?(path) do
+      bodies = Agent.get(pid(agent), & &1.bodies)
+
+      # What the holder put there. A copy waiting in the trash is the
+      # server's own bookkeeping — the holder deleted it — and
+      # charging them for it means a delete that frees nothing.
+      used =
+        for {held, body} <- bodies,
+            beneath?(held, path),
+            "trash" not in held,
+            reduce: 0 do
+          total -> total + byte_size(IO.iodata_to_binary(body))
+        end
+
+      {used, @limit - used}
+    else
+      nil
+    end
+  end
+
+  def quota(%Resource{}, _agent), do: nil
+
+  # A calendar home is a person's, and the containers above it belong
+  # to the deployment: `/calendars/` and `/calendars/__uids__/` hold
+  # everybody's and are bounded by nothing.
+  defp within_a_home?(path), do: length(path) >= 3 and hd(path) == "calendars"
+
   @impl Dav.Web.Store
   def resource_id(%Resource{} = resource, agent) do
     case principal_identity(resource) do

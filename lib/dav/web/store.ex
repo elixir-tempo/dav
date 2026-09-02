@@ -232,6 +232,7 @@ defmodule Dav.Web.Store do
           | :scope
           | :principal
           | :addresses
+          | :quota
           | :canonical_address
           | :origin
           | :unattended?
@@ -257,6 +258,7 @@ defmodule Dav.Web.Store do
   defp arity(:scope), do: 2
   defp arity(:origin), do: 2
   defp arity(:principal), do: 2
+  defp arity(:quota), do: 2
   defp arity(:addresses), do: 2
   defp arity(:canonical_address), do: 2
   defp arity(:unattended?), do: 2
@@ -587,6 +589,30 @@ defmodule Dav.Web.Store do
   @callback resource_id(resource :: Resource.t(), context()) :: String.t() | nil
 
   @doc """
+  How much room a collection has, and how much of it is used.
+
+  Optional. RFC 4331 defines `DAV:quota-used-bytes` and
+  `DAV:quota-available-bytes` on a collection; what counts towards
+  either is the store's own accounting, and where a quota applies at
+  all is the store's to say — a server may bound a person's calendar
+  home while leaving the tree above it unbounded. A store that
+  answers `nil` for a collection reports neither property there.
+
+  ### Arguments
+
+  * `collection` is the collection being asked about.
+
+  * `context` is the store's context.
+
+  ### Returns
+
+  * `{used, available}` in bytes, or `nil` where no quota applies.
+
+  """
+  @callback quota(collection :: Resource.t(), context()) ::
+              {non_neg_integer(), non_neg_integer()} | nil
+
+  @doc """
   The calendar user addresses allowed to book this auto-managed user.
 
   Optional. Apple's `AutoAcceptGroup`: a room restricted to a group
@@ -695,5 +721,6 @@ defmodule Dav.Web.Store do
                       changes: 4,
                       auto_schedule_mode: 2,
                       auto_accept_group: 2,
-                      resource_id: 2
+                      resource_id: 2,
+                      quota: 2
 end

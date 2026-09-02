@@ -1630,6 +1630,7 @@ defmodule Dav.Web.Plug do
     |> Map.merge(hook_properties(resource, collection, options))
     |> Map.merge(synced(resource, options))
     |> Map.merge(identified(resource, options))
+    |> Map.merge(bounded(resource, options))
   end
 
   # RFC 3744 section 5.8: where the principals live, stated on every
@@ -1638,6 +1639,22 @@ defmodule Dav.Web.Plug do
     do: %{{Xml.dav(), "principal-collection-set"} => {:hrefs, collections}}
 
   defp principal_collections(_options), do: %{}
+
+  # RFC 4331: what a collection may hold and what it holds already.
+  # Reported only where the store keeps an account — a tree above the
+  # bounded part answers neither property rather than answering
+  # infinity.
+  defp bounded(collection, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :quota),
+         {used, available} <- store.quota(collection, context) do
+      %{
+        {Xml.dav(), "quota-used-bytes"} => Integer.to_string(used),
+        {Xml.dav(), "quota-available-bytes"} => Integer.to_string(available)
+      }
+    else
+      _unbounded -> %{}
+    end
+  end
 
   # RFC 5842: the identity that names the resource itself, wherever
   # it is bound — only where the store can promise one.

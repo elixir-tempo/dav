@@ -120,7 +120,7 @@ defmodule Dav.Cal.MkcalendarTest do
       assert mkcalendar("/home/work", context.read_only).status == 405
     end
 
-    test "an unregistered method is still refused by the base", context do
+    test "an unregistered method is still refused by the base", _context do
       plain = DavPlug.init(store: WritableStore, context: WritableStore.start([]))
 
       assert DavPlug.call(conn("MKCALENDAR", "/home/work"), plain).status == 405

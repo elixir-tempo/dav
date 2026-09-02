@@ -1,5 +1,5 @@
 # Passing CalDAVTester tests per scenario, as measured by
-# `Dav.CalDAVTester.Runner`. Regenerate with `mix run priv/baseline.exs`
+# `Dav.CalDAVTester.Runner`. Regenerate with `DAV_BASELINE=1 mix test`
 # after a change that legitimately improves or reduces coverage.
 %{
   "acl.xml" => 52,
@@ -95,7 +95,7 @@
   "limits.xml" => 0,
   "managed-attachments-dropbox.xml" => 18,
   "managed-attachments-implicit.xml" => 83,
-  "managed-attachments-quota.xml" => 0,
+  "managed-attachments-quota.xml" => 9,
   "managed-attachments-recurrence.xml" => 10,
   "managed-attachments-sharing.xml" => 78,
   "managed-attachments.xml" => 105,
@@ -115,7 +115,7 @@
   "proppatch.xml" => 8,
   "proxyauthz.xml" => 0,
   "put.xml" => 42,
-  "quota.xml" => 0,
+  "quota.xml" => 15,
   "recurrence-splitting.xml" => 106,
   "recurrenceput.xml" => 19,
   "reports.xml" => 87,
@@ -147,7 +147,7 @@
   "sharing-peruser-data.xml" => 25,
   "sharing-peruser-properties.xml" => 12,
   "sharing-proxies.xml" => 26,
-  "sharing-quota.xml" => 0,
+  "sharing-quota.xml" => 26,
   "sharing-replies.xml" => 10,
   "sharing-sync.xml" => 45,
   "sharing-traveltime.xml" => 0,

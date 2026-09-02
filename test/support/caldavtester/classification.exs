@@ -176,5 +176,11 @@
   {"implicitschedulechanges.xml", "Attendee instance change"} =>
     {:apple, "an instance answer's ATTENDEE change is not named"},
   {"implicitschedulechanges.xml", "Multi-instance change"} =>
-    {:apple, "a changed DTEND across instances is not named"}
+    {:apple, "a changed DTEND across instances is not named"},
+
+  # --- incidental: quota totals differ from the reference's bytes ---------
+  {"quota.xml", "Quota after collection create, and PUT"} =>
+    {:incidental, "the stored bytes are this server's canonical form, not the reference's"},
+  {"sharing-quota.xml", nil} =>
+    {:incidental, "same-UID writes into a shared calendar meet the no-duplicate-uids posture"}
 }

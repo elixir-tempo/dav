@@ -103,6 +103,9 @@ defmodule Dav.Test.SchedulingStore do
   defdelegate resource_id(resource, agent), to: WritableStore
 
   @impl Dav.Web.Store
+  defdelegate quota(collection, agent), to: WritableStore
+
+  @impl Dav.Web.Store
   defdelegate resolve(path, agent), to: WritableStore
 
   @impl Dav.Web.Store

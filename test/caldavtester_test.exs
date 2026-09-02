@@ -10,34 +10,45 @@ defmodule Dav.CalDAVTesterTest do
   many tests each scenario passes today. A change that lowers a count
   fails here, which is the point — the number is not allowed to drop
   quietly. A change that raises one also fails, and is fixed by
-  regenerating the baseline:
+  adopting the new figures:
 
-      mix run priv/baseline.exs
+      DAV_BASELINE=1 mix test
+
+  which rewrites the baseline from this same run and prints what
+  moved, along with the classified conformance position. `DAV_REPORT=1`
+  prints both without rewriting anything. The corpus takes minutes to
+  run, so it is run once here and every reading is taken from that one
+  run — see `Dav.CalDAVTester.Corpus`.
 
   """
 
   use ExUnit.Case, async: true
 
+  alias Dav.CalDAVTester.Corpus
   alias Dav.CalDAVTester.Features
-  alias Dav.CalDAVTester.Runner
-  alias Dav.CalDAVTester.Scenario
-  alias Dav.CalDAVTester.ServerInfo
-
-  @scenarios "rfc/conformance/caldavtester/scripts/tests/CalDAV/*.xml"
-  @baseline "test/support/caldavtester/baseline.exs"
 
   setup_all do
-    {:ok, substitutions} = ServerInfo.read()
+    results = Corpus.run()
+    baseline = Corpus.baseline()
 
-    results =
-      for path <- Path.wildcard(@scenarios),
-          {:ok, scenario} = Scenario.read(path),
-          into: %{} do
-        outcomes = Enum.map(Runner.run(scenario, substitutions), &elem(&1, 2))
-        {Path.basename(path), outcomes}
-      end
+    recording? = System.get_env("DAV_BASELINE") == "1"
+    if recording? or System.get_env("DAV_REPORT") == "1", do: report(results, baseline)
+    if recording?, do: Corpus.record(results)
 
-    %{results: results, baseline: @baseline |> Code.eval_file() |> elem(0)}
+    %{results: Corpus.outcomes(results), baseline: baseline, recording?: recording?}
+  end
+
+  defp report(results, baseline) do
+    moved =
+      Enum.map_join(Corpus.drift(results, baseline), "", fn {file, now, was} ->
+        "  #{file}: #{now}, was #{was}\n"
+      end)
+
+    IO.puts(
+      "\nAgainst the recorded baseline\n" <> if(moved == "", do: "  nothing moved\n", else: moved)
+    )
+
+    IO.puts(Corpus.headline(results))
   end
 
   test "no scenario passes fewer tests than it did", context do
@@ -53,15 +64,16 @@ defmodule Dav.CalDAVTesterTest do
 
   test "no scenario passes more tests than the baseline records", context do
     # An improvement is good news and still fails, so that the recorded
-    # figure is never stale — the README quotes it.
+    # figure is never stale — the README quotes it. The exception is the
+    # run that is adopting the new figures, which has just written them.
     improvements =
       for {file, outcomes} <- context.results,
           actual = Enum.count(outcomes, &(&1 == :passed)),
           actual > Map.get(context.baseline, file, 0),
           do: "  #{file}: #{actual}, baseline #{Map.get(context.baseline, file, 0)}"
 
-    assert improvements == [],
-           "these scenarios now pass more — run `mix run priv/baseline.exs`:\n" <>
+    assert context.recording? or improvements == [],
+           "these scenarios now pass more — run `DAV_BASELINE=1 mix test`:\n" <>
              Enum.join(improvements, "\n")
   end
 
