@@ -70,6 +70,22 @@ defmodule Dav.CalDAVTester.Runner do
   # to tell apart from the members it came for.
   @listing ~s(<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>)
 
+  # RFC 6638 puts a principal's scheduling URLs on the principal
+  # resource, which is how a client finds an Inbox at all. A store
+  # supplies them; here they are seeded so the suite can ask for them.
+  # Groups are calendar users too. `expandproperty.xml` asks a group
+  # who its members are and a person which groups they belong to, in
+  # both a direct form (`DAV:group-member-set`) and a transitive one
+  # (Apple's `CS:expanded-group-member-set`) — the difference between
+  # them is the whole point of those tests, so the graph has to nest.
+  @groups %{
+    2 => {[], [6, 7]},
+    3 => {[], [8, 9]},
+    4 => {[2, 3], [10]},
+    5 => {[6], []},
+    6 => {[], [21]}
+  }
+
   @typedoc "What became of one test."
   @type outcome :: :passed | {:failed, String.t()} | {:skipped, String.t()}
 
@@ -985,9 +1001,12 @@ defmodule Dav.CalDAVTester.Runner do
 
     named = named_homes(people, rooms, substitutions)
 
+    aliases = alias_homes(people, substitutions)
+
     resources =
-      ([[] | ancestors(homes)] ++ homes)
+      ([[] | ancestors(homes)] ++ homes ++ ancestors(aliases))
       |> Enum.uniq()
+      |> Enum.reject(&(&1 in aliases))
       |> Enum.map(&container(&1, owners, named))
 
     calendars =
@@ -1048,6 +1067,7 @@ defmodule Dav.CalDAVTester.Runner do
         located(people, ~w(cuaddr email cuaddrurn cuaddralt), substitutions),
         located(rooms, ~w(rcuaddr rcuaddrurn rcuaddralt), substitutions)
       )
+      |> Map.merge(group_addresses(substitutions))
 
     # The suite posts server-to-server messages at a top-level
     # endpoint, which a deployment marks explicitly.
@@ -1196,6 +1216,20 @@ defmodule Dav.CalDAVTester.Runner do
         do: {home, owner}
   end
 
+  # A group is addressable like a person, but what its address names
+  # is the group principal itself: there is no home behind it, and
+  # what a caller wants from it is its membership.
+  defp group_addresses(substitutions) do
+    for {index, _members} <- @groups,
+        key <- ~w(gcuaddr gcuaddrurn gemail),
+        address = substitutions["$#{key}#{index}:"],
+        is_binary(address),
+        path = substitutions["$gprincipaluri#{index}:"],
+        is_binary(path),
+        into: %{},
+        do: {address, segments(path)}
+  end
+
   defp located(who, keys, substitutions) do
     for {index, home} <- who,
         key <- keys,
@@ -1331,22 +1365,6 @@ defmodule Dav.CalDAVTester.Runner do
     |> Enum.concat([canonical])
   end
 
-  # RFC 6638 puts a principal's scheduling URLs on the principal
-  # resource, which is how a client finds an Inbox at all. A store
-  # supplies them; here they are seeded so the suite can ask for them.
-  # Groups are calendar users too. `expandproperty.xml` asks a group
-  # who its members are and a person which groups they belong to, in
-  # both a direct form (`DAV:group-member-set`) and a transitive one
-  # (Apple's `CS:expanded-group-member-set`) — the difference between
-  # them is the whole point of those tests, so the graph has to nest.
-  @groups %{
-    2 => {[], [6, 7]},
-    3 => {[], [8, 9]},
-    4 => {[2, 3], [10]},
-    5 => {[6], []},
-    6 => {[], [21]}
-  }
-
   defp group_principals(substitutions) do
     for {index, _members} <- @groups,
         path = substitutions["$gprincipaluri#{index}:"],
@@ -1476,6 +1494,17 @@ defmodule Dav.CalDAVTester.Runner do
     end)
   end
 
+  # The by-name spelling of each home. Their own containers exist —
+  # `/calendars/users/` holds them, and the suite asks about it
+  # directly — while the homes themselves are links rather than
+  # collections of their own.
+  defp alias_homes(people, substitutions) do
+    for {index, _home} <- people,
+        alternate = substitutions["$calendarhomealt#{index}:"],
+        is_binary(alternate),
+        do: segments(alternate)
+  end
+
   # The containers exist on the reference server as real DAV
   # resources: each has an ETag, a directory content type, and a
   # display name — `acl.xml` reads all three off `/calendars/`.
@@ -1512,17 +1541,18 @@ defmodule Dav.CalDAVTester.Runner do
         Cal.Access,
         Cal.Rollup,
         Cal.Split,
-        Cal.Trash
+        Cal.Trash,
+        Cal.Alarms
       ],
       authentication: :required,
       well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],
       administrators: [substitutions["$principaluri_admin:"]],
       principals: [substitutions["$principalcollection:"]],
-      compliance:
-        ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
+      compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling
            calendarserver-home-sync calendar-query-extended calendar-managed-attachments
-           calendar-proxy calendarserver-private-events calendarserver-private-comments calendarserver-recurrence-split),
+           calendar-proxy calendarserver-private-events calendarserver-private-comments
+           calendar-default-alarms calendarserver-group-sharee calendarserver-recurrence-split),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness

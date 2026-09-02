@@ -375,7 +375,15 @@ defmodule Dav.Web.Plug do
 
       settled = settled(resource, path, options)
 
-      conn = conn |> etag(settled) |> contributed_headers(settled, options)
+      # RFC 4791 section 5.3.4: a server that changed what it was
+      # given must not answer with an `ETag`, because the tag would
+      # name a copy the client does not have. A hook that rewrites —
+      # adding the calendar's default alarm — makes exactly that
+      # difference.
+      conn =
+        if rewritten?(path, body, options),
+          do: contributed_headers(conn, settled, options),
+          else: conn |> etag(settled) |> contributed_headers(settled, options)
 
       # RFC 7240 `return=representation`: the answer carries what was
       # actually stored — which the hooks may have rewritten — so the
@@ -393,6 +401,19 @@ defmodule Dav.Web.Plug do
       {:error, {_namespace, _local} = failed} -> precondition(conn, failed)
     end
   end
+
+  # Compared as content, not as bytes: a store that returns `CRLF`
+  # where the client sent `LF` has changed nothing anybody can read,
+  # and answering that as a rewrite would withhold the `ETag` from
+  # every ordinary write.
+  defp rewritten?(path, body, options) do
+    case contents(path, options) do
+      stored when is_binary(stored) -> lines(stored) != lines(body)
+      _unreadable -> false
+    end
+  end
+
+  defp lines(body), do: body |> String.split(~r/\r?\n/) |> Enum.reject(&(&1 == ""))
 
   # A conditional write that failed still answers `return=representation`
   # — with the copy that *won*: the client's next move needs the current
@@ -865,9 +886,13 @@ defmodule Dav.Web.Plug do
   defp propfind(conn, options) do
     {:ok, body, conn} = read_body(conn)
 
+    # Resolved before the depth is judged: a `PROPFIND` naming
+    # something that is not there is answered `404`, whatever depth it
+    # asked for. Refusing the depth of a request for a resource that
+    # does not exist tells the client about the wrong problem.
     with {:ok, request} <- Xml.parse_propfind(body),
-         {:ok, depth} <- finite(depth(conn, {:ok, :infinity})),
          {:ok, resource} <- resolve(conn, options),
+         {:ok, depth} <- finite(depth(conn, {:ok, :infinity})),
          :ok <- permitted(resource, options),
          :ok <- changed_since(conn, resource),
          {:ok, resources} <- gather(resource, depth, options) do

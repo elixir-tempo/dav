@@ -152,5 +152,19 @@
   {"privatecomments.xml", "Handle old clients"} =>
     {:apple, "a client that sends the organiser's comment back to itself"},
   {"privatecomments.xml", "No duplicates"} =>
-    {:apple, "a re-sent identical comment is a second reply"}
+    {:apple, "a re-sent identical comment is a second reply"},
+
+  # --- apple: default alarms on shared and delivered copies ---------------
+  {"default-alarms.xml", "Shared calendars - initially empty default"} =>
+    {:apple, "a sharee's four defaults exist and are empty before they set any"},
+  {"default-alarms.xml", "Scheduling"} =>
+    {:apple, "a delivered invitation takes the recipient's default alarm"},
+
+  # --- apple: group sharing beyond invitation and withdrawal --------------
+  {"sharing-groups.xml", nil} =>
+    {:apple, "group-share precedence against direct shares; see CONFORMANCE.md"},
+  {"sharing-unshare-groups.xml", nil} =>
+    {:apple, "uninviting where group and direct shares overlap; see CONFORMANCE.md"},
+  {"sharing-groups-changes.xml", nil} =>
+    {:apple, "membership changes propagating to shares; see CONFORMANCE.md"}
 }

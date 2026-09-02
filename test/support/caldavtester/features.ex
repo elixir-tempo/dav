@@ -147,6 +147,12 @@ defmodule Dav.CalDAVTester.Features do
                 # Apple's private comments: an attendee's note to the
                 # organiser, kept out of everyone else's copy.
                 "private-comments",
+                # Apple's default alarms: the alarm a home or calendar
+                # says to put on events stored without one.
+                "default-alarms",
+                # Sharing a calendar with a group principal, so that
+                # every member of the group holds the share.
+                "share-calendars-to-groups",
                 # Apple's recurrence splitting, in `Dav.Cal.Split`:
                 # `POST ?action=split&rid=` divides a recurring event
                 # into past and future resources.

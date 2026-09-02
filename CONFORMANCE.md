@@ -9,7 +9,7 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | Class | Failing | Meaning |
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
-| Apple/interop | 17 | the open tail of the room auto-scheduling work, and the trash's edges — see below |
+| Apple/interop | 53 | the open tail of the room auto-scheduling work, and the trash's edges — see below |
 | Incidental | 15 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 
@@ -170,6 +170,36 @@ Apple's private comments (`private-comments` declared, `calendarserver-private-c
 Two general defects surfaced here and are fixed for every caller: a parameter value holding `:`, `;` or `,` is now quoted on output as RFC 5545 section 3.1 requires — an unquoted `X-CALENDARSERVER-ATTENDEE-REF=urn:x-uid:…` read back as the parameter `urn` — and both comment properties are typed as iCalendar TEXT, so an escaped comma no longer truncates the value.
 
 The six open tests are cited in the classification file: they turn on restamping the organiser's copy when only a comment changed, on withdrawing a comment, and on a client that sends the organiser's own comment back.
+
+## Default alarms
+
+Apple's default alarms, in `Dav.Cal.Alarms` (`default-alarms` declared, `calendar-default-alarms` in the `DAV` header). `default-alarms.xml` passes 33 of 36.
+
+* **Four properties, on homes and calendars.** `CALDAV:default-alarm-vevent-datetime` and its `-date`, `-vtodo-` variants hold a `VALARM`, and a calendar's answer overrides its home's. The value is calendar data, so `patchable/3` refuses anything that is not a `VALARM` rather than storing it to be applied to nothing; `ACTION:NONE` is a statement — this collection wants no alarm — and stops the fallback rather than continuing it.
+
+* **Applied to the stored copy, not the submitted one.** The hook reads back what is stored before adding the alarm, so it does not undo an earlier hook's rewrite; the alarm it adds carries `X-APPLE-DEFAULT-ALARM:TRUE` so a client can tell the server's reminder from its own.
+
+This is where **RFC 4791 section 5.3.4** landed: a `PUT` whose stored result differs from what the client sent answers with no `ETag`, because the validator would name a version the client does not have. The comparison is on content rather than bytes — a store returning `CRLF` where the client sent `LF` has changed nothing — and the rule reaches every rewriting hook, scheduling included.
+
+The three open tests are cited: a sharee's four defaults must exist and be empty before they set any, and a delivered invitation should take the recipient's default rather than none.
+
+## Reading times by profile
+
+Every ISO 8601 value this server reads is read as the *kind* it must be, not as "some ISO 8601 value": `CALDAV:time-range` bounds and `DTSTART`, `DTEND`, `DUE` and `RECURRENCE-ID` through `Tempo.parse_datetime/2` falling back to `Tempo.parse_date/2`; `DURATION`, `TRIGGER` offsets and `REPEAT` gaps through `Tempo.parse_duration/1`; a `FREEBUSY` period's second half by trying the duration profile and then the instant one, which is exactly what RFC 5545 section 3.3.9 allows there and nothing else.
+
+The reason is correctness — a duration written where a moment belongs now fails instead of parsing successfully as the wrong type — and the parse is also where nearly all of this library's time went. Measured on one recurrence-heavy scenario (`reports.xml`): 26,447 general parses and 17.3s at the start of the work, 1,154 after the parses were moved to the boundary (see the window and component reading in `Dav.Cal.TimeRange`), and 8 once each site named its profile, at 6.6s. Per call, ex_tempo's own figures are 113µs to 2.6µs for a duration and 243µs to 24µs for a date. Across the whole corpus the difference is smaller — the run is dominated by the harness's own store and by scheduling — so `mix test` is still about three minutes.
+
+## Sharing to groups
+
+Sharing a calendar with a group principal (`share-calendars-to-groups` declared, `calendarserver-group-sharee` in the `DAV` header). The three group files pass 160 of 193 — **this one is declared while partly built**, and the tail is cited rather than hidden.
+
+What works: an invitation addressed to a group is delivered to the people in it. A group has no calendar home to bind a view into and no notification collection of its own, so the share is expanded to its members, each of whom is invited, accepts and declines for themselves. Nested groups expand transitively, without revisiting a group that appears twice in the graph or one that contains itself. Each derived invitation records which group it came from, so removing the group withdraws exactly those and leaves a member invited in their own right alone. One person reached twice — through two groups, or through a group and directly — is invited once: a direct share outranks a derived one, and between two derived ones the wider access wins. The notification's identity is keyed to the person rather than to the spelling that reached them, so being invited by name and by group does not produce two notices for the same calendar.
+
+Shares are recorded one per *source* — this person, as reached this way — and readers see them merged into one entry per sharee. That is what lets somebody hold a direct share and a group share at once: withdrawing either leaves the other standing, where a single record per person would have the second invitation erase the first.
+
+What does not work: the remaining corners of that matrix, and membership changes propagating to existing shares (`sharing-groups-changes.xml`). Those are the 33 cited failures.
+
+Two general fixes came out of this batch. A `PROPFIND` naming something that is not there is answered `404` whatever depth it asked for — the depth was being judged before the resource was resolved, so a request with no `Depth` header for a deleted resource was told about the wrong problem. And the harness now provisions the containers of the by-name home spellings (`/calendars/users/`), which the suite asks about directly.
 
 ## Small features from the same drive
 

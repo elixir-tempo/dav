@@ -448,12 +448,12 @@ defmodule Dav.Cal.Sharing do
 
   """
   @spec granted_on(Resource.t(), map()) :: String.t() | nil
-  def granted_on(%Resource{} = original, %{store: store, context: context} = options) do
+  def granted_on(%Resource{} = original, options) do
     case Map.get(options, :principal) do
       who when is_binary(who) ->
         named = [who | addresses_of(who, options)]
 
-        case Enum.find(current(original, store, context), &(&1.href in named)) do
+        case Enum.find(effective(original, options), &(&1.href in named)) do
           nil -> proxied(original, named, options)
           invitation -> invitation.access
         end
@@ -515,7 +515,7 @@ defmodule Dav.Cal.Sharing do
     if Store.supports?(store, :properties), do: store.properties(resource, context)
   end
 
-  defp invite(calendar, %{store: store, context: context} = options) do
+  defp invite(calendar, options) do
     # On a sharee's view the property answers from the origin — who
     # shares this calendar, and with whom — with the sharer named as
     # the organizer, the way the sharee's client expects to find them.
@@ -526,7 +526,7 @@ defmodule Dav.Cal.Sharing do
       end
 
     inner =
-      for invitation <- current(source, store, context) do
+      for invitation <- effective(source, options) do
         [
           # The prefixes are declared here rather than assumed. A
           # property value is markup inside somebody else's document,
@@ -629,6 +629,11 @@ defmodule Dav.Cal.Sharing do
   # paints their own copy without the other noticing.
   defp per_user?({"DAV:", "displayname"}), do: true
   defp per_user?({"http://apple.com/ns/ical/", "calendar-color"}), do: true
+
+  # A default alarm is the holder's reminder, not the calendar's
+  # property: a sharee starts with none and sets their own without
+  # putting an alarm on the sharer's copy of anything.
+  defp per_user?({"urn:ietf:params:xml:ns:caldav", "default-alarm-" <> _kind}), do: true
   defp per_user?({_namespace, _local}), do: false
 
   @impl Dav.Web.Method
@@ -662,8 +667,24 @@ defmodule Dav.Cal.Sharing do
   ## --- inviting ---------------------------------------------------
 
   defp share(conn, document, calendar, options) do
-    invitations = for element <- children(document, "set"), do: invitation(element)
-    removals = for element <- children(document, "remove"), do: href_of(element)
+    invitations =
+      for element <- children(document, "set"),
+          invitation <- membered(invitation(element), options),
+          do: invitation
+
+    # Removing a group removes the shares it gave, and only those: a
+    # member invited in their own right keeps that invitation, and a
+    # member who is in the group twice over — through a subgroup —
+    # keeps the one the other group gave them.
+    removals =
+      for element <- children(document, "remove"),
+          href <- withdrawn_by(href_of(element), calendar, options),
+          do: href
+
+    # One person, one invitation: somebody reached through two groups,
+    # or through a group and directly, is invited once, at the access
+    # the sharer meant them to have.
+    invitations = merged(invitations, options)
 
     case Enum.filter(invitations, &refused?(&1, options)) do
       [] ->
@@ -682,6 +703,41 @@ defmodule Dav.Cal.Sharing do
 
       refused ->
         withheld(conn, invitations, refused)
+    end
+  end
+
+  # A share named directly outranks one that arrived through a group,
+  # and between two group shares the wider access wins — being in a
+  # read-write group is not undone by also being in a read-only one.
+  defp merged(invitations, options) do
+    invitations
+    |> Enum.group_by(&canonical(&1.href, options))
+    |> Enum.map(fn {_who, [first | rest]} -> Enum.reduce(rest, first, &stronger/2) end)
+  end
+
+  defp stronger(invitation, held) do
+    cond do
+      is_nil(invitation.group) and not is_nil(held.group) -> invitation
+      not is_nil(invitation.group) and is_nil(held.group) -> held
+      invitation.access == "read-write" -> invitation
+      true -> held
+    end
+  end
+
+  defp withdrawn_by(href, calendar, options) do
+    case group_members(href, options) do
+      [] ->
+        [href]
+
+      members ->
+        wanted = canonical(href, options)
+        held = current(calendar, options.store, options.context)
+
+        for %{href: theirs, group: group} <- held,
+            is_binary(group),
+            canonical(group, options) == wanted,
+            canonical(theirs, options) in Enum.map(members, &canonical(&1, options)),
+            do: theirs
     end
   end
 
@@ -748,8 +804,71 @@ defmodule Dav.Cal.Sharing do
       href: href_of(element),
       summary: text_of(element, "summary"),
       state: "noresponse",
-      access: access_of(element)
+      access: access_of(element),
+      group: nil
     }
+  end
+
+  # A calendar shared with a group is shared with the people in it: a
+  # group has no calendar home to bind a view into and no notification
+  # collection to be invited through, so the invitation is addressed
+  # to each member, who accepts or declines for themselves.
+  defp membered(invitation, options) do
+    case group_members(invitation.href, options) do
+      [] ->
+        [Map.put(invitation, :group, nil)]
+
+      members ->
+        # Each derived invitation remembers the group it came from, so
+        # that unsharing the group withdraws exactly these and leaves
+        # a member invited in their own right alone.
+        for href <- members, do: %{invitation | href: href, group: invitation.href}
+    end
+  end
+
+  # A group may hold groups. What a share to it reaches is the people
+  # at the leaves, found once and without revisiting a group that
+  # appears twice in the graph — or a group that contains itself.
+  defp group_members(href, options), do: group_members(href, options, [])
+
+  defp group_members(href, options, seen) do
+    %{store: store, context: context} = options
+    mark = canonical(href, options)
+
+    with false <- mark in seen,
+         true <- function_exported?(store, :principal, 2),
+         {:ok, %Resource{} = principal} <- store.principal(href, context),
+         %{} = properties <- stored_properties(principal, options),
+         {:hrefs, [_first | _rest] = members} <-
+           Map.get(properties, {Xml.dav(), "group-member-set"}) do
+      members
+      |> Enum.map(&addressed(&1, options))
+      |> Enum.flat_map(&reached(&1, options, [mark | seen]))
+      |> Enum.uniq_by(&canonical(&1, options))
+    else
+      _not_a_group -> []
+    end
+  end
+
+  # A member is a person, or another group standing for its own
+  # members.
+  defp reached(address, options, seen) do
+    case group_members(address, options, seen) do
+      [] -> [address]
+      nested -> nested
+    end
+  end
+
+  # A member is named by principal URL; an invitation is addressed to
+  # a calendar user address, which is what the notification carries
+  # and what the sharee's own reply will quote back.
+  defp addressed(principal, %{store: store, context: context} = options) do
+    with true <- function_exported?(store, :addresses, 2),
+         {:ok, [_one | _more] = addresses} <- store.addresses(principal, context) do
+      canonical(Enum.min_by(addresses, &String.length/1), options)
+    else
+      _unaddressed -> principal
+    end
   end
 
   # `CS:read` or `CS:read-write`; read is the safer default when
@@ -761,19 +880,51 @@ defmodule Dav.Cal.Sharing do
 
   # The invitations live on the calendar as a dead property, which is
   # where `CS:invite` reads them from.
-  defp record(calendar, invitations, removals, %{store: store, context: context}) do
+  defp record(calendar, invitations, removals, options) do
+    %{store: store, context: context} = options
+
     if Store.supports?(store, :patch) do
       existing = current(calendar, store, context)
 
       # A re-invitation replaces the earlier one rather than sitting
-      # beside it, so anyone named in this request is dropped first.
-      replaced = removals ++ Enum.map(invitations, & &1.href)
-      kept = Enum.reject(existing, &(&1.href in replaced))
+      # beside it — the earlier one *from the same source*. Somebody
+      # invited in their own right and again through a group holds two
+      # shares, and withdrawing either leaves the other standing; a
+      # single record per person would make the second invitation
+      # erase the first.
+      replaced =
+        for invitation <- invitations,
+            into: MapSet.new(),
+            do: source_of(invitation, options)
+
+      dropped =
+        for who <- removals, into: MapSet.new(), do: canonical(who, options)
+
+      kept =
+        Enum.reject(existing, fn held ->
+          MapSet.member?(replaced, source_of(held, options)) or
+            MapSet.member?(dropped, canonical(held.href, options))
+        end)
 
       store.patch(calendar, [{:set, invite_property(), encode(kept ++ invitations)}], context)
     end
 
     :ok
+  end
+
+  # What a record is a record *of*: this person, as reached this way.
+  defp source_of(invitation, options) do
+    {canonical(invitation.href, options),
+     invitation |> Map.get(:group) |> then(&(&1 && canonical(&1, options)))}
+  end
+
+  # One entry per sharee, whatever reached them: a client asking who
+  # this calendar is shared with is asking about people. The strongest
+  # share a person holds is the one that describes them.
+  defp effective(calendar, options) do
+    calendar
+    |> current(options.store, options.context)
+    |> merged(options)
   end
 
   defp current(calendar, store, context) do
@@ -791,24 +942,37 @@ defmodule Dav.Cal.Sharing do
   # Stored as text rather than as XML: the property is this server's
   # own bookkeeping, and a store that can hold a string can hold it.
   defp encode(invitations) do
-    Enum.map_join(
-      invitations,
-      "\n",
-      &"#{&1.href}\t#{&1.access}\t#{&1.summary}\t#{Map.get(&1, :state) || "noresponse"}"
-    )
+    Enum.map_join(invitations, "\n", fn invitation ->
+      Enum.join(
+        [
+          invitation.href,
+          invitation.access,
+          invitation.summary,
+          Map.get(invitation, :state) || "noresponse",
+          Map.get(invitation, :group) || ""
+        ],
+        "\t"
+      )
+    end)
   end
 
   defp decode(value) do
     for line <- String.split(value, "\n", trim: true) do
-      case String.split(line, "\t", parts: 4) do
+      case String.split(line, "\t", parts: 5) do
+        [href, access, summary, state, group] ->
+          %{href: href, access: access, summary: summary, state: state, group: grouped(group)}
+
         [href, access, summary, state] ->
-          %{href: href, access: access, summary: summary, state: state}
+          %{href: href, access: access, summary: summary, state: state, group: nil}
 
         [href, access, summary] ->
-          %{href: href, access: access, summary: summary, state: "noresponse"}
+          %{href: href, access: access, summary: summary, state: "noresponse", group: nil}
       end
     end
   end
+
+  defp grouped(""), do: nil
+  defp grouped(group), do: group
 
   # An invitation records what became of it. Until the invitee
   # answers, every sharer's client shows the same calendar as still
@@ -844,7 +1008,7 @@ defmodule Dav.Cal.Sharing do
     with %Resource{} = collection <- notifications_of(invitation.href, options),
          %{store: store, context: context} <- options,
          true <- Store.supports?(store, :put) do
-      uid = uid_for(calendar, invitation)
+      uid = uid_for(calendar, invitation, options)
 
       stored =
         store.put(
@@ -937,7 +1101,7 @@ defmodule Dav.Cal.Sharing do
     with %Resource{} = collection <- notifications_of(href, options),
          %{store: store, context: context} <- options,
          true <- Store.supports?(store, :delete),
-         path = collection.path ++ [uid_for(calendar, %{href: href}) <> ".xml"],
+         path = collection.path ++ [uid_for(calendar, %{href: href}, options) <> ".xml"],
          {:ok, notification} <- store.resolve(path, context) do
       store.delete(notification, context)
     end
@@ -969,8 +1133,14 @@ defmodule Dav.Cal.Sharing do
     ~s(<CS:invite-notification xmlns:CS=") <> @namespace <> ~s(" shared-type="calendar"/>)
   end
 
-  defp uid_for(calendar, invitation) do
-    :crypto.hash(:sha, Resource.href(calendar) <> invitation.href) |> Base.encode16(case: :lower)
+  # One notification per person per calendar, whatever spelling the
+  # invitation used: somebody reached once by name and once through a
+  # group has been invited once, and two notices would have their
+  # client offer the same calendar twice.
+  defp uid_for(calendar, invitation, options) do
+    who = canonical(invitation.href, options)
+
+    :crypto.hash(:sha, Resource.href(calendar) <> who) |> Base.encode16(case: :lower)
   end
 
   defp notifications_of(address, %{store: store, context: context}) do
