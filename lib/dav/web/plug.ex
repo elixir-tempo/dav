@@ -67,6 +67,14 @@ defmodule Dav.Web.Plug do
     clients, so a deployment states it; the default carries only
     `X-APPLE-STRUCTURED-LOCATION`.
 
+  * `:client_repairs` lists the `User-Agent` strings of clients whose
+    writes this server repairs — currently the `TRANSP` a client
+    leaves inconsistent with its own participation. Matched exactly,
+    because client versions differ by a character and a near match is
+    a different build. Empty by default: repairing what a client sent
+    is a deployment's decision about clients it knows, not a rule of
+    the protocol.
+
   * `:principals` lists the hrefs of the collections that hold this
     deployment's principals, reported as RFC 3744's
     `DAV:principal-collection-set` on every resource. Empty by
@@ -105,7 +113,8 @@ defmodule Dav.Web.Plug do
       methods: Map.new(Keyword.get(options, :methods, [])),
       well_known: Map.new(Keyword.get(options, :well_known, [])),
       administrators: Keyword.get(options, :administrators, []),
-      principals: Keyword.get(options, :principals, [])
+      principals: Keyword.get(options, :principals, []),
+      client_repairs: Keyword.get(options, :client_repairs, [])
     }
   end
 
@@ -152,7 +161,7 @@ defmodule Dav.Web.Plug do
 
       _elsewhere ->
         if authenticated?(options) or anonymous_endpoint?(conn, options),
-          do: dispatch(conn.method, conn, scoped(options)),
+          do: dispatch(conn.method, conn, options |> scoped() |> repairing(conn)),
           else: challenge(conn)
     end
   end
@@ -343,6 +352,15 @@ defmodule Dav.Web.Plug do
       {:error, :is_collection} ->
         send_resp(conn, 405, "")
     end
+  end
+
+  # Whether this client is one the deployment repairs after. Recorded
+  # once, here, so a hook deciding whether to correct what it was sent
+  # does not go looking through the request for the answer.
+  defp repairing(options, conn) do
+    agent = conn |> get_req_header("user-agent") |> List.first()
+
+    Map.put(options, :repairing?, agent in Map.get(options, :client_repairs, []))
   end
 
   # An extension holding private material refuses the read here —

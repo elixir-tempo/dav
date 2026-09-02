@@ -201,6 +201,14 @@ What does not work: the remaining corners of that matrix, and membership changes
 
 Two general fixes came out of this batch. A `PROPFIND` naming something that is not there is answered `404` whatever depth it asked for — the depth was being judged before the resource was resolved, so a request with no `Depth` header for a deleted resource was told about the wrong problem. And the harness now provisions the containers of the by-name home spellings (`/calendars/users/`), which the suite asks about directly.
 
+## Repairing a client's transparency
+
+`client-fix-TRANSP` (`implicitclienttranspfix.xml`, 44 of 44). An attendee's copy is busy when they are coming and free when they are not, whatever their client wrote: a declined meeting left `OPAQUE` blocks time its holder has said they will not be at, and an accepted one left `TRANSPARENT` hides time they are committed to. The repair sets `TRANSP` from the holder's own `PARTSTAT` when they answer.
+
+It is **not** applied to everyone. The reference repairs only clients it knows to be wrong, identified by `User-Agent`, and the suite proves the distinction: one suite sends `iOS/8.1.1 (12B410) dataaccessd/1.0` and requires the repair, another sends `iOS/8.10 (Previously iOS/8.1.1 version) dataaccessd/1.0` — which *contains* the first version as a substring — and requires that it is left alone. So the match is exact, and the list is a deployment's to state: `Dav.Web.Plug`'s `:client_repairs` option names the `User-Agent` strings this server repairs after, empty by default. A library has no business hard-coding which vendor's build is broken this year.
+
+`schedule-changes` was tried in the same batch and withdrawn. Declaring it switches on stricter `<verify>` blocks inside tests that already ran in `implicittodo.xml` and `privatecomments.xml`, so it costs seven passing tests until `CS:schedule-changes` — an Inbox item describing what the message it carries actually changed — is implemented. That is its own batch, not a declaration.
+
 ## Small features from the same drive
 
 * `CS:getctag` (`ctag` declared): already implemented as the sync token's twin; `ctag.xml` needed the harness's `propfindItems` to honour its `only` argument, and one Apple quirk — a `MOVE` whose source is gone and whose destination is taken answers `403` for the destination rather than `404` for the source.

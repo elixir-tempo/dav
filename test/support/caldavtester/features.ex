@@ -153,6 +153,9 @@ defmodule Dav.CalDAVTester.Features do
                 # Sharing a calendar with a group principal, so that
                 # every member of the group holds the share.
                 "share-calendars-to-groups",
+                # The server repairs a client's `TRANSP` mistakes on a
+                # scheduled write.
+                "client-fix-TRANSP",
                 # Apple's recurrence splitting, in `Dav.Cal.Split`:
                 # `POST ?action=split&rid=` divides a recurring event
                 # into past and future resources.

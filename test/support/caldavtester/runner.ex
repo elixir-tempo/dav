@@ -1547,6 +1547,10 @@ defmodule Dav.CalDAVTester.Runner do
       authentication: :required,
       well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],
       administrators: [substitutions["$principaluri_admin:"]],
+      # The one client build the suite expects repaired. Matched
+      # exactly: `implicitclienttranspfix.xml` sends a near neighbour
+      # of this string and requires that it is *not* repaired.
+      client_repairs: ["iOS/8.1.1 (12B410) dataaccessd/1.0"],
       principals: [substitutions["$principalcollection:"]],
       compliance: ~w(access-control calendar-access calendar-schedule calendar-auto-schedule
            calendarserver-sharing calendarserver-sharing-no-scheduling

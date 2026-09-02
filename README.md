@@ -48,13 +48,13 @@ Apple's CalDAVTester is 193 scenario files holding 6,675 tests — the requests 
 
 CalDAVTester gates 850 of its own blocks on `<require-feature>`, read against a `serverinfo.xml` describing *the server under test*. Apple's file declares 84 features because Apple's server implements 84; running this server against that list asks it thousands of questions it never claimed to answer, and a server is not non-conformant for lacking a feature it does not advertise.
 
-`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, `auto-accept`, `auto-accept-modes`, `query-extended`, the RFC 7240 `prefer` family, RFC 5995 `add-member`, `managed-attachments`, `ctag`, `well-known`, `brief`, `resource-id`, `maskuid`, `proxy`, `extended-freebusy`, `private-events`, the `ACL Method`, `per-object-ACLs`, `recurrence-splitting`, `trash-collection`, `private-comments`, `default-alarms`, and `share-calendars-to-groups`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and each declaration enlarges the denominator rather than flattering the percentage.
+`Dav.CalDAVTester.Features` declares what is built, and each entry is a claim checkable against the code — `caldav`, `COPY`/`MOVE`, `regular-collection`, `current-user-principal`, the four RFC 3744 principal reports, `expand-property`, `acl-principal-prop-set`, `implicit-scheduling`, `shared-calendars`, `timezones-by-reference`, `sync-report`, `sync-report-home`, `auto-accept`, `auto-accept-modes`, `query-extended`, the RFC 7240 `prefer` family, RFC 5995 `add-member`, `managed-attachments`, `ctag`, `well-known`, `brief`, `resource-id`, `maskuid`, `proxy`, `extended-freebusy`, `private-events`, the `ACL Method`, `per-object-ACLs`, `recurrence-splitting`, `trash-collection`, `private-comments`, `default-alarms`, `share-calendars-to-groups`, and `client-fix-TRANSP`. The list grows only when the capability exists: a feature declared but not built turns a conformance figure into a claim, and each declaration enlarges the denominator rather than flattering the percentage.
 
-Against that declaration the suite puts **4,625 tests**, of which:
+Against that declaration the suite puts **4,669 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 4,557 | 98.5% |
+| passed | 4,601 | 98.5% |
 | failed | 66 | 1.4% |
 | skipped | 2 | 0.1% |
 

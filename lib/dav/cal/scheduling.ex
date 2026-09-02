@@ -2405,6 +2405,45 @@ defmodule Dav.Cal.Scheduling do
   # ORGANIZER, for the reply — which is how an attendee's client shows
   # that their acceptance actually reached the organiser rather than
   # sitting unsent.
+  # An attendee's copy is busy when they are coming and free when they
+  # are not, whatever their client wrote. Apple's clients get this
+  # wrong often enough that the reference repairs it on the way in
+  # (`client-fix-TRANSP`), and a declined meeting left `OPAQUE` blocks
+  # time its holder has said they will not be at.
+  defp settled_transparency(component, addresses, options) do
+    if Map.get(options, :repairing?, false),
+      do: answered_transparency(component, addresses),
+      else: component
+  end
+
+  defp answered_transparency(%{name: name} = component, _addresses) when name != "VEVENT",
+    do: component
+
+  defp answered_transparency(component, addresses) do
+    case participation(component, addresses) do
+      nil -> component
+      answer when answer in ~w(DECLINED NEEDS-ACTION) -> transparent_now(component)
+      _coming -> opaque_now(component)
+    end
+  end
+
+  defp participation(component, addresses) do
+    Enum.find_value(component.properties, fn property ->
+      property.name == "ATTENDEE" and property.value in addresses and
+        Map.get(property.parameters, "PARTSTAT", "NEEDS-ACTION")
+    end)
+  end
+
+  defp transparent_now(component) do
+    %{component | properties: transparent(component.properties)}
+  end
+
+  defp opaque_now(component) do
+    kept = Enum.reject(component.properties, &(&1.name == "TRANSP"))
+
+    %{component | properties: kept ++ [%{name: "TRANSP", parameters: %{}, value: "OPAQUE"}]}
+  end
+
   defp record_reply(
          resource,
          calendar,
@@ -2421,6 +2460,7 @@ defmodule Dav.Cal.Scheduling do
             |> Enum.map(&organizer_as_held(&1, change))
             |> Enum.map(&answered(&1, organizer))
             |> Enum.map(&others_restored(&1, change, addresses, options))
+            |> Enum.map(&settled_transparency(&1, addresses, options))
             |> Enum.map(&shareable(&1, extensions(options)))
       }
 
