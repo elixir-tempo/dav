@@ -344,9 +344,19 @@ defmodule Dav.Cal.FreeBusy do
     end
   end
 
+  # RFC 5545 section 3.3.9: a period ends with either an instant or a
+  # duration, so both are tried by name rather than asking the general
+  # grammar which of the two — or of anything else — it was.
   defp finish(began, rest) do
-    case Tempo.from_iso8601(rest) do
-      {:ok, value} -> {:ok, shift_or_take(began, value)}
+    case Tempo.parse_duration(rest) do
+      {:ok, amount} -> {:ok, shift_or_take(began, amount)}
+      _not_a_duration -> ended_at(began, rest)
+    end
+  end
+
+  defp ended_at(began, rest) do
+    case Tempo.parse_datetime(rest) do
+      {:ok, instant} -> {:ok, shift_or_take(began, instant)}
       other -> other
     end
   end

@@ -5,8 +5,12 @@ defmodule Dav.Cal.TimeRange do
   This is the half of filtering that needs *meaning* rather than
   structure, and it is Tempo's: iCalendar's `20260601T000000Z`,
   `2026-06-01`, `PT1H` and `P1D` are all ordinary ISO 8601 values that
-  `Tempo.from_iso8601/1` reads directly, so nothing here converts
-  between formats.
+  Tempo reads directly, so nothing here converts between formats. Each
+  is read by the profile it belongs to — `Tempo.parse_datetime/2`,
+  `Tempo.parse_date/2`, `Tempo.parse_duration/1` — rather than by the
+  general grammar, so a value written where a moment belongs and a
+  value written where a length belongs cannot be confused for one
+  another.
 
   ### The rule is a table, not an intersection
 
@@ -484,7 +488,7 @@ defmodule Dav.Cal.TimeRange do
         _unreadable -> []
       end
     else
-      case Tempo.from_iso8601(tolerated(value)) do
+      case Tempo.parse_duration(tolerated(value)) do
         {:ok, offset} ->
           parent
           |> anchors(Map.get(parameters, "RELATED", "START"), floating, siblings)
@@ -551,7 +555,7 @@ defmodule Dav.Cal.TimeRange do
     with %{value: count} <- property(alarm, "REPEAT"),
          {times, _rest} when times > 0 <- Integer.parse(count),
          %{value: gap} <- property(alarm, "DURATION"),
-         {:ok, spacing} <- Tempo.from_iso8601(tolerated(gap)) do
+         {:ok, spacing} <- Tempo.parse_duration(tolerated(gap)) do
       1..times
       |> Enum.reduce({[], first}, fn _each, seen -> again(seen, spacing) end)
       |> elem(0)
@@ -799,7 +803,7 @@ defmodule Dav.Cal.TimeRange do
   # neither question should be re-reading the text.
   defp lasting_for(todo) do
     with %{value: value} <- property(todo, "DURATION"),
-         {:ok, amount} <- Tempo.from_iso8601(tolerated(value)) do
+         {:ok, amount} <- Tempo.parse_duration(tolerated(value)) do
       amount
     else
       _undated -> nil
@@ -910,7 +914,7 @@ defmodule Dav.Cal.TimeRange do
   # produces, and re-reading the string per instance was the single
   # most expensive thing this module did.
   defp measured(iso) do
-    case Tempo.from_iso8601(tolerated(iso)) do
+    case Tempo.parse_duration(tolerated(iso)) do
       {:ok, amount} -> lengthy(amount, iso)
       _unreadable -> :instant
     end
@@ -962,7 +966,10 @@ defmodule Dav.Cal.TimeRange do
   # `P1DT` — a date part and then a `T` announcing time components
   # that never come — is malformed, and Apple's parser reads it as
   # though the `T` were not there. Real clients wrote it, so the
-  # tolerance is part of interop.
+  # tolerance is part of interop. What follows it is read as a
+  # duration and nothing else: `Tempo.parse_duration/1` refuses a
+  # date-time where the general parser would have returned one of the
+  # wrong type, and never tries the interval and set grammars.
   defp tolerated(duration), do: String.replace_suffix(duration, "T", "")
 
   # RFC 5545 section 3.8.4.4: `RANGE=THISANDFUTURE` on a
@@ -1090,7 +1097,7 @@ defmodule Dav.Cal.TimeRange do
          {:ok, naive} <- naive(parsed),
          {:ok, local} <- DateTime.from_naive(naive, zone),
          {:ok, utc} <- DateTime.shift_zone(local, "Etc/UTC") do
-      Tempo.from_iso8601(Calendar.strftime(utc, "%Y%m%dT%H%M%SZ"))
+      Tempo.parse_datetime(Calendar.strftime(utc, "%Y%m%dT%H%M%SZ"))
     else
       # An unresolvable zone leaves the value as written rather than
       # dropping the component: a time in an unknown zone is still
@@ -1118,7 +1125,19 @@ defmodule Dav.Cal.TimeRange do
   end
 
   defp moment(nil), do: {:ok, nil}
-  defp moment(value) when is_binary(value), do: Tempo.from_iso8601(value)
+
+  # A calendar moment is a `DATE-TIME` or a `DATE` — RFC 5545 section
+  # 3.3.4 and 3.3.5, and nothing else. Reading it as one of those two
+  # rather than as "some ISO 8601 value" refuses an interval or a
+  # duration written where a moment belongs instead of returning a
+  # value of the wrong type, and takes the profile's short path: a
+  # `DATE` costs about a tenth of what the general grammar costs.
+  defp moment(value) when is_binary(value) do
+    case Tempo.parse_datetime(value) do
+      {:ok, moment} -> {:ok, moment}
+      _not_a_date_time -> Tempo.parse_date(value)
+    end
+  end
 
   # Both sides are always present here: an open end is handled before
   # a comparison is reached, and a component with no DTSTART never

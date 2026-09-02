@@ -91,7 +91,7 @@ defmodule Dav.MixProject do
       # what `time-range` filtering needs and the hardest part of
       # CalDAV to get right. iCalendar parsing arrives transitively
       # through Tempo rather than as a dependency of its own.
-      {:ex_tempo, "~> 1.5"},
+      {:ex_tempo, "~> 1.6"},
       # Request bodies are namespaced XML of well-known shape, which is
       # what SweetXml's extraction is good at. It rides on xmerl, and
       # `Dav.Xml` always scans with `allow_entities: false` — OTP 29

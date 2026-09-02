@@ -281,7 +281,8 @@ defmodule Dav.Cal.Object do
   # overrides. One that is not a readable date-time overrides nothing,
   # and leaves the recurrence set with a member no client can place.
   defp readable?(%{name: "RECURRENCE-ID", value: value}) do
-    match?({:ok, _moment}, Tempo.from_iso8601(value))
+    match?({:ok, _moment}, Tempo.parse_datetime(value)) or
+      match?({:ok, _date}, Tempo.parse_date(value))
   rescue
     _unreadable -> false
   end
