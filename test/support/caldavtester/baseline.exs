@@ -157,7 +157,7 @@
   "sync-report.xml" => 100,
   "timezones.xml" => 17,
   "timezoneservice.xml" => 0,
-  "timezonestdservice.xml" => 0,
+  "timezonestdservice.xml" => 39,
   "trash-implicitgroup.xml" => 0,
   "trash-sync-report.xml" => 5,
   "trash.xml" => 91,

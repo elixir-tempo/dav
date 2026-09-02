@@ -182,5 +182,10 @@
   {"quota.xml", "Quota after collection create, and PUT"} =>
     {:incidental, "the stored bytes are this server's canonical form, not the reference's"},
   {"sharing-quota.xml", nil} =>
-    {:incidental, "same-UID writes into a shared calendar meet the no-duplicate-uids posture"}
+    {:incidental, "same-UID writes into a shared calendar meet the no-duplicate-uids posture"},
+
+  # --- incidental: another server's zone compiler ------------------------
+  {"timezonestdservice.xml", "Query action=get"} =>
+    {:incidental,
+     "the fixtures are CalendarServer's own VTIMEZONE output for the 2016 database: its RRULE grouping of historical transitions and its TZNAME spellings, neither of which RFC 7808 specifies"}
 }

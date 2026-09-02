@@ -170,6 +170,14 @@ defmodule Dav.CalDAVTester.Verifier do
     end
   end
 
+  def run(%Verify{callback: "jsonPointerMatch", args: args}, conn, _substitutions) do
+    with :ok <- status_in(conn, Map.get(args, "status", ["200"])),
+         :ok <- json_typed(conn),
+         {:ok, document} <- decoded(conn.resp_body) do
+      json_pointers(document, args)
+    end
+  end
+
   def run(%Verify{callback: callback}, _conn, _substitutions) do
     {:skipped, "verifier #{callback} is not implemented"}
   end
@@ -1304,4 +1312,73 @@ defmodule Dav.CalDAVTester.Verifier do
       _uncompilable -> Enum.any?(values, &(String.replace(&1, " ", "") == stripped))
     end
   end
+
+  defp json_typed(conn) do
+    type =
+      conn |> Conn.get_resp_header("content-type") |> List.first("") |> String.split(";") |> hd()
+
+    if type == "application/json" or String.ends_with?(type, "+json"),
+      do: :ok,
+      else: {:failed, "content-type #{type}"}
+  end
+
+  defp decoded(""), do: {:failed, "no response body"}
+
+  defp decoded(body) do
+    {:ok, :json.decode(body)}
+  rescue
+    _malformed -> {:failed, "response body is not JSON"}
+  end
+
+  # The pointer syntax is upstream's, extended twice: a `.` segment
+  # stands for any member or item, and a trailing `~$value` asserts
+  # that the value is among those the pointer reached. A pointer that
+  # reaches nothing fails, which is what makes `exists` a test rather
+  # than a description.
+  defp json_pointers(document, args) do
+    absent =
+      for pointer <- Map.get(args, "exists", []),
+          {path, expected} = split_pointer(pointer),
+          reached = json_match(document, path),
+          reached == [] or (expected != nil and expected not in Enum.map(reached, &written/1)),
+          do: pointer
+
+    present =
+      for pointer <- Map.get(args, "notexists", []),
+          {path, _expected} = split_pointer(pointer),
+          json_match(document, path) != [],
+          do: pointer
+
+    case {absent, present} do
+      {[], []} -> :passed
+      {[], found} -> {:failed, "present in JSON: #{Enum.join(found, ", ")}"}
+      {missing, _found} -> {:failed, "not in JSON: #{Enum.join(missing, ", ")}"}
+    end
+  end
+
+  defp split_pointer(pointer) do
+    case String.split(pointer, "~$", parts: 2) do
+      [path] -> {path, nil}
+      [path, expected] -> {path, expected}
+    end
+  end
+
+  defp json_match(document, path) do
+    path
+    |> String.split("/", trim: true)
+    |> Enum.reduce([document], fn segment, reached ->
+      Enum.flat_map(reached, &json_step(&1, segment))
+    end)
+  end
+
+  defp json_step(reached, ".") when is_list(reached), do: reached
+  defp json_step(reached, ".") when is_map(reached), do: Map.values(reached)
+  defp json_step(reached, key) when is_map(reached), do: reached |> Map.fetch(key) |> found()
+  defp json_step(_reached, _segment), do: []
+
+  defp found({:ok, value}), do: [value]
+  defp found(:error), do: []
+
+  defp written(value) when is_binary(value), do: value
+  defp written(value), do: to_string(value)
 end

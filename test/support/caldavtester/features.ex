@@ -163,6 +163,11 @@ defmodule Dav.CalDAVTester.Features do
                 # Sharing a calendar with a group principal, so that
                 # every member of the group holds the share.
                 "share-calendars-to-groups",
+                # RFC 7808, in `Dav.Cal.TimezoneService`: the zone
+                # catalogue, one zone's definition, and the offset
+                # changes across a window, from the same IANA release
+                # the server reads dates with.
+                "timezone-std-service",
                 # The server repairs a client's `TRANSP` mistakes on a
                 # scheduled write.
                 "client-fix-TRANSP",

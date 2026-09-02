@@ -27,6 +27,7 @@ defmodule Dav.CalDAVTester.Runner do
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
   alias Dav.Cal.Sharing
+  alias Dav.Cal.TimezoneService
   alias Dav.CalDAVTester.Features
   alias Dav.CalDAVTester.Scenario
   alias Dav.CalDAVTester.ServerInfo
@@ -44,6 +45,16 @@ defmodule Dav.CalDAVTester.Runner do
 
   # Apple's namespace, for the properties its clients ask for.
   @calendarserver "http://calendarserver.org/ns/"
+
+  # Where this deployment mounts the RFC 7808 service. The suite's
+  # `serverinfo.xml` names the same path, and the two have to agree:
+  # `.well-known/timezone` redirects here and every calendar home
+  # advertises it.
+  @timezone_service "/stdtimezones"
+
+  @timezone_mount String.trim_leading(@timezone_service, "/")
+
+  @timezone_options TimezoneService.init(at: [@timezone_mount])
 
   # How many accounts there are is `serverinfo.xml`'s to say, not this
   # module's: it declares them in a `<repeat count="40">` block, and
@@ -587,9 +598,18 @@ defmodule Dav.CalDAVTester.Runner do
         Conn.put_req_header(conn, name, value)
       end)
 
-    DavPlug.call(conn, state.options)
+    routed(conn, state.options)
   rescue
     _error -> %Plug.Conn{status: 500, resp_body: ""}
+  end
+
+  # The time zone service is not DAV and is not served by the DAV
+  # plug: a deployment forwards to it from its own router, and for
+  # these scenarios the harness is that router.
+  defp routed(conn, options) do
+    if List.first(conn.path_info) == @timezone_mount,
+      do: TimezoneService.call(conn, @timezone_options),
+      else: DavPlug.call(conn, options)
   end
 
   # A request is made *as* somebody. The suite says who with a `user`
@@ -835,7 +855,7 @@ defmodule Dav.CalDAVTester.Runner do
       |> put_headers(request.headers, substitutions)
       |> put_content_type(request.data)
 
-    {:ok, DavPlug.call(conn, options)}
+    {:ok, routed(conn, options)}
   rescue
     error ->
       {:failed,
@@ -901,10 +921,22 @@ defmodule Dav.CalDAVTester.Runner do
   # `**` in a request URI stands for a name the suite does not care
   # about — upstream fills it with a fresh UUID. Anything unique will
   # do, so long as two requests in one run never collide.
+  # `**` in a URI asks for a name nothing else has, which is how the
+  # suite writes "somewhere new". Upstream only reads it that way in
+  # the path: past the `?` it is a query value like any other, and
+  # `?pattern=**` is a search the server is expected to refuse rather
+  # than a place to write to.
   defp named(uri) do
-    if String.contains?(uri, "**"),
+    if String.contains?(uri, "**") and not queried_first?(uri),
       do: String.replace(uri, "**", Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)),
       else: uri
+  end
+
+  defp queried_first?(uri) do
+    case {:binary.match(uri, "?"), :binary.match(uri, "**")} do
+      {{question, _length}, {unique, _size}} -> question < unique
+      _absent -> false
+    end
   end
 
   defp put_headers(conn, headers, substitutions) do
@@ -1124,7 +1156,8 @@ defmodule Dav.CalDAVTester.Runner do
       principal_properties(people, substitutions)
       |> Map.merge(group_properties(substitutions))
       |> Map.merge(proxy_grants(rooms, substitutions))
-      |> Map.merge(tasks_properties(homes)),
+      |> Map.merge(tasks_properties(homes))
+      |> Map.merge(timezone_service_properties(homes)),
       canonical_addresses(people, substitutions),
       aliased_homes(people, substitutions),
       unattended_addresses(rooms, substitutions),
@@ -1459,6 +1492,15 @@ defmodule Dav.CalDAVTester.Runner do
     end
   end
 
+  # Where the time zone service lives is the deployment's to say, not
+  # the library's to invent: a client reads `timezone-service-set` off
+  # its calendar home and asks that URL for zone definitions.
+  defp timezone_service_properties(homes) do
+    for home <- homes, into: %{} do
+      {home, %{{Xml.caldav(), "timezone-service-set"} => {:hrefs, [@timezone_service]}}}
+    end
+  end
+
   defp principal_properties(people, substitutions) do
     for {index, home} <- people,
         path = canonical_principal(index, substitutions),
@@ -1545,7 +1587,10 @@ defmodule Dav.CalDAVTester.Runner do
         Cal.Alarms
       ],
       authentication: :required,
-      well_known: [{"caldav", substitutions["$hostssl:"] <> "/"}],
+      well_known: [
+        {"caldav", substitutions["$hostssl:"] <> "/"},
+        {"timezone", @timezone_service}
+      ],
       administrators: [substitutions["$principaluri_admin:"]],
       # The one client build the suite expects repaired. Matched
       # exactly: `implicitclienttranspfix.xml` sends a near neighbour
