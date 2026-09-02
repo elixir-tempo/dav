@@ -350,6 +350,56 @@ defmodule Dav.Cal.Zones do
     %{onset: first, component: component}
   end
 
+  @doc """
+  An instant written as local time, in the basic calendar form.
+
+  ### Arguments
+
+  * `moment` is the instant, as UTC.
+
+  * `offset` is the seconds from UTC the local time is being written
+    in.
+
+  ### Returns
+
+  * The local time as `YYYYMMDDTHHMMSS`.
+
+  ### Examples
+
+      iex> Dav.Cal.Zones.local_form(~U[2008-03-09 07:00:00Z], -18000)
+      "20080309T020000"
+
+  """
+  @spec local_form(DateTime.t(), integer()) :: String.t()
+  def local_form(%DateTime{} = moment, offset), do: local_time(seconds(moment) + offset)
+
+  @doc """
+  An offset from UTC, written the way iCalendar writes one.
+
+  Hours and minutes, and seconds too where a zone's local mean time
+  needs them — which the nineteenth century routinely does.
+
+  ### Arguments
+
+  * `offset` is the seconds from UTC.
+
+  ### Returns
+
+  * The offset as `+HHMM`, `-HHMM`, or with seconds where they are
+    not zero.
+
+  ### Examples
+
+      iex> Dav.Cal.Zones.offset_form(-18000)
+      "-0500"
+
+      iex> Dav.Cal.Zones.offset_form(-17762)
+      "-045602"
+
+  """
+  @spec offset_form(integer()) :: String.t()
+  def offset_form(offset), do: written(offset)
+
   defp property(name, value), do: %{name: name, parameters: %{}, value: value}
 
   defp local_time(seconds) do
@@ -367,9 +417,6 @@ defmodule Dav.Cal.Zones do
     |> IO.iodata_to_binary()
   end
 
-  # RFC 5545 writes an offset as hours and minutes, and only as hours,
-  # minutes and seconds where a zone's local mean time needs them —
-  # which the nineteenth century routinely does.
   defp written(offset) do
     sign = if offset < 0, do: "-", else: "+"
     total = abs(offset)

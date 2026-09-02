@@ -27,6 +27,7 @@ defmodule Dav.CalDAVTester.Runner do
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
   alias Dav.Cal.Sharing
+  alias Dav.Cal.TimezoneQuery
   alias Dav.Cal.TimezoneService
   alias Dav.CalDAVTester.Features
   alias Dav.CalDAVTester.Scenario
@@ -52,7 +53,15 @@ defmodule Dav.CalDAVTester.Runner do
   # advertises it.
   @timezone_service "/stdtimezones"
 
+  # CalendarServer's older query service, which the suite expects at a
+  # place of its own alongside the RFC 7808 one.
+  @timezone_query "/timezones"
+
   @timezone_mount String.trim_leading(@timezone_service, "/")
+
+  @timezone_query_mount String.trim_leading(@timezone_query, "/")
+
+  @timezone_query_options TimezoneQuery.init([])
 
   @timezone_options TimezoneService.init(at: [@timezone_mount])
 
@@ -607,9 +616,11 @@ defmodule Dav.CalDAVTester.Runner do
   # plug: a deployment forwards to it from its own router, and for
   # these scenarios the harness is that router.
   defp routed(conn, options) do
-    if List.first(conn.path_info) == @timezone_mount,
-      do: TimezoneService.call(conn, @timezone_options),
-      else: DavPlug.call(conn, options)
+    case List.first(conn.path_info) do
+      @timezone_mount -> TimezoneService.call(conn, @timezone_options)
+      @timezone_query_mount -> TimezoneQuery.call(conn, @timezone_query_options)
+      _elsewhere -> DavPlug.call(conn, options)
+    end
   end
 
   # A request is made *as* somebody. The suite says who with a `user`

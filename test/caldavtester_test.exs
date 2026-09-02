@@ -102,9 +102,14 @@ defmodule Dav.CalDAVTesterTest do
     # calendars and for the home.
     assert MapSet.member?(declared, "sync-report")
     assert MapSet.member?(declared, "sync-report-home")
+    # Declared because `Dav.Cal.TimezoneService` implements RFC 7808
+    # and `Dav.Cal.TimezoneQuery` the older dialect beside it, both
+    # reading the catalogue in `Dav.Cal.Zones`.
+    assert MapSet.member?(declared, "timezone-std-service")
+    assert MapSet.member?(declared, "timezone-service")
     # A ceiling, not a target: the count rises only when a feature is
     # built, and raising it is the moment to check that it was.
-    assert MapSet.size(declared) < 45
+    assert MapSet.size(declared) < 50
     assert map_size(context.results) == 162
   end
 

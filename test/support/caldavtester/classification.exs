@@ -187,5 +187,8 @@
   # --- incidental: another server's zone compiler ------------------------
   {"timezonestdservice.xml", "Query action=get"} =>
     {:incidental,
-     "the fixtures are CalendarServer's own VTIMEZONE output for the 2016 database: its RRULE grouping of historical transitions and its TZNAME spellings, neither of which RFC 7808 specifies"}
+     "the fixtures are CalendarServer's own VTIMEZONE output for the 2016 database: its RRULE grouping of historical transitions and its TZNAME spellings, neither of which RFC 7808 specifies"},
+  {"timezoneservice.xml", "Query method=get"} =>
+    {:incidental,
+     "the same CalendarServer VTIMEZONE fixtures; the GB and London ones spell TZNAME in a way IANA's data does not carry at all"}
 }

@@ -156,7 +156,7 @@
   "sharing-webcal.xml" => 0,
   "sync-report.xml" => 100,
   "timezones.xml" => 17,
-  "timezoneservice.xml" => 0,
+  "timezoneservice.xml" => 48,
   "timezonestdservice.xml" => 39,
   "trash-implicitgroup.xml" => 0,
   "trash-sync-report.xml" => 5,
