@@ -4,7 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+* Apple's bulk `POST` (`Dav.Cal.Bulk`): a whole `VCALENDAR` divided into one resource per `UID`, or an `MM:multiput` naming writes, updates and deletes at once, answered with a `207` reporting each entry on its own.
+* `Dav.Web.Write.document/5`, the single-document write `PUT` performs — validators in front, hooks behind — so an extension writing on a client's behalf writes the same way.
+
+### Changed
+
+* `SEQUENCE` now rises whenever an organiser changes what the attendees hold, not only when a scheduling message goes out. An event whose only attendee is its own organiser numbers its revisions.
 
 ## [0.1.0] - 2026-09-02
 

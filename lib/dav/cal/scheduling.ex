@@ -1611,12 +1611,18 @@ defmodule Dav.Cal.Scheduling do
 
       told = Enum.uniq(asked ++ reinvited)
 
-      # And the version rises exactly when somebody is told. Raised
-      # here and not before, because `SEQUENCE` is the organiser's own
-      # numbering: an attendee declining one instance adds an
-      # `EXDATE`, which looks like a change to the timing and had them
-      # advancing it on the organiser's behalf.
-      components = if asked == [], do: components, else: sequenced(components, change)
+      # And the version rises when the organiser changed something the
+      # attendees hold — whether or not anyone is left to tell. An
+      # event whose only attendee is its own organiser still numbers
+      # its revisions, because the number belongs to the object rather
+      # than to the round of messages.
+      #
+      # Raised on this side of the engine and nowhere else, because
+      # `SEQUENCE` is the organiser's own numbering: an attendee
+      # declining one instance adds an `EXDATE`, which looks like a
+      # change to the timing and had them advancing it on the
+      # organiser's behalf.
+      components = renumbered(components, asked, change, options)
 
       # RFC 5546 section 3.2.5: a withdrawn instance travels as a
       # `CANCEL`, not as a `REQUEST` carrying `STATUS:CANCELLED` — and
@@ -3841,6 +3847,21 @@ defmodule Dav.Cal.Scheduling do
 
     %{calendar | components: replaced ++ added}
   end
+
+  defp renumbered(components, asked, change, options) do
+    if asked == [] and not revised?(components, change, options),
+      do: components,
+      else: sequenced(components, change)
+  end
+
+  # The same test `notified/4` makes, asked without the recipients:
+  # whether this save changed what the attendees hold. It is what
+  # decides a version rise, and it has to be separable from whether
+  # anybody is there to hear about it.
+  defp revised?(_components, %{previous: nil}, _options), do: false
+
+  defp revised?(components, %{previous: previous}, options),
+    do: shared_components(components, options) != shared(previous, options)
 
   defp notified(recipients, _components, %{previous: nil}, _options), do: recipients
 

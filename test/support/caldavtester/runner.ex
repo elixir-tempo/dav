@@ -1588,6 +1588,7 @@ defmodule Dav.CalDAVTester.Runner do
       validators: [Cal.Object, Cal.Attachments, Cal.Access],
       hooks: [
         Cal.Scheduling,
+        Cal.Bulk,
         Cal.Sharing,
         Cal.Attachments,
         Cal.Delegation,

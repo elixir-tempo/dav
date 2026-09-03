@@ -14,12 +14,21 @@ defmodule Dav.Cal.Post do
   a scheduling message at an Outbox, but the reply to a sharing
   invitation goes to the invitee's calendar home, which is neither.
 
+  The one place the target settles it is iCalendar, because the same
+  body means two things. `POST`ed at an Outbox it is a scheduling
+  message; `POST`ed at a calendar collection it is Apple's bulk
+  request, asking for the components in it to be stored. Nothing in
+  the body distinguishes them, so that one case asks where it was
+  sent.
+
   """
 
   @behaviour Dav.Web.Method
 
   import Plug.Conn
 
+  alias Dav.Cal
+  alias Dav.Cal.Bulk
   alias Dav.Cal.Outbox
   alias Dav.Cal.Sharing
   alias Dav.Xml
@@ -32,25 +41,38 @@ defmodule Dav.Cal.Post do
     # into the connection. Rewinding means reaching into the adapter's
     # private state, which differs between `Plug.Test` and Bandit —
     # this works the same under both.
-    handler(body).call(conn, path, Map.put(options, :body, body))
+    handler(body, path, options).call(conn, path, Map.put(options, :body, body))
   end
 
-  # A `POST` is a sharing request when its body is one, and scheduling
-  # otherwise. Routing on the body's first character instead sends
-  # every XML body to the sharing handler — including a client's
-  # mis-typed scheduling `POST`, which then hears "not a sharing
-  # document" rather than the scheduling precondition that says what
-  # it actually got wrong.
+  # A `POST` is a sharing request when its body is one, a bulk request
+  # when its body is an `MM:multiput`, and scheduling otherwise.
+  # Routing on the body's first character instead sends every XML body
+  # to the sharing handler — including a client's mis-typed scheduling
+  # `POST`, which then hears "not a sharing document" rather than the
+  # scheduling precondition that says what it actually got wrong.
   @namespace "http://calendarserver.org/ns/"
   @sharing ~w(share invite-reply)
 
-  defp handler(body) do
-    with true <- String.starts_with?(String.trim_leading(body), "<"),
-         {:ok, %{name: {@namespace, local}}} <- Xml.parse(body),
-         true <- local in @sharing do
-      Sharing
-    else
-      _not_a_sharing_document -> Outbox
+  defp handler(body, path, options) do
+    cond do
+      String.starts_with?(String.trim_leading(body), "<") -> documented(body)
+      calendar?(path, options) -> Bulk
+      true -> Outbox
+    end
+  end
+
+  defp documented(body) do
+    case Xml.parse(body) do
+      {:ok, %{name: {@namespace, local}}} when local in @sharing -> Sharing
+      {:ok, %{name: name}} -> if name == Bulk.multiput(), do: Bulk, else: Outbox
+      _not_a_document -> Outbox
+    end
+  end
+
+  defp calendar?(path, %{store: store, context: context}) do
+    case store.resolve(path, context) do
+      {:ok, resource} -> Cal.calendar?(resource)
+      _absent -> false
     end
   end
 end

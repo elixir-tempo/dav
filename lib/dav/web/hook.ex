@@ -616,4 +616,89 @@ defmodule Dav.Web.Hook do
 
     :ok
   end
+
+  @doc """
+  Tell the hooks a resource has been removed.
+
+  The counterpart to `saving/2`, and the reason `DELETE` is not merely
+  storage: an organiser removing an event cancels it for everyone.
+  Anything that removes a resource — `DELETE`, a bulk `POST` carrying
+  `MM:delete` — owes the hooks this call, or the attendees keep an
+  invitation to a meeting that no longer exists.
+
+  ### Arguments
+
+  * `change` is the `t:change/0`, whose `:body` is what the resource
+    held, read before the removal, and whose `:collection` is named
+    rather than looked up: by the time a member of a deleted calendar
+    is reported, the calendar it belonged to is gone, and a hook asked
+    whether it applies to `nil` says no.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `:ok`.
+
+  """
+  @spec removing(change(), map()) :: :ok
+  def removing(%{resource: resource, collection: collection} = change, options) do
+    for hook <- Map.get(options, :hooks, []),
+        concerns?(hook, resource, collection),
+        exports?(hook, :deleted, 2),
+        do: hook.deleted(change, options)
+
+    :ok
+  end
+
+  @doc """
+  Ask the hooks whether a resource may be removed.
+
+  An extension may know a removal is not the requester's to make — a
+  sharee deleting an organiser's meeting — where plain access control
+  sees only write permission.
+
+  ### Arguments
+
+  * `resource` is what is about to be removed.
+
+  * `collection` is the collection holding it, or `nil`.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `:ok` when every hook allows it, otherwise the first refusal.
+
+  """
+  @spec removal(Resource.t(), Resource.t() | nil, map()) :: :ok | {:error, term()}
+  def removal(resource, collection, options) do
+    options
+    |> Map.get(:hooks, [])
+    |> Enum.filter(&exports?(&1, :removable, 3))
+    |> Enum.find_value(:ok, fn hook ->
+      case hook.removable(resource, collection, options) do
+        :ok -> nil
+        {:error, _failed} = refusal -> refusal
+      end
+    end)
+  end
+
+  # A hook hears about a deletion when it applies to the collection the
+  # resource was in — and, when a collection is itself deleted, when it
+  # applies to *that* collection. Deleting a shared calendar has to
+  # withdraw its invitations, and the calendar's parent is a plain home
+  # that no sharing hook claims.
+  defp concerns?(hook, %Resource{collection?: true} = resource, collection) do
+    hook.applies?(collection) or hook.applies?(resource)
+  end
+
+  defp concerns?(hook, _resource, collection), do: hook.applies?(collection)
+
+  # `function_exported?/3` answers for *loaded* modules only, and a
+  # request served before anything else touched an extension would
+  # silently skip its callbacks. Loading is idempotent and cheap.
+  defp exports?(hook, name, arity) do
+    Code.ensure_loaded?(hook) and function_exported?(hook, name, arity)
+  end
 end

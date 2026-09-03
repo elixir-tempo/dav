@@ -178,7 +178,13 @@ defmodule Dav.CalDAVTester.Features do
                 # Apple's recurrence splitting, in `Dav.Cal.Split`:
                 # `POST ?action=split&rid=` divides a recurring event
                 # into past and future resources.
-                "recurrence-splitting"
+                "recurrence-splitting",
+                # Apple's bulk `POST`, in `Dav.Cal.Bulk`: a whole
+                # `VCALENDAR` divided into one resource per `UID`, or
+                # an `MM:multiput` naming a write, an update and a
+                # delete at once. Each entry is an ordinary write
+                # through `Dav.Web.Write.document/5`.
+                "bulk-post"
               ]
 
   @doc """

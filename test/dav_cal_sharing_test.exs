@@ -155,11 +155,11 @@ defmodule Dav.Cal.SharingTest do
   test "POST routes a calendar body to scheduling, not sharing", context do
     # `POST` is the one method CalDAV overloads, and the body is the
     # only reliable way to tell an invitation from a scheduling
-    # message.
+    # message. Sent at the calendar home, which is neither an Outbox
+    # nor a calendar, scheduling refuses it — proving it was routed
+    # there rather than to sharing.
     ics = "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"
 
-    # Not an Outbox, so scheduling refuses it — proving it was routed
-    # there rather than to sharing.
-    assert DavPlug.call(conn("POST", "/alice/shared/", ics), context.options).status == 403
+    assert DavPlug.call(conn("POST", "/alice/", ics), context.options).status == 403
   end
 end

@@ -34,6 +34,7 @@ defmodule Dav.Web.Plug do
   alias Dav.Web.Properties
   alias Dav.Web.Resource
   alias Dav.Web.Store
+  alias Dav.Web.Write
   alias Dav.Xml
 
   @multistatus 207
@@ -381,18 +382,10 @@ defmodule Dav.Web.Plug do
     type = conn |> get_req_header("content-type") |> List.first() |> media_type()
     path = Store.segments(conn.request_path)
 
-    with :ok <- capable(options, :put),
-         :ok <- writable(path, options),
-         :ok <- Hook.creation(path, :document, options),
-         :ok <- schedule_tag_matches(conn, path, options),
+    with :ok <- schedule_tag_matches(conn, path, options),
          :ok <- entity_tag_matches(conn, path, options),
-         :ok <- validate(body, path, options, type),
-         previous = contents(path, options),
-         {:ok, outcome, resource} <- options.store.put(path, body, type, options.context) do
-      written(resource, body, previous, path, merging?(conn), options)
-
-      settled = settled(resource, path, options)
-
+         {:ok, outcome, settled} <-
+           Write.document(path, body, type, options, merge: merging?(conn)) do
       # RFC 4791 section 5.3.4: a server that changed what it was
       # given must not answer with an `ETag`, because the tag would
       # name a copy the client does not have. A hook that rewrites —
@@ -473,20 +466,6 @@ defmodule Dav.Web.Plug do
     end
   end
 
-  # What the store holds once the hooks have finished with it. They
-  # may rewrite what was just written — implicit scheduling stamps its
-  # own parameters into the organiser's copy — so the resource handed
-  # back by the write describes a version that no longer exists.
-  # Reporting its `ETag` gives the client a validator that is already
-  # stale, and their next conditional request is refused for a change
-  # the server made itself.
-  defp settled(resource, path, %{store: store, context: context}) do
-    case store.resolve(path, context) do
-      {:ok, %Resource{} = current} -> current
-      _gone -> resource
-    end
-  end
-
   # The media type as the server states it. RFC 9110 allows optional
   # whitespace before a parameter, so `text/calendar; charset=utf-8`
   # and `text/calendar;charset=utf-8` are the same type written two
@@ -498,15 +477,6 @@ defmodule Dav.Web.Plug do
     case String.split(type, ";") do
       [only] -> String.trim(only)
       [base | parameters] -> Enum.map_join([base | parameters], ";", &String.trim/1)
-    end
-  end
-
-  # A collection is not a document: `PUT` over one would replace a
-  # whole tree with a body, so it is refused rather than obeyed.
-  defp writable(path, %{store: store, context: context}) do
-    case store.resolve(path, context) do
-      {:ok, %Resource{collection?: true}} -> {:error, :collection}
-      _absent_or_document -> :ok
     end
   end
 
@@ -538,9 +508,6 @@ defmodule Dav.Web.Plug do
     withdrawn(resource, body, parent(resource.path, options), options, properties)
   end
 
-  # The collection is named rather than looked up: by the time a
-  # member of a deleted calendar is reported, the calendar it belonged
-  # to is gone, and a hook asked whether it applies to `nil` says no.
   defp withdrawn(resource, body, collection, options, properties \\ %{}) do
     change = %{
       resource: resource,
@@ -550,24 +517,8 @@ defmodule Dav.Web.Plug do
       properties: properties
     }
 
-    for hook <- options.hooks,
-        concerns?(hook, resource, collection),
-        implements?(hook, :deleted, 2),
-        do: hook.deleted(change, options)
-
-    :ok
+    Hook.removing(change, options)
   end
-
-  # A hook hears about a deletion when it applies to the collection the
-  # resource was in — and, when a collection is itself deleted, when it
-  # applies to *that* collection. Deleting a shared calendar has to
-  # withdraw its invitations, and the calendar's parent is a plain home
-  # that no sharing hook claims.
-  defp concerns?(hook, %Resource{collection?: true} = resource, collection) do
-    hook.applies?(collection) or hook.applies?(resource)
-  end
-
-  defp concerns?(hook, _resource, collection), do: hook.applies?(collection)
 
   # What is there now, read before a write replaces it. A hook that
   # must tell a significant change from a trivial one has no other way
@@ -579,14 +530,7 @@ defmodule Dav.Web.Plug do
     end
   end
 
-  defp contents(resource, %{store: store, context: context}) do
-    with true <- Store.supports?(store, :read),
-         {:ok, data} <- store.read(resource, context) do
-      IO.iodata_to_binary(data)
-    else
-      _unreadable -> nil
-    end
-  end
+  defp contents(resource, options), do: Write.contents(resource, options)
 
   # A hook may add headers to a response about a resource — CalDAV's
   # `Schedule-Tag` is the case this exists for.
@@ -751,21 +695,8 @@ defmodule Dav.Web.Plug do
   # asks the server to reconcile rather than refuse.
   defp merging?(conn), do: get_req_header(conn, "if-schedule-tag-match") != []
 
-  # What a collection may contain is the collection's business, not
-  # this module's: `Dav.Cal.Object` enforces RFC 4791's restrictions on
-  # calendar collections without the base learning what a calendar is.
   defp validate(body, path, options, content_type) do
-    collection = parent(path, options)
-    options = Map.put(options, :content_type, content_type)
-
-    options.validators
-    |> Enum.filter(& &1.applies?(collection))
-    |> Enum.reduce_while(:ok, fn validator, _outcome ->
-      case validator.validate(body, collection, path, options) do
-        :ok -> {:cont, :ok}
-        failure -> {:halt, failure}
-      end
-    end)
+    Write.validated(body, parent(path, options), path, options, content_type)
   end
 
   defp parent(path, %{store: store, context: context}) do
@@ -813,20 +744,8 @@ defmodule Dav.Web.Plug do
     end
   end
 
-  # An extension may know a removal is not the requester's to make —
-  # a sharee deleting an organiser's meeting — where plain access
-  # control sees only write permission.
   defp removable(resource, options) do
-    collection = parent(resource.path, options)
-
-    options.hooks
-    |> Enum.filter(&implements?(&1, :removable, 3))
-    |> Enum.find_value(:ok, fn hook ->
-      case hook.removable(resource, collection, options) do
-        :ok -> nil
-        {:error, _failed} = refusal -> refusal
-      end
-    end)
+    Hook.removal(resource, parent(resource.path, options), options)
   end
 
   defp mkcol(conn, options) do

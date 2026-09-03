@@ -11,7 +11,7 @@
   "bad-ical.xml" => 0,
   "bad-json.xml" => 0,
   "brief.xml" => 15,
-  "bulk.xml" => 0,
+  "bulk.xml" => 59,
   "caldavIOP.xml" => 18,
   "calendaruserproxy.xml" => 95,
   "collection-redirects.xml" => 0,

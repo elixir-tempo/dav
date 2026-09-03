@@ -30,6 +30,26 @@ defmodule Dav.Xml do
   @type qname :: {namespace :: String.t(), local :: String.t()}
 
   @typedoc """
+  One resource's answer within a multistatus.
+
+  Three shapes, and which one to use is decided by how much there is
+  to say about the resource:
+
+  * a list of `{status, properties}` propstats, for a resource whose
+    properties were read — the ordinary `PROPFIND` answer;
+
+  * `{:status, status}`, for a resource there is nothing to report
+    properties *for* — a `calendar-multiget` href that names nothing;
+
+  * `{:status, status, condition}`, which adds the `DAV:error` naming
+    which rule refused it.
+  """
+  @type answer ::
+          {href :: String.t(), [{status :: String.t(), [{qname(), value()}]}]}
+          | {href :: String.t(), {:status, String.t()}}
+          | {href :: String.t(), {:status, String.t(), qname()}}
+
+  @typedoc """
   What a property is worth.
 
   A binary is text content. The structured forms exist so that the
@@ -157,7 +177,7 @@ defmodule Dav.Xml do
 
   ### Arguments
 
-  * `responses` are `{href, propstats}` pairs.
+  * `responses` are `t:answer/0` values.
 
   ### Returns
 
@@ -171,7 +191,7 @@ defmodule Dav.Xml do
       true
 
   """
-  @spec responses([{String.t(), [{String.t(), [{qname(), value()}]}]}]) :: [binary()]
+  @spec responses([answer()]) :: [binary()]
   def responses(responses) when is_list(responses) do
     prefixes = prefixes(responses)
     root = prefixes[@dav]
@@ -209,10 +229,10 @@ defmodule Dav.Xml do
 
   ### Arguments
 
-  * `responses` is a list of `{href, propstats}`, where `propstats` is
-    a list of `{status, properties}` and each property is a
-    `{t:qname/0, t:value/0}` pair. A `nil` value writes an empty
-    element, which is how a `404` propstat names what was missing.
+  * `responses` is a list of `t:answer/0` — for the propstat form,
+    each property is a `{t:qname/0, t:value/0}` pair, and a `nil`
+    value writes an empty element, which is how a `404` propstat names
+    what was missing.
 
   * `trailing` is a list of `{t:qname/0, t:value/0}` pairs written as
     children of the root element itself, after the responses. RFC 6578
@@ -233,10 +253,7 @@ defmodule Dav.Xml do
       true
 
   """
-  @spec multistatus(
-          [{String.t(), [{String.t(), [{qname(), value()}]}]}],
-          [{qname(), value()}]
-        ) :: iolist()
+  @spec multistatus([answer()], [{qname(), value()}]) :: iolist()
   def multistatus(responses, trailing \\ []) when is_list(responses) do
     prefixes = prefixes(responses ++ [{"", [{"", trailing}]}])
 
@@ -259,6 +276,44 @@ defmodule Dav.Xml do
       "</",
       root,
       ":multistatus>"
+    ]
+  end
+
+  # A refusal that has a name carries it alongside the status, the way
+  # RFC 4918 section 16 allows anywhere a status appears. Apple's bulk
+  # `POST` needs it: a client told only `403` for one resource out of
+  # fifty cannot tell a `UID` collision from a permission it lacks.
+  defp response({href, {:status, status, {namespace, local}}}, prefixes, root) do
+    [
+      "<",
+      root,
+      ":response>",
+      "<",
+      root,
+      ":href>",
+      escape(href),
+      "</",
+      root,
+      ":href>",
+      "<",
+      root,
+      ":status>",
+      escape(status),
+      "</",
+      root,
+      ":status>",
+      "<",
+      root,
+      ":error><",
+      prefixes[namespace],
+      ":",
+      local,
+      "/></",
+      root,
+      ":error>",
+      "</",
+      root,
+      ":response>"
     ]
   end
 
@@ -402,13 +457,21 @@ defmodule Dav.Xml do
   # `DAV:` always takes the first prefix so the common case reads the
   # way every other server's output does; anything else is numbered.
   defp prefixes(responses) do
-    used =
+    within_properties =
       for {_href, propstats} <- responses,
           is_list(propstats),
           {_status, properties} <- propstats,
           {{namespace, _local}, value} <- properties,
           candidate <- [namespace | within(value)],
           do: candidate
+
+    # A named refusal contributes its namespace too, and it appears
+    # nowhere else in the document: without this the error element
+    # comes out in a prefix nothing bound.
+    within_errors =
+      for {_href, {:status, _status, {namespace, _local}}} <- responses, do: namespace
+
+    used = within_properties ++ within_errors
 
     others = used |> Enum.uniq() |> Enum.reject(&(&1 == @dav)) |> Enum.sort()
 
