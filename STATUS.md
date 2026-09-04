@@ -1,6 +1,6 @@
 # Status
 
-Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-04, against `443cfaf` plus the travel-time batch.
+Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `c5c3e03` plus the per-user data batch.
 
 `CONFORMANCE.md` explains *what* was built and why each remaining failure is acceptable. This file is the working state: the numbers, the loop, and what to pick up next.
 
@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,028 |
+| Passing | 5,046 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 76 |
+| Apple/interop failing | 58 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,7 +62,7 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-**Best value next is per-user data on a shared calendar** — Apple's `X-CALENDARSERVER-PERUSER`. It is not a gated pool, so it opens nothing new; it turns 18 already-counted failures into passes and is the thing standing between this server and the rest of the sharing tail. One shared object carries a block per principal holding that user's `TRANSP`, alarms and `X-` properties, split off on write and merged back for whoever reads. `Dav.Cal.Object` already knows the concept well enough to say what a sharee may change, and already reserves the component name against clients writing one. The risk is that every read path — `GET`, both reports, free-busy, scheduling — has to go through the merge, so it wants measuring in small steps.
+**Best value next is the group-sharing tail** — 33 failures across 13 `sharing-*` files, the largest single cluster left and now more than half of the Apple queue. It is not a gated pool, so it opens nothing new; it turns already-counted failures into passes. Per-user data went the same way and cost far less than its estimate, so the cluster is worth re-measuring before assuming its size.
 
 Of the gated pools, every remaining standard is now declared. What is left needs either a feature of real size or a deployment this library is not:
 
@@ -105,6 +105,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **Per-user data on a shared calendar**, widened from `TRANSP` and `VALARM` to every `X-` property and subcomponent — the rule `Dav.Cal.Object` had written down all along for deciding what a sharee may change. `sharing-traveltime.xml` went 9 to 27 and the Apple queue fell 76 to 58. `X-CALENDARSERVER-ACCESS` stays shared: a privacy mark kept per reader stops being one. It also turned up a store bug — per-user data outlived the resource it belonged to, so an object written at a deleted one's path inherited a stranger's alarms.
 
 * **Apple's travel time** (`Dav.Cal.Travel`). `implicit-traveltime.xml` in full, 25 tests: the journey either side of an event occupies its own attendee, so the busy period starts earlier and ends later by what that person wrote. The search window widens by the travel before occurrences are looked for, or a slot half an hour before an unreachable meeting reports free. **`sharing-traveltime.xml` did not follow** — 18 tests, classified `apple`: on a shared calendar each sharee's travel is per-user data, which is the next section's subject. Nothing else in the corpus moved.
 

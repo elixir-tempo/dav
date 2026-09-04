@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 * A `GET` on a collection: a `301` to the trailing-slash address, an optional listing (`listings: true`), an `ETag` and `Last-Modified` over the rendering, and `304` for a conditional read.
 * `Dav.Cal.Availability` — RFC 7953 `VAVAILABILITY`, kept in `CS:calendar-availability` on the Inbox and reported as `FBTYPE=BUSY-UNAVAILABLE` in every busy-time answer.
 * `Dav.Cal.Travel` — Apple's `X-APPLE-TRAVEL-DURATION` and `X-APPLE-TRAVEL-RETURN-DURATION` extend a busy period either side of the event.
+* Per-user data on a shared calendar covers every `X-` property and subcomponent, not `TRANSP` and `VALARM` alone, so each sharee's own view of one event stays theirs.
 * `X-WR-CALNAME` on the rolled-up calendar a `GET` on a calendar collection returns, from its `DAV:displayname`.
 
 ### Changed
@@ -21,6 +22,10 @@ All notable changes to this project are documented here. The format follows [Kee
 * `Dav.Xml.parse_propfind/1` returns `{:prop, names, attributes}` rather than `{:prop, names}`, carrying the attributes a client wrote on the properties it asked for.
 * `c:Dav.Web.Hook.patchable/3` may return `{:ok, instruction}` to revise a `PROPPATCH` instruction, not only `:ok` or a refusal.
 * `c:Dav.Web.Hook.rendered/2` may return `{:error, :forbidden}`, for a collection that is addressable but must not be enumerated.
+
+### Fixed
+
+* Per-user data on a shared calendar is removed with the resource it belongs to, so an object written at a path a deleted one used no longer inherits a stranger's alarms.
 
 ## [0.1.0] - 2026-09-02
 

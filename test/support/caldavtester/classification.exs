@@ -31,17 +31,6 @@
   {"implicitauto10.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
   {"implicitautopast.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
 
-  # Apple's per-user data on a shared calendar. One shared event holds
-  # each sharee's own `X-APPLE-TRAVEL-DURATION`, kept apart in an
-  # `X-CALENDARSERVER-PERUSER` block and merged back for whoever is
-  # reading — so three people looking at one meeting get three
-  # different busy answers. The travel arithmetic itself is
-  # implemented and `implicit-traveltime.xml` passes in full; what is
-  # missing is the storage model that keeps one person's figure out of
-  # another's. See CONFORMANCE.md.
-  {"sharing-traveltime.xml", nil} =>
-    {:apple, "per-user data on a shared calendar; see CONFORMANCE.md"},
-
   # --- incidental: cannot pass as vendored -------------------------------
   {"reports.xml", "basic query reports"} =>
     {:incidental,

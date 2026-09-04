@@ -263,6 +263,12 @@ defmodule Dav.Test.WritableStore do
   @personal_properties ~w(TRANSP)
   @personal_components ~w(VALARM)
 
+  # The mark that says an event is private belongs to whoever owns the
+  # calendar, not to whoever is looking at it: kept per reader, a
+  # sharee's copy would stop being confidential the moment they saved
+  # anything.
+  @shared_extensions ~w(X-CALENDARSERVER-ACCESS)
+
   defp divided(agent, held, body) do
     with who when is_binary(who) <- asking(agent),
          true <- shared?(agent, held),
@@ -282,9 +288,24 @@ defmodule Dav.Test.WritableStore do
   defp stripped(component) do
     %{
       component
-      | properties: Enum.reject(component.properties, &(&1.name in @personal_properties)),
-        components: Enum.reject(component.components, &(&1.name in @personal_components))
+      | properties: Enum.reject(component.properties, &personal_property?/1),
+        components: Enum.reject(component.components, &personal_component?/1)
     }
+  end
+
+  # The reference's `PerUserDataFilter`: `TRANSP`, every `X-` property,
+  # and `VALARM` and `X-` subcomponents are one person's view of a
+  # shared event rather than part of the event. `Dav.Cal.Object` says
+  # the same when it decides what a sharee is free to change, and the
+  # two have to agree — a property one of them calls personal and the
+  # other calls shared is one a sharee may edit and then not see.
+  defp personal_property?(%{name: name}) do
+    name not in @shared_extensions and
+      (name in @personal_properties or String.starts_with?(name, "X-"))
+  end
+
+  defp personal_component?(%{name: name}) do
+    name in @personal_components or String.starts_with?(name, "X-")
   end
 
   defp personal_of(calendar) do
@@ -293,8 +314,8 @@ defmodule Dav.Test.WritableStore do
         into: %{},
         do:
           {recurrence(component),
-           {Enum.filter(component.properties, &(&1.name in @personal_properties)),
-            Enum.filter(component.components, &(&1.name in @personal_components))}}
+           {Enum.filter(component.properties, &personal_property?/1),
+            Enum.filter(component.components, &personal_component?/1)}}
   end
 
   defp recurrence(component) do
@@ -425,6 +446,15 @@ defmodule Dav.Test.WritableStore do
       # leaving them behind means a sharee who deletes a shared
       # calendar still resolves it through the link that is no longer
       # there.
+      # And per-user data dies with it for the same reason, one step
+      # further: it is keyed by resource *and* reader, so a new event
+      # written at the same path would otherwise inherit a stranger's
+      # alarms and their journey to somewhere it never was.
+      personal =
+        state
+        |> Map.get(:personal, %{})
+        |> Map.reject(fn {{held, _who}, _kept} -> beneath?(held, path) end)
+
       %{
         state
         | resources: Enum.reject(state.resources, &beneath?(&1.path, path)),
@@ -432,6 +462,7 @@ defmodule Dav.Test.WritableStore do
           dead: Map.reject(state.dead, fn {held, _properties} -> beneath?(held, path) end),
           graveyard: buried
       }
+      |> Map.put(:personal, personal)
     end)
 
     :ok
