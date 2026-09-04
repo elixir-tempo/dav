@@ -40,7 +40,7 @@
   "implicitallday.xml" => 30,
   "implicitattendeedelete.xml" => 114,
   "implicitauto1.xml" => 71,
-  "implicitauto10.xml" => 22,
+  "implicitauto10.xml" => 23,
   "implicitauto11.xml" => 13,
   "implicitauto12.xml" => 15,
   "implicitauto2.xml" => 48,

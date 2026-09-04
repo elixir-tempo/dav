@@ -187,9 +187,13 @@ Filed for a long time as one thing — "the reference's two-phase delivery" — 
 
 * **A second scheduling round** (`implicitauto9`, two tests). An organiser declining one instance should start another round: the resource re-accepts and `SEQUENCE` reaches 2. This engine answers once, on the organiser's side, so the resource is left `DECLINED` at `SEQUENCE:1`.
 
-* **An auto-accept that is computed and then lost** (`implicitauto10`, three tests). The file calls it "change occurs during attendee refresh", and that describes the scenario rather than the fault. The room is `accept_if_free`. It is blocked by another event, the blocker is cancelled, and the organiser then updates the meeting — at which point the room is free and should accept.
+* **A room that answered and was then reset** (`implicitauto10`, one of its three now fixed). The file calls it "change occurs during attendee refresh", which describes the scenario rather than the fault. The room is `accept_if_free`: it is blocked by another event, the blocker is cancelled, and the organiser then updates the meeting — at which point the room is free and should accept.
 
-  It *does* accept. Tracing `auto_answers/2` on that save shows the occurrence judged against an empty busy list and answered `PARTSTAT=ACCEPTED`, and `auto_answered/3` then stamps `SCHEDULE-STATUS=2.0` on the same attendee line — which is the record of an answer, not merely of a delivery, and which the stored copy does carry. The participation status is what goes missing: the stored line reads `NEEDS-ACTION;RSVP=TRUE;SCHEDULE-STATUS=2.0`. So the answer is lost between `auto_answers/2` and `record/5`, and `restated/2` — which merges the answered components back over the parsed original — is where to look next.
+  It *did* accept. Tracing `auto_answers/2` showed the occurrence judged against an empty busy list and answered `PARTSTAT=ACCEPTED`; bisecting the organiser branch showed the answer surviving `in_step/2` and `renumbered/4` and dying at one step. The attendee line carried `SCHEDULE-FORCE-SEND=REQUEST`, and RFC 6638 section 7.1's reset — which re-asks the named attendees and clears their answers — was running *after* the rooms had answered.
+
+  Being asked again is what an auto-managed room answers **to**. Resetting it afterwards throws away the reply it just gave and records a question the organiser can see was never taken up. The reset now runs before `auto_answers/2`, which is the order the two rules imply, and nothing else in the corpus moved.
+
+  The two that remain in that suite are about `SCHEDULE-STATUS` on the *other* party's line — the organiser's copy should record `2.0` against the attendee who accepted, and the room's copy `1.2` against the organiser.
 
 * **`RSVP` on a server-derived override** (`implicitautopast`, one test). Worth stating precisely, because the obvious reading of it is wrong. The event recurs weekly from twelve days ago and has two overrides, *both in the past* — so "the occurrence is over" is not what separates them. The one the client sent keeps `RSVP=TRUE`; the one the server split out to record a different answer must not have it.
 

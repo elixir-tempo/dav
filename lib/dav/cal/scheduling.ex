@@ -1544,6 +1544,22 @@ defmodule Dav.Cal.Scheduling do
 
       components = prepared(components, change, options)
       components = compacted(components, change, options)
+
+      # RFC 6638 section 7.1: `SCHEDULE-FORCE-SEND=REQUEST` re-invites
+      # without changing anything — the named attendees are asked
+      # again, their answers reset, and the parameter is consumed by
+      # the send rather than stored or forwarded (the reference clears
+      # it after scheduling and resets `PARTSTAT` the same way).
+      #
+      # Before the rooms answer, not after. Being asked again is what
+      # an auto-managed room answers *to*: resetting it afterwards
+      # throws away the reply it just gave and records a question the
+      # organiser can see was never taken up.
+      reinvited = Enum.reject(forced(components, options), &(&1 in addresses))
+
+      components =
+        components |> Enum.map(&unforced/1) |> Enum.map(&reasked_by_force(&1, reinvited, options))
+
       {components, auto_replied} = auto_answers(components, options)
 
       options =
@@ -1585,16 +1601,6 @@ defmodule Dav.Cal.Scheduling do
       # `recipients` still names them, so the organiser's copy stamps
       # them `SCHEDULE-STATUS=1.2` like everyone else — the reference
       # does the same, holding their copy hidden rather than gone.
-      # RFC 6638 section 7.1: `SCHEDULE-FORCE-SEND=REQUEST` re-invites
-      # without changing anything — the named attendees are asked
-      # again, their answers reset, and the parameter is consumed by
-      # the send rather than stored or forwarded (the reference clears
-      # it after scheduling and resets `PARTSTAT` the same way).
-      reinvited = Enum.reject(forced(components, options), &(&1 in addresses))
-
-      components =
-        components |> Enum.map(&unforced/1) |> Enum.map(&reasked_by_force(&1, reinvited, options))
-
       options = Map.put(options, :reinvited, reinvited)
 
       # Numbers never go backwards, told or not: the reference runs

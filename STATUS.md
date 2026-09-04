@@ -1,6 +1,6 @@
 # Status
 
-Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `b999a76` plus the proxy-binding batch.
+Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `c15a526` plus the force-send ordering fix.
 
 `CONFORMANCE.md` explains *what* was built and why each remaining failure is acceptable. This file is the working state: the numbers, the loop, and what to pick up next.
 
@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,079 |
+| Passing | 5,080 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 25 |
+| Apple/interop failing | 24 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -67,7 +67,7 @@ The Apple queue is now 25, and every entry is cited for what it specifically wan
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `sharing-quota.xml` | 14 | nothing winnable — see below |
-| `implicitauto10.xml` | 3 | an update arriving during attendee refresh |
+| `implicitauto10.xml` | 2 | delivery marks on the other party's line |
 | `implicitauto9.xml` | 2 | a second scheduling round after an instance is declined |
 | `implicitautopast.xml` | 1 | `RSVP` on an occurrence already past |
 | elsewhere | 5 | singletons, cited individually |
@@ -84,7 +84,7 @@ The "auto-schedule tail" turned out not to be one thing, and two of its three pa
 
 * **`implicitauto9`, two**, wants a second scheduling round after an organiser declines an instance.
 
-* **`implicitauto10`, three**, is also diagnosed and is *not* what its label said. The room does auto-accept — `auto_answers/2` judges it free and returns `ACCEPTED`, and `auto_answered/3` stamps `SCHEDULE-STATUS=2.0` on the same line, which the stored copy keeps. Only the `PARTSTAT` is lost, somewhere between `auto_answers/2` and `record/5`. `restated/2` is the next place to look.
+* **`implicitauto10` is down to two**, and the third is fixed: the room *did* answer, and RFC 6638 section 7.1's force-send reset was running after the rooms answered and throwing the reply away. It now runs before. What is left there is `SCHEDULE-STATUS` on the *other* party's line.
 
 The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is done except for those six**; what remains is a judgement about whether any of it is worth building rather than a queue to work through.
 
@@ -133,6 +133,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **A room answers the asking it was given** (`Dav.Cal.Scheduling`). `implicitauto10.xml` 22 to 23; the Apple queue fell 25 to 24. The room's auto-accept was computed correctly and then wiped by RFC 6638 section 7.1's `SCHEDULE-FORCE-SEND` reset, which ran *after* the rooms had answered. Being asked again is what a room answers to, so the reset now runs first. Found by bisecting the organiser branch with a probe at each stage rather than by reading; nothing else in the corpus moved.
 
 * **`implicitauto10` diagnosed, not fixed.** The room *does* auto-accept: `auto_answers/2` judges it free and answers `ACCEPTED`, and `auto_answered/3` stamps `SCHEDULE-STATUS=2.0` — which the stored copy keeps. Only the `PARTSTAT` is dropped, between there and `record/5`. Together with `implicitautopast`, both traced parts of the "auto-schedule tail" are an answer computed right and then overwritten, not a missing delivery phase. No code changed.
 
