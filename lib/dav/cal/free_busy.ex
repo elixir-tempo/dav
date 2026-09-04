@@ -68,6 +68,7 @@ defmodule Dav.Cal.FreeBusy do
   alias Dav.Cal.ICalendar
   alias Dav.Cal.Schedule
   alias Dav.Cal.TimeRange
+  alias Dav.Cal.Travel
   alias Dav.Web.Resource
   alias Dav.Web.Store
   alias Dav.Xml
@@ -272,7 +273,7 @@ defmodule Dav.Cal.FreeBusy do
   defp periods(%{name: "VEVENT"} = event, range, floating, overrides) do
     case type(event) do
       nil -> []
-      type -> Enum.map(TimeRange.periods(event, range, floating, overrides), &{type, &1})
+      type -> Enum.map(travelled(event, range, floating, overrides), &{type, &1})
     end
   end
 
@@ -282,6 +283,28 @@ defmodule Dav.Cal.FreeBusy do
         period <- String.split(property.value, ","),
         {:ok, bounds} <- [within(period, range)],
         do: {Map.get(property.parameters, "FBTYPE", "BUSY"), bounds}
+  end
+
+  # Apple's travel time, where the event records any: the person is
+  # occupied getting there and getting back, so the occurrences are
+  # looked for over a window widened by the journey and trimmed to the
+  # one that was asked about once the journey has been added to each.
+  defp travelled(event, range, floating, overrides) do
+    travel = Travel.of(event)
+
+    if Travel.any?(travel) do
+      event
+      |> TimeRange.periods(Travel.widened(range, travel), floating, overrides)
+      |> Enum.map(&Travel.applied(&1, travel))
+      |> Enum.map(&trimmed(&1, range))
+      |> Enum.filter(fn {began, ended} -> earlier?(began, ended) end)
+    else
+      TimeRange.periods(event, range, floating, overrides)
+    end
+  end
+
+  defp trimmed({began, ended}, {start, finish}) do
+    {later_of(began, start), earlier_of(ended, finish)}
   end
 
   defp type(event) do

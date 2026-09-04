@@ -203,7 +203,11 @@ defmodule Dav.CalDAVTester.Features do
                 # Apple's `CS:calendar-availability` on the Inbox and
                 # subtracted from every busy-time answer as
                 # `FBTYPE=BUSY-UNAVAILABLE`.
-                "vavailability"
+                "vavailability",
+                # Apple's travel time, in `Dav.Cal.Travel`: the
+                # journey either side of an event occupies its own
+                # attendee, and their busy time says so.
+                "travel-time-busy"
               ]
 
   @doc """

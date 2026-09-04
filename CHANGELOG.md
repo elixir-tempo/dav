@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format follows [Kee
 * `c:Dav.Web.Hook.taken/4` and `c:Dav.Web.Hook.offered/6`, content negotiation's two halves, so an extension decides which media types a collection accepts and offers.
 * A `GET` on a collection: a `301` to the trailing-slash address, an optional listing (`listings: true`), an `ETag` and `Last-Modified` over the rendering, and `304` for a conditional read.
 * `Dav.Cal.Availability` — RFC 7953 `VAVAILABILITY`, kept in `CS:calendar-availability` on the Inbox and reported as `FBTYPE=BUSY-UNAVAILABLE` in every busy-time answer.
+* `Dav.Cal.Travel` — Apple's `X-APPLE-TRAVEL-DURATION` and `X-APPLE-TRAVEL-RETURN-DURATION` extend a busy period either side of the event.
 * `X-WR-CALNAME` on the rolled-up calendar a `GET` on a calendar collection returns, from its `DAV:displayname`.
 
 ### Changed

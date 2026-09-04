@@ -107,9 +107,15 @@ defmodule Dav.CalDAVTesterTest do
     # reading the catalogue in `Dav.Cal.Zones`.
     assert MapSet.member?(declared, "timezone-std-service")
     assert MapSet.member?(declared, "timezone-service")
+    # Declared because `Dav.Cal.Travel` folds the journey either side
+    # of an event into its busy time, which is what the feature names.
+    # `sharing-traveltime.xml` still fails, for a different missing
+    # thing — per-user data on a shared calendar — and says so in
+    # `classification.exs` rather than by withholding this.
+    assert MapSet.member?(declared, "travel-time-busy")
     # A ceiling, not a target: the count rises only when a feature is
     # built, and raising it is the moment to check that it was.
-    assert MapSet.size(declared) < 50
+    assert MapSet.size(declared) < 55
     assert map_size(context.results) == 162
   end
 

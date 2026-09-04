@@ -1,6 +1,6 @@
 # Status
 
-Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-04, against `eb930fb` plus the availability batch.
+Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-04, against `443cfaf` plus the travel-time batch.
 
 `CONFORMANCE.md` explains *what* was built and why each remaining failure is acceptable. This file is the working state: the numbers, the loop, and what to pick up next.
 
@@ -9,13 +9,13 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | | |
 | --- | ---: |
 | Scenarios | 162 |
-| Tests | 5,092 |
-| Passing | 4,994 |
+| Tests | 5,144 |
+| Passing | 5,028 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 58 |
+| Apple/interop failing | 76 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
-| Features declared | 49 |
+| Features declared | 50 |
 
 RFC-required has been 0 for the whole drive and is the number that must not move. Unclassified is the queue that has to be empty before a batch closes: a failure nobody has classified is a failure nobody has looked at.
 
@@ -49,7 +49,7 @@ A batch is done when the corpus is net-zero-or-better, RFC-required is 0, Unclas
 
 ## What is left
 
-### Pools not yet opened — 20 files, 479 tests
+### Pools not yet opened — 18 files, 419 tests
 
 Each is gated shut by a feature this server does not implement. Declaring a feature without building it inflates the denominator and turns the conformance figure into a claim, so the gate stays until the code exists.
 
@@ -58,18 +58,17 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 | `implicitgroup.xml`, `trash-implicitgroup.xml` | 97 | group attendee expansion, `control-api` |
 | `partitioning-*.xml` | 48+ | multi-node partitioning |
 | `dropbox.xml`, `implicitdropbox.xml` | 66 | legacy dropbox |
-| `implicit-traveltime.xml`, `sharing-traveltime.xml` | 60 | travel-time busy |
 | `polls.xml` | 28 | `VPOLL` |
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-Every remaining standard is now declared. What is left needs either a feature of real size or a deployment this library is not:
+**Best value next is per-user data on a shared calendar** — Apple's `X-CALENDARSERVER-PERUSER`. It is not a gated pool, so it opens nothing new; it turns 18 already-counted failures into passes and is the thing standing between this server and the rest of the sharing tail. One shared object carries a block per principal holding that user's `TRANSP`, alarms and `X-` properties, split off on write and merged back for whoever reads. `Dav.Cal.Object` already knows the concept well enough to say what a sharee may change, and already reserves the component name against clients writing one. The risk is that every read path — `GET`, both reports, free-busy, scheduling — has to go through the merge, so it wants measuring in small steps.
+
+Of the gated pools, every remaining standard is now declared. What is left needs either a feature of real size or a deployment this library is not:
 
 * **`implicitgroup`** is the largest at 97, and wants two things — expanding a group attendee into its members, and the `control-api` the suite uses to change directory membership mid-scenario. The second is not a protocol, so a chunk of the file is unreachable without inventing one.
 
 * **`dropbox`** is Apple's pre-managed-attachments model, superseded by the managed attachments this server already implements. Building the legacy alongside is 66 tests for a feature Apple itself replaced.
-
-* **travel time** wants `X-APPLE-TRAVEL-DURATION` folded into busy-time answers — self-contained, and the smallest real feature left.
 
 * **`polls.xml`** is `VPOLL`, a draft that never became an RFC.
 
@@ -106,6 +105,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **Apple's travel time** (`Dav.Cal.Travel`). `implicit-traveltime.xml` in full, 25 tests: the journey either side of an event occupies its own attendee, so the busy period starts earlier and ends later by what that person wrote. The search window widens by the travel before occurrences are looked for, or a slot half an hour before an unreachable meeting reports free. **`sharing-traveltime.xml` did not follow** — 18 tests, classified `apple`: on a shared calendar each sharee's travel is per-user data, which is the next section's subject. Nothing else in the corpus moved.
 
 * **RFC 7953 availability** (`Dav.Cal.Availability`). `availability.xml` in full, 7 tests. A `VAVAILABILITY` kept in `CS:calendar-availability` on the Inbox says which hours its owner would accept a meeting in; the available windows are expanded and subtracted from the query window, and the remainder is reported at the component's `BUSYTYPE` — `BUSY-UNAVAILABLE` by default. `Dav.Cal.FreeBusy` now writes a period the way its own specification's examples do: RFC 5546 busy time as a start and a duration, RFC 7953 unavailable time as two instants. Nothing else in the corpus moved.
 
