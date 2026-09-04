@@ -183,11 +183,13 @@ Three seams came out of it, all in the base. `c:Dav.Web.Hook.taken/4` and `c:Dav
 
 ## What the auto-schedule tail actually is
 
-Filed for a long time as one thing — "the reference's two-phase delivery" — and it is not. Half of it had already been fixed by other work: `implicitauto2`, `implicitauto3` and `implicitauto4` pass in full, and their citations are gone. The six that remain sit in three unrelated places, and each is now cited for what it wants rather than for the label they were grouped under.
+Filed for a long time as one thing — "the reference's two-phase delivery" — and it is not. Two of the three have now been traced to the line, and neither is what its label said; both turn out to be an answer that is *computed correctly and then overwritten* while the outgoing copy is built, which is a far more promising shape than the delivery model they were filed under. Half of it had already been fixed by other work: `implicitauto2`, `implicitauto3` and `implicitauto4` pass in full, and their citations are gone. The six that remain sit in three unrelated places, and each is now cited for what it wants rather than for the label they were grouped under.
 
 * **A second scheduling round** (`implicitauto9`, two tests). An organiser declining one instance should start another round: the resource re-accepts and `SEQUENCE` reaches 2. This engine answers once, on the organiser's side, so the resource is left `DECLINED` at `SEQUENCE:1`.
 
-* **An update during attendee refresh** (`implicitauto10`, three tests) — the file's own description. An update arrives while the resource's auto-accept is in flight; the resource never accepts the updated event and its Inbox item is left behind.
+* **An auto-accept that is computed and then lost** (`implicitauto10`, three tests). The file calls it "change occurs during attendee refresh", and that describes the scenario rather than the fault. The room is `accept_if_free`. It is blocked by another event, the blocker is cancelled, and the organiser then updates the meeting — at which point the room is free and should accept.
+
+  It *does* accept. Tracing `auto_answers/2` on that save shows the occurrence judged against an empty busy list and answered `PARTSTAT=ACCEPTED`, and `auto_answered/3` then stamps `SCHEDULE-STATUS=2.0` on the same attendee line — which is the record of an answer, not merely of a delivery, and which the stored copy does carry. The participation status is what goes missing: the stored line reads `NEEDS-ACTION;RSVP=TRUE;SCHEDULE-STATUS=2.0`. So the answer is lost between `auto_answers/2` and `record/5`, and `restated/2` — which merges the answered components back over the parsed original — is where to look next.
 
 * **`RSVP` on a server-derived override** (`implicitautopast`, one test). Worth stating precisely, because the obvious reading of it is wrong. The event recurs weekly from twelve days ago and has two overrides, *both in the past* — so "the occurrence is over" is not what separates them. The one the client sent keeps `RSVP=TRUE`; the one the server split out to record a different answer must not have it.
 

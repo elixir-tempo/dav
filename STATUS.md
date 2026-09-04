@@ -78,13 +78,13 @@ The Apple queue is now 25, and every entry is cited for what it specifically wan
 
 **What is left is six tests of auto-scheduling, and nothing else worth working.** Fourteen of the twenty-five are `sharing-quota.xml`, which encodes the reference's storage layout; five are cited singletons.
 
-The "auto-schedule tail" turned out not to be one thing. Three of its six files — `implicitauto2`, `implicitauto3`, `implicitauto4` — already pass in full and have been unlisted; the six that remain are three unrelated problems, described in CONFORMANCE.md and now cited individually rather than under one label. All three are changes inside `Dav.Cal.Scheduling`, which is the largest module here and carries roughly 1,500 corpus tests, so each wants its own batch and its own corpus run:
+The "auto-schedule tail" turned out not to be one thing, and two of its three parts have now been traced to the line. Neither is what its label said, and both are the same shape: **an answer computed correctly and then overwritten while the outgoing copy is built.** That is worth knowing before anyone models a "two-phase delivery" that was never the problem. Three of its six files — `implicitauto2`, `implicitauto3`, `implicitauto4` — already pass in full and have been unlisted; the six that remain are three unrelated problems, described in CONFORMANCE.md and now cited individually rather than under one label. All three are changes inside `Dav.Cal.Scheduling`, which is the largest module here and carries roughly 1,500 corpus tests, so each wants its own batch and its own corpus run:
 
 * **`implicitautopast`, one test**, is now diagnosed exactly, and it is *not* what its name suggests. Both of the event's overrides are in the past, so being past does not separate them: the client's own override keeps `RSVP=TRUE` and the one the server derived must not have it. `mixed_answers/5` already drops it correctly; `asking/1` puts it back while building the outgoing `REQUEST`. Fixing it means carrying "this component was derived" from `mixed_answers/5` down to `viewed/4`. Small in principle, several layers in practice.
 
 * **`implicitauto9`, two**, wants a second scheduling round after an organiser declines an instance.
 
-* **`implicitauto10`, three**, wants an update arriving while a resource's auto-accept is in flight to be re-answered.
+* **`implicitauto10`, three**, is also diagnosed and is *not* what its label said. The room does auto-accept — `auto_answers/2` judges it free and returns `ACCEPTED`, and `auto_answered/3` stamps `SCHEDULE-STATUS=2.0` on the same line, which the stored copy keeps. Only the `PARTSTAT` is lost, somewhere between `auto_answers/2` and `record/5`. `restated/2` is the next place to look.
 
 The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is done except for those six**; what remains is a judgement about whether any of it is worth building rather than a queue to work through.
 
@@ -133,6 +133,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **`implicitauto10` diagnosed, not fixed.** The room *does* auto-accept: `auto_answers/2` judges it free and answers `ACCEPTED`, and `auto_answered/3` stamps `SCHEDULE-STATUS=2.0` — which the stored copy keeps. Only the `PARTSTAT` is dropped, between there and `record/5`. Together with `implicitautopast`, both traced parts of the "auto-schedule tail" are an answer computed right and then overwritten, not a missing delivery phase. No code changed.
 
 * **`implicitautopast` diagnosed, not fixed.** Traced to the exact components: of the event's two past overrides, the client's keeps `RSVP` and the server-derived one must not, and `asking/1` re-adds it to both while building the outgoing `REQUEST`. The earlier reading — "`RSVP` on a past occurrence" — was wrong, and the citation now says what it actually is. No code changed.
 

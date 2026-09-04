@@ -34,12 +34,19 @@
   {"implicitauto9.xml", "#1 Decline one valid instance"} =>
     {:apple, "a second scheduling round after an instance is declined; see CONFORMANCE.md"},
 
-  # An update arriving while the resource's auto-accept is in flight —
-  # the file's own description is "change occurs during attendee
-  # refresh". The resource never accepts the updated event and its
-  # Inbox item is left behind.
+  # An auto-accepted answer that is computed and then lost. The room
+  # is `accept_if_free`; it was blocked, the blocker was cancelled,
+  # and the organiser's update should find it free. Tracing shows it
+  # does: `auto_answers/2` judges the occurrence with an empty busy
+  # list and returns `PARTSTAT=ACCEPTED`, and `auto_answered/3` goes
+  # on to stamp `SCHEDULE-STATUS=2.0` on the same line — the record of
+  # an answer. But the stored copy says `NEEDS-ACTION;RSVP=TRUE`, so
+  # the participation status is dropped somewhere between
+  # `auto_answers/2` and `record/5`. `restated/2`, which merges the
+  # answered components back over the parsed original, is where to
+  # look next.
   {"implicitauto10.xml", "#1 Non-recurring"} =>
-    {:apple, "an update during attendee refresh; see CONFORMANCE.md"},
+    {:apple, "an auto-accept that is computed and then lost; see CONFORMANCE.md"},
 
   # `RSVP` on a *derived* override. Both of this event's overrides are
   # in the past, so being past is not what separates them: the one the
