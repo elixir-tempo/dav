@@ -1,6 +1,6 @@
 # Status
 
-Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `48d3490` plus the notification-access batch.
+Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `b999a76` plus the proxy-binding batch.
 
 `CONFORMANCE.md` explains *what* was built and why each remaining failure is acceptable. This file is the working state: the numbers, the loop, and what to pick up next.
 
@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,077 |
+| Passing | 5,079 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 27 |
+| Apple/interop failing | 25 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,24 +62,31 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 27, and measured rather than estimated — it sits in four places:
+The Apple queue is now 25, and every entry is cited for what it specifically wants:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `sharing-quota.xml` | 14 | nothing winnable — see below |
-| room auto-scheduling | 6 | the reference's two-phase delivery |
-| `sharing-groups.xml`, `sharing-unshare-groups.xml` | 2 | a proxy-read binding's privileges |
+| `implicitauto10.xml` | 3 | an update arriving during attendee refresh |
+| `implicitauto9.xml` | 2 | a second scheduling round after an instance is declined |
+| `implicitautopast.xml` | 1 | `RSVP` on an occurrence already past |
 | elsewhere | 5 | singletons, cited individually |
+
+**Every sharing file now passes in full.** The group-sharing tail is closed.
 
 `sharing-quota.xml` was read and is **not winnable**, which the earlier note in this file guessed wrong: twelve of its fourteen compare byte counts that encode the reference's on-disk per-user wrapper, and the other two want a second object with the same `UID` in one calendar, which RFC 4791 section 5.3.2 forbids. The behaviour underneath — a shared calendar's bytes belong to its owner — was already right and is now covered by `Dav.Cal.SharingTest` rather than by a comment alone. Cited in full in `classification.exs`.
 
-**What is left is small and mostly not winnable.** Fourteen of the twenty-seven are `sharing-quota.xml`, which encodes the reference's storage layout; five are cited singletons. That leaves two clusters worth anything:
+**What is left is six tests of auto-scheduling, and nothing else worth working.** Fourteen of the twenty-five are `sharing-quota.xml`, which encodes the reference's storage layout; five are cited singletons.
 
-* **Room auto-scheduling, six.** The reference answers an invitation to a managed room in two phases — accept, then confirm — and this engine answers in one pass on the organiser's side. Reproducing it means modelling a delivery that pauses, which is a real change to `Dav.Cal.Scheduling` for six tests.
+The "auto-schedule tail" turned out not to be one thing. Three of its six files — `implicitauto2`, `implicitauto3`, `implicitauto4` — already pass in full and have been unlisted; the six that remain are three unrelated problems, described in CONFORMANCE.md and now cited individually rather than under one label. All three are changes inside `Dav.Cal.Scheduling`, which is the largest module here and carries roughly 1,500 corpus tests, so each wants its own batch and its own corpus run:
 
-* **A proxy-read binding's privileges, two.** `?action=share` binds a calendar into the home of somebody who reaches it as a read *proxy* rather than as a sharee; the view's privileges should follow the proxy grant rather than a group share that also reaches them. Small, self-contained, and the cheapest thing left.
+* **`implicitautopast`, one test**, is the closest to done: the rule is already written down in `answer_parameters/3`, but the parameter that adds `RSVP` (`awaiting/1`) sees parameters alone and none of its six callers carries the occurrence's time. Threading that through is the whole job.
 
-The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is essentially done**; what remains is a judgement about whether any of it is worth building rather than a queue to work through.
+* **`implicitauto9`, two**, wants a second scheduling round after an organiser declines an instance.
+
+* **`implicitauto10`, three**, wants an update arriving while a resource's auto-accept is in flight to be re-answered.
+
+The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is done except for those six**; what remains is a judgement about whether any of it is worth building rather than a queue to work through.
 
 Read a file before committing to it. Three estimates in this section have now been wrong — `sharing-quota` was called winnable and is not, per-user data was called large and was small, and `sharing-groups-changes` was called 16 tests of group re-derivation when five of them were a broken verifier.
 
@@ -126,6 +133,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **Which route you took to a calendar** (`Dav.Cal.Sharing`). `sharing-groups.xml` and `sharing-unshare-groups.xml` both complete; the Apple queue fell 27 to 25 and **every sharing file now passes in full**. A view made by `?action=share` is a proxy's view and shows a proxy's access, where an invitation reaching the same person by another route was winning. The marker is written whether or not the collection was created just then — binding a calendar already in your home is you saying which route you are taking, and writing it only on creation is why the first attempt changed nothing.
 
 * **A notification says what the person holds** (`Dav.Cal.Sharing`). `sharing-groups.xml` 83 to 84 and `sharing-unshare-groups.xml` 84 to 87; the Apple queue fell 31 to 27. Only the *access* is taken from the merged view — the first attempt at this took a whole merged record and regressed the invitation state, since a newly created record says `noresponse` and overwrote people who had already accepted. Access and state are separate questions and are now answered separately.
 

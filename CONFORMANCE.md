@@ -181,6 +181,16 @@ Three seams came out of it, all in the base. `c:Dav.Web.Hook.taken/4` and `c:Dav
 
 `bad-json.xml` is open and cited rather than passing: its fixture directory, like `bad-ical`'s, is empty in the archived upstream.
 
+## What the auto-schedule tail actually is
+
+Filed for a long time as one thing — "the reference's two-phase delivery" — and it is not. Half of it had already been fixed by other work: `implicitauto2`, `implicitauto3` and `implicitauto4` pass in full, and their citations are gone. The six that remain sit in three unrelated places, and each is now cited for what it wants rather than for the label they were grouped under.
+
+* **A second scheduling round** (`implicitauto9`, two tests). An organiser declining one instance should start another round: the resource re-accepts and `SEQUENCE` reaches 2. This engine answers once, on the organiser's side, so the resource is left `DECLINED` at `SEQUENCE:1`.
+
+* **An update during attendee refresh** (`implicitauto10`, three tests) — the file's own description. An update arrives while the resource's auto-accept is in flight; the resource never accepts the updated event and its Inbox item is left behind.
+
+* **`RSVP` on an occurrence that has already happened** (`implicitautopast`, one test). This one is nearly there: the rule is already written down in `answer_parameters/3` — *"no longer being asked — an occurrence already over: the question is withdrawn with the answer left open"* — but the flag it switches on is "did this line already carry `RSVP`", not "is this occurrence past". The place that actually adds `RSVP` is `awaiting/1`, which sees parameters alone, and none of its six callers carries the occurrence's time to decide with. Threading that through the scheduling engine for one test is a poor trade, and it is left cited.
+
 ## A share to a group is a share to the group
 
 `sharing-groups-changes.xml` went from 4 to 20 — the whole file — on three changes, and the first of them is the one worth stating.
@@ -219,7 +229,17 @@ Four of those six wanted a notification to state a person's *effective* access r
 
 The first attempt notified with the merged record and took the file backwards, because the merge picks one whole record and its invitation *state* is not always the one to report — a newly created record says `noresponse`, and using it regressed people who had already accepted. Only the **access** comes from the merged view; the answer they gave is theirs, and was already carried onto the invitation before this point. Separating the two is the whole fix.
 
-The two that remain are a different mechanism: `?action=share` binds a calendar into the home of somebody who reaches it as a *read proxy* rather than as a sharee, and the view's privileges should follow the proxy grant rather than a group share that also reaches them.
+### Which route you took to a calendar
+
+The last two were a different mechanism, and `sharing-groups.xml` and `sharing-unshare-groups.xml` are now complete.
+
+`?action=share` is the gesture of somebody who *already* has access asking for a calendar to appear in their own home, and `entitled?/2` allows it only to the owner or a proxy. So a view it makes is a proxy's view. Access was being decided by `granted_on/2`, which prefers an invitation over a proxy grant — and somebody who is both a read proxy and a member of a read-write group came out read-write, where the reference says read. An invitation reaching the same person by another route describes a share they did not take.
+
+The binding now records how it was made, and a proxy binding's access is the proxy's. Two details mattered:
+
+* **The marker is written whether or not the collection was created just now.** Binding a calendar that is already in the caller's home is not a no-op: `?action=share` is them saying which route they are taking, and the answer to "what may I do here" follows from that rather than from when the folder appeared. Writing it only on creation is why the first attempt changed nothing.
+
+* **It is recorded on the binding, not derived.** The two routes reach the same underlying calendar, and nothing about that calendar can say which one a caller came through.
 
 ## The travel-time model
 

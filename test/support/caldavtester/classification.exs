@@ -20,16 +20,34 @@
 %{
   # --- apple: the open auto-schedule tail --------------------------------
   # Room auto-accept (RFC 6638 with CalendarServer's answering modes)
-  # landed with the `auto-accept` feature; these files' remaining
-  # failures are fine-detail differences still being worked — sequence
-  # propagation to kept copies, cancel bookkeeping on auto-managed
-  # calendars, and the accept-if-free delegate flow. See CONFORMANCE.md.
-  {"implicitauto2.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
-  {"implicitauto3.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
-  {"implicitauto4.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
-  {"implicitauto9.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
-  {"implicitauto10.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
-  {"implicitautopast.xml", nil} => {:apple, "auto-schedule tail; see CONFORMANCE.md"},
+  # landed with the `auto-accept` feature and most of it now passes:
+  # `implicitauto2`, `implicitauto3` and `implicitauto4` are complete
+  # and no longer listed here. Six tests remain, in three unrelated
+  # places rather than the single "two-phase delivery" this was once
+  # filed as, and each is named for what it actually wants. Narrowed
+  # to the suite so a new failure elsewhere in these files still
+  # reports as unclassified.
+  #
+  # An organiser declining one instance should start a second
+  # scheduling round: the resource re-accepts and `SEQUENCE` reaches
+  # 2. This engine answers once, on the organiser's side.
+  {"implicitauto9.xml", "#1 Decline one valid instance"} =>
+    {:apple, "a second scheduling round after an instance is declined; see CONFORMANCE.md"},
+
+  # An update arriving while the resource's auto-accept is in flight —
+  # the file's own description is "change occurs during attendee
+  # refresh". The resource never accepts the updated event and its
+  # Inbox item is left behind.
+  {"implicitauto10.xml", "#1 Non-recurring"} =>
+    {:apple, "an update during attendee refresh; see CONFORMANCE.md"},
+
+  # `RSVP=TRUE` on an occurrence that has already happened. The rule
+  # is in `answer_parameters/3` — "the question is withdrawn with the
+  # answer left open" — but `awaiting/1` adds `RSVP` from the
+  # parameters alone, and none of its six callers carries the
+  # occurrence's time to decide with.
+  {"implicitautopast.xml", "#3 Recurring some in the past"} =>
+    {:apple, "RSVP on a past occurrence; see CONFORMANCE.md"},
 
   # --- incidental: cannot pass as vendored -------------------------------
   {"reports.xml", "basic query reports"} =>

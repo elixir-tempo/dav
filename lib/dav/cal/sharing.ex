@@ -503,11 +503,30 @@ defmodule Dav.Cal.Sharing do
   # not a sharee — the owner, or somebody looking at their own
   # calendar, is bound by nothing recorded here.
   defp granted_to(resource, options) do
-    case linked_original(resource, options) do
-      %Resource{} = original -> granted_on(original, options)
+    with %{} = properties <- stored_properties(resource, options),
+         %Resource{} = original <- linked(properties, options) do
+      if Map.get(properties, bound_as()) == "proxy",
+        do: proxy_access(original, options),
+        else: granted_on(original, options)
+    else
       _owner_or_unshared -> nil
     end
   end
+
+  # `?action=share` is the gesture of somebody who *already* has
+  # access asking for the calendar to appear in their own home, and
+  # `entitled?/2` allows it only to the owner or a proxy. So a view it
+  # made is a proxy's view, and shows a proxy's access — an invitation
+  # reaching the same person by another route describes a share they
+  # did not take.
+  defp proxy_access(original, options) do
+    case Map.get(options, :principal) do
+      who when is_binary(who) -> proxied(original, [who | addresses_of(who, options)], options)
+      _anonymous -> nil
+    end
+  end
+
+  defp bound_as, do: {@namespace, "bound-as"}
 
   @doc """
   The access this caller holds on a shared calendar's original.
@@ -583,9 +602,15 @@ defmodule Dav.Cal.Sharing do
     end
   end
 
-  defp linked_original(resource, %{store: store, context: context} = options) do
-    with %{} = properties <- stored_properties(resource, options),
-         {:hrefs, [shared | _rest]} <- Map.get(properties, {@namespace, "shared-url"}),
+  defp linked_original(resource, options) do
+    case stored_properties(resource, options) do
+      %{} = properties -> linked(properties, options)
+      _unstored -> nil
+    end
+  end
+
+  defp linked(properties, %{store: store, context: context}) do
+    with {:hrefs, [shared | _rest]} <- Map.get(properties, {@namespace, "shared-url"}),
          {:ok, original} <- store.resolve(Store.segments(shared), context) do
       original
     else
@@ -1640,32 +1665,41 @@ defmodule Dav.Cal.Sharing do
   # The shared calendar appears in the invitee's home as a collection
   # of its own, reporting `CS:shared` so a client can tell it apart
   # from one they own.
-  defp link(path, shared, %{store: store, context: context}) do
+  defp link(path, shared, options, as \\ :sharee)
+
+  defp link(path, shared, %{store: store, context: context}, as) do
     # A calendar collection, not a plain one. What appears in the
     # invitee's home is a calendar they can query, report on and write
     # to like any other — a bare collection looks like a folder that
     # happens to contain `.ics` files, and every CalDAV request
     # against it fails for the wrong reason.
-    created =
-      if Store.supports?(store, :mkcalendar),
-        do: store.mkcalendar(path, context),
-        else: store.mkcol(path, context)
+    if Store.supports?(store, :mkcalendar),
+      do: store.mkcalendar(path, context),
+      else: store.mkcol(path, context)
 
-    if match?({:ok, _resource}, created) do
-      if Store.supports?(store, :patch) do
-        store.patch(
-          %Resource{path: path, collection?: true},
-          [
-            {:set, {@namespace, "shared-url"}, {:hrefs, [shared]}},
-            # RFC 6638 section 9.1: a calendar shared to you does not
-            # make you busy. Stored rather than computed, so free/busy
-            # can see it and the invitee can change their mind.
-            {:set, {Xml.caldav(), "schedule-calendar-transp"},
-             {:elements, [Xml.caldav()], "<C:transparent/>"}}
-          ],
-          context
-        )
-      end
+    # Recorded whether or not the collection was made just now.
+    # Binding a calendar that is already in the caller's home is not a
+    # no-op: `?action=share` is them saying which route they are
+    # taking to it, and the answer to "what may I do here" follows
+    # from that rather than from when the folder appeared.
+    if Store.supports?(store, :patch) do
+      store.patch(
+        %Resource{path: path, collection?: true},
+        [
+          {:set, {@namespace, "shared-url"}, {:hrefs, [shared]}},
+          # How the caller came by this view. A proxy binding shows
+          # the proxy's access even where an invitation would have
+          # given more: the two are different routes to the same
+          # calendar, and this one is the route they took.
+          {:set, bound_as(), Atom.to_string(as)},
+          # RFC 6638 section 9.1: a calendar shared to you does not
+          # make you busy. Stored rather than computed, so free/busy
+          # can see it and the invitee can change their mind.
+          {:set, {Xml.caldav(), "schedule-calendar-transp"},
+           {:elements, [Xml.caldav()], "<C:transparent/>"}}
+        ],
+        context
+      )
     end
 
     :ok
@@ -1711,7 +1745,7 @@ defmodule Dav.Cal.Sharing do
       # The link records the calendar's *canonical* address. A share
       # taken out through an aliased path would otherwise point at a
       # spelling only the alias resolver knows.
-      link(path, Resource.href(canonical_resource(resource, options)), options)
+      link(path, Resource.href(canonical_resource(resource, options)), options, :proxy)
 
       {:ok,
        conn
