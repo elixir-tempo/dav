@@ -41,13 +41,17 @@
   {"implicitauto10.xml", "#1 Non-recurring"} =>
     {:apple, "an update during attendee refresh; see CONFORMANCE.md"},
 
-  # `RSVP=TRUE` on an occurrence that has already happened. The rule
-  # is in `answer_parameters/3` — "the question is withdrawn with the
-  # answer left open" — but `awaiting/1` adds `RSVP` from the
-  # parameters alone, and none of its six callers carries the
-  # occurrence's time to decide with.
+  # `RSVP` on a *derived* override. Both of this event's overrides are
+  # in the past, so being past is not what separates them: the one the
+  # client sent keeps `RSVP=TRUE` and the one the server split out to
+  # record a different answer must not have it. `mixed_answers/5`
+  # already gets this right — a derived override takes its asking from
+  # the master, which carried none — and then `asking/1` puts `RSVP`
+  # back on every unanswered attendee as the outgoing `REQUEST` is
+  # built. It would have to know which components were derived, and
+  # `viewed/4` is several layers below where that is known.
   {"implicitautopast.xml", "#3 Recurring some in the past"} =>
-    {:apple, "RSVP on a past occurrence; see CONFORMANCE.md"},
+    {:apple, "RSVP on a server-derived override; see CONFORMANCE.md"},
 
   # --- incidental: cannot pass as vendored -------------------------------
   {"reports.xml", "basic query reports"} =>

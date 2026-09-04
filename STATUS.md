@@ -80,7 +80,7 @@ The Apple queue is now 25, and every entry is cited for what it specifically wan
 
 The "auto-schedule tail" turned out not to be one thing. Three of its six files — `implicitauto2`, `implicitauto3`, `implicitauto4` — already pass in full and have been unlisted; the six that remain are three unrelated problems, described in CONFORMANCE.md and now cited individually rather than under one label. All three are changes inside `Dav.Cal.Scheduling`, which is the largest module here and carries roughly 1,500 corpus tests, so each wants its own batch and its own corpus run:
 
-* **`implicitautopast`, one test**, is the closest to done: the rule is already written down in `answer_parameters/3`, but the parameter that adds `RSVP` (`awaiting/1`) sees parameters alone and none of its six callers carries the occurrence's time. Threading that through is the whole job.
+* **`implicitautopast`, one test**, is now diagnosed exactly, and it is *not* what its name suggests. Both of the event's overrides are in the past, so being past does not separate them: the client's own override keeps `RSVP=TRUE` and the one the server derived must not have it. `mixed_answers/5` already drops it correctly; `asking/1` puts it back while building the outgoing `REQUEST`. Fixing it means carrying "this component was derived" from `mixed_answers/5` down to `viewed/4`. Small in principle, several layers in practice.
 
 * **`implicitauto9`, two**, wants a second scheduling round after an organiser declines an instance.
 
@@ -133,6 +133,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **`implicitautopast` diagnosed, not fixed.** Traced to the exact components: of the event's two past overrides, the client's keeps `RSVP` and the server-derived one must not, and `asking/1` re-adds it to both while building the outgoing `REQUEST`. The earlier reading — "`RSVP` on a past occurrence" — was wrong, and the citation now says what it actually is. No code changed.
 
 * **Which route you took to a calendar** (`Dav.Cal.Sharing`). `sharing-groups.xml` and `sharing-unshare-groups.xml` both complete; the Apple queue fell 27 to 25 and **every sharing file now passes in full**. A view made by `?action=share` is a proxy's view and shows a proxy's access, where an invitation reaching the same person by another route was winning. The marker is written whether or not the collection was created just then — binding a calendar already in your home is you saying which route you are taking, and writing it only on creation is why the first attempt changed nothing.
 

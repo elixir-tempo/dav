@@ -189,7 +189,9 @@ Filed for a long time as one thing — "the reference's two-phase delivery" — 
 
 * **An update during attendee refresh** (`implicitauto10`, three tests) — the file's own description. An update arrives while the resource's auto-accept is in flight; the resource never accepts the updated event and its Inbox item is left behind.
 
-* **`RSVP` on an occurrence that has already happened** (`implicitautopast`, one test). This one is nearly there: the rule is already written down in `answer_parameters/3` — *"no longer being asked — an occurrence already over: the question is withdrawn with the answer left open"* — but the flag it switches on is "did this line already carry `RSVP`", not "is this occurrence past". The place that actually adds `RSVP` is `awaiting/1`, which sees parameters alone, and none of its six callers carries the occurrence's time to decide with. Threading that through the scheduling engine for one test is a poor trade, and it is left cited.
+* **`RSVP` on a server-derived override** (`implicitautopast`, one test). Worth stating precisely, because the obvious reading of it is wrong. The event recurs weekly from twelve days ago and has two overrides, *both in the past* — so "the occurrence is over" is not what separates them. The one the client sent keeps `RSVP=TRUE`; the one the server split out to record a different answer must not have it.
+
+  `mixed_answers/5` already gets this right: a derived override takes its asking from the master, which carried none, so the `RSVP` is correctly dropped there. It is then put back by `asking/1`, which stamps every unanswered attendee as the outgoing `REQUEST` is built — and that is right for the client's override and wrong for the derived one. Telling them apart at that point means carrying provenance from `mixed_answers/5` down through the delivery path to `viewed/4`, several layers below where it is known. For one test, in the module that carries roughly 1,500 corpus tests, that is a poor trade.
 
 ## A share to a group is a share to the group
 
