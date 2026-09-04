@@ -255,6 +255,128 @@ defmodule Dav.Cal.SharingTest do
     end
   end
 
+  describe "quota on a shared calendar" do
+    # The store keeps an account under `calendars/<scope>/<home>/`, so
+    # the paths here have that shape rather than the short ones the
+    # rest of this file uses.
+    setup do
+      agent =
+        SchedulingStore.start(
+          [
+            %Resource{path: [], collection?: true},
+            %Resource{path: ["calendars"], collection?: true},
+            %Resource{path: ["calendars", "users"], collection?: true},
+            %Resource{path: ~w(calendars users alice), collection?: true, owner: "/p/alice/"},
+            %Resource{
+              path: ~w(calendars users alice shared),
+              collection?: true,
+              types: [Cal.calendar()],
+              owner: "/p/alice/"
+            },
+            %Resource{path: ~w(calendars users bob), collection?: true, owner: "/p/bob/"},
+            %Resource{
+              path: ~w(calendars users bob notification),
+              collection?: true,
+              types: [Sharing.notification()],
+              owner: "/p/bob/"
+            }
+          ],
+          %{
+            "mailto:alice@example.com" => ~w(calendars users alice),
+            "mailto:bob@example.com" => ~w(calendars users bob)
+          }
+        )
+
+      options =
+        DavPlug.init(
+          store: SchedulingStore,
+          context: agent,
+          methods: [{"POST", Cal.Post}],
+          hooks: [Cal.Sharing]
+        )
+
+      %{options: options}
+    end
+
+    defp event(uid) do
+      [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//test//EN",
+        "BEGIN:VEVENT",
+        "UID:#{uid}",
+        "DTSTART:20270104T230000Z",
+        "DURATION:PT1H",
+        "DTSTAMP:20260101T000000Z",
+        "SUMMARY:padded out so the size is worth measuring",
+        "END:VEVENT",
+        "END:VCALENDAR"
+      ]
+      |> Enum.join("\r\n")
+      |> Kernel.<>("\r\n")
+    end
+
+    defp used(path, options) do
+      body =
+        propfind(path, "<D:quota-used-bytes/>", options).resp_body
+
+      case Regex.run(~r|quota-used-bytes>(\d+)<|, body) do
+        [_all, count] -> String.to_integer(count)
+        nil -> nil
+      end
+    end
+
+    defp shared(options) do
+      DavPlug.call(
+        conn(
+          "POST",
+          "/calendars/users/alice/shared/",
+          ~s(<?xml version="1.0"?><CS:share xmlns:D="DAV:" xmlns:CS="http://calendarserver.org/ns/"><CS:set><D:href>mailto:bob@example.com</D:href><CS:read-write/></CS:set></CS:share>)
+        ),
+        options
+      )
+    end
+
+    defp store(path, uid, options) do
+      conn("PUT", path, event(uid))
+      |> Conn.put_req_header("content-type", "text/calendar")
+      |> DavPlug.call(options)
+    end
+
+    # A shared calendar is one calendar seen from two homes, and what
+    # it holds is charged where it lives. Charging the writer instead
+    # would let an owner fill somebody else's account by sharing a
+    # calendar with them.
+    test "what a sharee writes is charged to the owner", context do
+      shared(context.options)
+
+      # Measured after the invitation, since the notification it puts
+      # in the sharee's own home is theirs and does count.
+      alice = used("/calendars/users/alice", context.options)
+      bob = used("/calendars/users/bob", context.options)
+
+      assert store("/calendars/users/alice/shared/1.ics", "one", context.options).status in [
+               201,
+               204
+             ]
+
+      assert used("/calendars/users/alice", context.options) > alice
+      assert used("/calendars/users/bob", context.options) == bob
+    end
+
+    # And every view of it reports the same figure: a sharee asking
+    # how full the calendar is wants the answer about the calendar,
+    # not about their own home.
+    test "the calendar reports the owner's usage whoever asks", context do
+      shared(context.options)
+
+      store("/calendars/users/alice/shared/1.ics", "one", context.options)
+
+      assert used("/calendars/users/alice/shared", context.options) ==
+               used("/calendars/users/alice", context.options)
+    end
+  end
+
   test "POST routes a calendar body to scheduling, not sharing", context do
     # `POST` is the one method CalDAV overloads, and the body is the
     # only reliable way to tell an invitation from a scheduling

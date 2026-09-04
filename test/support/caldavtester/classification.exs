@@ -182,8 +182,23 @@
   # --- incidental: quota totals differ from the reference's bytes ---------
   {"quota.xml", "Quota after collection create, and PUT"} =>
     {:incidental, "the stored bytes are this server's canonical form, not the reference's"},
+  # Two causes, neither a defect here. Twelve of the fourteen compare
+  # byte counts that encode the reference's on-disk layout: it stores
+  # each sharee's per-user data *inside* the object, wrapped in
+  # `X-CALENDARSERVER-PERUSER`, and the fixtures are padded so that
+  # wrapper lands on a round number. This server keeps personal parts
+  # beside the object, so the same calendar occupies fewer bytes and
+  # every figure in the file is off by the wrapper. The other two
+  # follow from the file writing a second object with the *same*
+  # `UID` into one calendar, which RFC 4791 section 5.3.2 forbids and
+  # this server refuses; the reference accepts it because its
+  # uniqueness index is scoped to the writing principal's home rather
+  # than to the collection. What the file is really about — a shared
+  # calendar's bytes belong to its owner, and every view reports the
+  # owner's figure — holds, and `Dav.Cal.SharingTest` covers it.
   {"sharing-quota.xml", nil} =>
-    {:incidental, "same-UID writes into a shared calendar meet the no-duplicate-uids posture"},
+    {:incidental,
+     "byte counts encode the reference's per-user on-disk wrapper, and the same-UID write it expects is refused per RFC 4791 section 5.3.2"},
 
   # --- incidental: another server's zone compiler ------------------------
   {"timezonestdservice.xml", "Query action=get"} =>

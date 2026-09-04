@@ -72,9 +72,15 @@ The Apple queue is now 47, and measured rather than estimated — it sits in fou
 | `sharing-unshare-groups.xml`, `sharing-groups.xml` | 6 | effective access in a re-invitation notification |
 | elsewhere | 5 | singletons, cited individually |
 
-**Best value next is `sharing-quota.xml`** — 14 failures in one file, no harness back door needed, and quota is already implemented for the unshared case (`c:Dav.Web.Store.quota/2`). What it asks is whose account a write against a shared calendar lands in.
+`sharing-quota.xml` was read and is **not winnable**, which the earlier note in this file guessed wrong: twelve of its fourteen compare byte counts that encode the reference's on-disk per-user wrapper, and the other two want a second object with the same `UID` in one calendar, which RFC 4791 section 5.3.2 forbids. The behaviour underneath — a shared calendar's bytes belong to its owner — was already right and is now covered by `Dav.Cal.SharingTest` rather than by a comment alone. Cited in full in `classification.exs`.
 
-`sharing-groups-changes.xml` is the largest single file but needs `/control`, a four-action JSON endpoint (`addgroupmembers`, `removegroupmembers`, `refreshgroups`, `schedulingdone`) the suite uses to drive the reference's directory. Building it in the harness is legitimate — the harness is the deployment — but it also needs the library to re-derive group shares when membership changes, which is a real feature and not a small one.
+**Best value next is `sharing-groups-changes.xml`**, the largest single file left. It needs two things:
+
+* `/control`, a four-action JSON endpoint (`addgroupmembers`, `removegroupmembers`, `refreshgroups`, `schedulingdone`) the suite uses to drive the reference's directory. Building it in the harness is legitimate — the harness is the deployment — and it is small.
+
+* The library re-deriving a group's shares when its membership changes. `Dav.Cal.Sharing` already expands a group share into per-member invitations and remembers which group each came from, so the shape is there; what is missing is a way to say "this group changed" and have the calendars it reached catch up. Finding those calendars is the hard part — invitations are recorded on the shared calendar, so something has to know where to look.
+
+Read the file before committing to it. The last two estimates in this section were both wrong in different directions.
 
 The six remaining group-sharing failures are described in CONFORMANCE.md; they want access and invitation state resolved separately in a notification, and one attempt at it made things worse before being reverted.
 
@@ -119,6 +125,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **Quota on a shared calendar, read rather than assumed.** `sharing-quota.xml` gains nothing: its numbers encode the reference's storage layout and two of its writes are refused by RFC 4791. The citation now says which, and the behaviour the file is actually about is covered by tests. No production code changed.
 
 * **Withdrawing one share out of several** (`Dav.Cal.Sharing`). `sharing-unshare-groups.xml` went 73 to 84 and the Apple queue fell 58 to 47. Uninviting a group dropped every record the affected people held rather than the ones that group gave — the surrounding comments already said it should be the second. The withdrawal now carries its source, and who is left with nothing is worked out afterwards. Nothing else in the corpus moved.
 
