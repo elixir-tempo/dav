@@ -64,6 +64,7 @@
     {:incidental,
      "sibling fixtures expect SEQUENCE:2 and none from one DELETE; see CONFORMANCE.md"},
   {"bad-ical.xml", nil} => {:incidental, "the vendored fixture directory is empty upstream"},
+  {"bad-json.xml", nil} => {:incidental, "the vendored fixture directory is empty upstream"},
   {"schedulenomore.xml", nil} => {:incidental, "the SCHEDULE method was never standardised"},
 
   # --- apple: extensions and conventions beyond the RFCs -----------------

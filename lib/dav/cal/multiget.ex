@@ -46,9 +46,13 @@ defmodule Dav.Cal.Multiget do
          :ok <- Selection.supported(calendar_data(document)),
          :ok <- addressable(target, options) do
       selection = Selection.from_element(calendar_data(document))
+      syntax = Selection.syntax(calendar_data(document))
 
       {:ok,
-       Enum.map(hrefs(document), &answer(&1, target, requested(document), selection, options))}
+       Enum.map(
+         hrefs(document),
+         &answer(&1, target, requested(document), {selection, syntax}, options)
+       )}
     end
   end
 
@@ -93,10 +97,10 @@ defmodule Dav.Cal.Multiget do
     end
   end
 
-  defp answer(href, target, wanted, selection, options) do
+  defp answer(href, target, wanted, {selection, syntax}, options) do
     with {:ok, object} <- resolve(href, target, options),
          {:ok, data} <- read(object, options) do
-      Cal.report_response(object, wanted, data, selection)
+      Cal.report_response(object, wanted, data, selection, syntax)
     else
       # Named and not found: the client is told about this href
       # specifically, rather than left to infer it from a short list.

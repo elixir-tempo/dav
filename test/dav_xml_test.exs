@@ -168,7 +168,7 @@ defmodule Dav.XmlTest do
       <propfind xmlns='DAV:'><prop><getetag/><displayname/></prop></propfind>
       """
 
-      assert {:ok, {:prop, names}} = Xml.parse_propfind(body)
+      assert {:ok, {:prop, names, %{}}} = Xml.parse_propfind(body)
       assert names == [{Xml.dav(), "getetag"}, {Xml.dav(), "displayname"}]
     end
 

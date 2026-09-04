@@ -212,14 +212,23 @@ defmodule Dav.Web.Hook do
   * `:ok` when the instruction is acceptable — including when the
     hook has no opinion about the property.
 
+  * `{:ok, instruction}` to accept a *revised* instruction. A client
+    may state a property in a syntax the server does not store —
+    RFC 7265's jCal for `CALDAV:calendar-timezone` — and converting it
+    here means the stored value is the one every other part of the
+    server already knows how to read.
+
   * `{:error, qname}` naming the refused property.
 
   """
   @callback patchable(
               resource :: Resource.t(),
-              instruction :: {:set, Dav.Xml.qname(), term()} | {:remove, Dav.Xml.qname()},
+              instruction :: instruction(),
               options :: map()
-            ) :: :ok | {:error, Dav.Xml.qname()}
+            ) :: :ok | {:ok, instruction()} | {:error, Dav.Xml.qname()}
+
+  @typedoc "One `PROPPATCH` instruction."
+  @type instruction :: {:set, Dav.Xml.qname(), term()} | {:remove, Dav.Xml.qname()}
 
   @doc """
   A resource has moved to a new address.
@@ -460,6 +469,201 @@ defmodule Dav.Web.Hook do
     end)
   end
 
+  @doc """
+  Take a body in a media type the store does not keep.
+
+  Optional, and the write half of content negotiation. A collection
+  holds one syntax — a calendar holds iCalendar — but a client may
+  send the same content written another way, and RFC 7265's jCal is
+  exactly that: the same calendar, in JSON. Converting it here means
+  everything after this point sees the syntax it already understands,
+  so the validators, the hooks and the store need no notion that a
+  second spelling exists.
+
+  ### Arguments
+
+  * `collection` is the collection being written into, or `nil`.
+
+  * `body` is the request body.
+
+  * `content_type` is the media type the client stated, or `nil`.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `{:ok, body, content_type}` converted, or `:skip` to leave the
+    request as it came.
+
+  """
+  @callback taken(
+              collection :: Resource.t() | nil,
+              body :: binary(),
+              content_type :: String.t() | nil,
+              options :: map()
+            ) :: {:ok, binary(), String.t()} | :skip
+
+  @doc """
+  Answer a read in a media type the client would rather have.
+
+  Optional, and the read half. What is stored and what is sent are not
+  obliged to be the same syntax, and a client that asked for jCal has
+  said which of the two it can parse.
+
+  ### Arguments
+
+  * `resource` is the resource being read.
+
+  * `collection` is the collection holding it, or `nil`.
+
+  * `body` is what the store holds.
+
+  * `content_type` is the media type it is held as.
+
+  * `accept` is the request's `Accept` header values, unparsed —
+    whether a `q` weighting means anything is the extension's business,
+    since only it knows which types it is choosing between.
+
+  * `options` carries `:store` and `:context`.
+
+  ### Returns
+
+  * `{:ok, content_type, body}` converted, or `:skip` to send what is
+    stored.
+
+  """
+  @callback offered(
+              resource :: Resource.t(),
+              collection :: Resource.t() | nil,
+              body :: binary(),
+              content_type :: String.t() | nil,
+              accept :: [String.t()],
+              options :: map()
+            ) :: {:ok, String.t(), binary()} | :skip
+
+  @doc """
+  The first conversion any hook offers for a request body.
+
+  ### Arguments
+
+  * `collection` is the collection being written into, or `nil`.
+
+  * `body` is the request body.
+
+  * `content_type` is the media type the client stated, or `nil`.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `{body, content_type}`, converted or exactly as they came.
+
+  """
+  @spec acceptance(Resource.t() | nil, binary(), String.t() | nil, map()) ::
+          {binary(), String.t() | nil}
+  def acceptance(collection, body, content_type, options) do
+    options
+    |> Map.get(:hooks, [])
+    |> Enum.filter(&exports?(&1, :taken, 4))
+    |> Enum.find_value({body, content_type}, fn hook ->
+      case hook.taken(collection, body, content_type, options) do
+        {:ok, converted, type} -> {converted, type}
+        :skip -> nil
+      end
+    end)
+  end
+
+  @doc """
+  The first rendering any hook offers for a body being read.
+
+  ### Arguments
+
+  * `resource` is the resource being read.
+
+  * `collection` is the collection holding it, or `nil`.
+
+  * `body` is what the store holds.
+
+  * `content_type` is the media type it is held as.
+
+  * `accept` is the request's `Accept` header values.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `{content_type, body}`, converted or exactly as stored.
+
+  """
+  @spec offering(
+          Resource.t(),
+          Resource.t() | nil,
+          binary(),
+          String.t() | nil,
+          [String.t()],
+          map()
+        ) :: {String.t() | nil, binary()}
+  def offering(resource, collection, body, content_type, accept, options) do
+    options
+    |> Map.get(:hooks, [])
+    |> Enum.filter(&exports?(&1, :offered, 6))
+    |> Enum.find_value({content_type, body}, fn hook ->
+      case hook.offered(resource, collection, body, content_type, accept, options) do
+        {:ok, type, converted} -> {type, converted}
+        :skip -> nil
+      end
+    end)
+  end
+
+  @doc """
+  Put a `PROPPATCH`'s instructions to the hooks.
+
+  Each instruction passes through every judge in turn, so a hook that
+  revises one hands the revision to the next rather than to the store
+  directly.
+
+  ### Arguments
+
+  * `resource` is the resource being patched.
+
+  * `instructions` are the parsed instructions, in the order the
+    client wrote them.
+
+  * `options` carries `:hooks` along with what the callbacks need.
+
+  ### Returns
+
+  * `{:ok, instructions}` — the instructions to carry out, revised
+    where a hook asked for it; or
+
+  * `{:error, instruction}` naming the first instruction refused.
+    RFC 4918 makes `PROPPATCH` atomic, so one refusal stops all of
+    them.
+
+  """
+  @spec patching(Resource.t(), [instruction()], map()) ::
+          {:ok, [instruction()]} | {:error, instruction()}
+  def patching(resource, instructions, options) do
+    judges = options |> Map.get(:hooks, []) |> Enum.filter(&exports?(&1, :patchable, 3))
+
+    Enum.reduce_while(instructions, {:ok, []}, fn instruction, {:ok, seen} ->
+      case ruled(judges, resource, instruction, options) do
+        {:ok, revised} -> {:cont, {:ok, seen ++ [revised]}}
+        {:error, _name} -> {:halt, {:error, instruction}}
+      end
+    end)
+  end
+
+  defp ruled(judges, resource, instruction, options) do
+    Enum.reduce_while(judges, {:ok, instruction}, fn judge, {:ok, current} ->
+      case judge.patchable(resource, current, options) do
+        :ok -> {:cont, {:ok, current}}
+        {:ok, revised} -> {:cont, {:ok, revised}}
+        {:error, _name} = refusal -> {:halt, refusal}
+      end
+    end)
+  end
+
   @optional_callbacks headers: 3,
                       deleted: 2,
                       properties: 3,
@@ -473,6 +677,8 @@ defmodule Dav.Web.Hook do
                       creatable: 3,
                       disclosed: 3,
                       rendered: 2,
+                      taken: 4,
+                      offered: 6,
                       hidden?: 2
 
   @doc """

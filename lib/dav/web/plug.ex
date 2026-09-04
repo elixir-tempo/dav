@@ -324,7 +324,7 @@ defmodule Dav.Web.Plug do
     with :ok <- capable(options, :read),
          {:ok, resource} <- resolve(conn, options),
          :ok <- permitted(resource, options),
-         {:ok, type, body} <- retrieved(resource, options) do
+         {:ok, type, body} <- retrieved(resource, wanted(conn), options) do
       conn
       |> etag(resource)
       |> contributed_headers(resource, options)
@@ -378,9 +378,15 @@ defmodule Dav.Web.Plug do
   end
 
   defp put(conn, options) do
-    {:ok, body, conn} = read_body(conn)
-    type = conn |> get_req_header("content-type") |> List.first() |> media_type()
+    {:ok, sent, conn} = read_body(conn)
+    stated = conn |> get_req_header("content-type") |> List.first() |> media_type()
     path = Store.segments(conn.request_path)
+
+    # A client may write the same content in a syntax the store does
+    # not keep — jCal for a calendar — and what is stored is what
+    # everything downstream compares against, the withheld `ETag`
+    # included.
+    {body, type} = Hook.acceptance(parent(path, options), sent, stated, options)
 
     with :ok <- schedule_tag_matches(conn, path, options),
          :ok <- entity_tag_matches(conn, path, options),
@@ -442,25 +448,29 @@ defmodule Dav.Web.Plug do
          {:ok, current} <- store.resolve(path, context),
          true <- Store.supports?(store, :read),
          {:ok, data} <- store.read(current, context) do
+      {type, body} = offered(current, IO.iodata_to_binary(data), wanted(conn), options)
+
       conn
       |> etag(current)
       |> contributed_headers(current, options)
       |> put_resp_header("content-location", Resource.href(current))
-      |> put_resp_content_type(current.content_type || "text/calendar", "utf-8")
-      |> send_resp(412, IO.iodata_to_binary(data))
+      |> put_resp_content_type(type || "text/calendar", "utf-8")
+      |> send_resp(412, body)
     else
       _plain_refusal -> send_resp(conn, 412, "")
     end
   end
 
-  defp represented(conn, settled, outcome, %{store: store, context: context}) do
+  defp represented(conn, settled, outcome, %{store: store, context: context} = options) do
     with true <- Store.supports?(store, :read),
          {:ok, data} <- store.read(settled, context) do
+      {type, body} = offered(settled, IO.iodata_to_binary(data), wanted(conn), options)
+
       conn
       |> put_resp_header("content-location", Resource.href(settled))
       |> put_resp_header("preference-applied", "return=representation")
-      |> put_resp_content_type(settled.content_type || "text/calendar", "utf-8")
-      |> send_resp(if(outcome == :created, do: 201, else: 200), IO.iodata_to_binary(data))
+      |> put_resp_content_type(type || "text/calendar", "utf-8")
+      |> send_resp(if(outcome == :created, do: 201, else: 200), body)
     else
       _unreadable -> send_resp(conn, if(outcome == :created, do: 201, else: 204), "")
     end
@@ -798,18 +808,48 @@ defmodule Dav.Web.Plug do
   # RFC 4918 leaves GET on a collection to the server; an extension
   # may render one — a calendar rolled up into a single object — and
   # a collection nothing renders is refused.
-  defp retrieved(%Resource{collection?: true} = collection, options) do
+  defp retrieved(%Resource{collection?: true} = collection, _accept, options) do
     case Hook.rendering(collection, options) do
       {:ok, type, body} -> {:ok, type, body}
       :skip -> {:error, :is_collection}
     end
   end
 
-  defp retrieved(resource, options) do
+  defp retrieved(resource, accept, options) do
     with {:ok, held} <- options.store.read(resource, options.context),
          {:ok, body} <- Hook.disclosure(resource, IO.iodata_to_binary(held), options) do
-      {:ok, resource.content_type || "application/octet-stream", body}
+      {:ok, offered(resource, body, accept, options)}
     end
+    |> case do
+      {:ok, {type, body}} -> {:ok, type || "application/octet-stream", body}
+      failure -> failure
+    end
+  end
+
+  # What the client said it can read. Left unparsed: which of several
+  # types a `q` weighting actually prefers depends on which of them
+  # are on offer, and only the extension offering them knows that.
+  #
+  # A client that stated no `Accept` at all has still said something,
+  # if it sent a body: the syntax it wrote is one it can read, and
+  # answering a jCal write with iCalendar would hand it back a
+  # representation it asked for and cannot parse.
+  defp wanted(conn) do
+    case get_req_header(conn, "accept") do
+      [] -> get_req_header(conn, "content-type")
+      accept -> accept
+    end
+  end
+
+  defp offered(resource, body, accept, options) do
+    Hook.offering(
+      resource,
+      parent(resource.path, options),
+      body,
+      resource.content_type,
+      accept,
+      options
+    )
   end
 
   defp no_body(""), do: :ok
@@ -840,7 +880,7 @@ defmodule Dav.Web.Plug do
           do: tl(resources),
           else: resources
 
-      conn |> stamped(resource) |> respond(resources, request, options, prefer)
+      conn |> stamped(resource) |> respond(resources, request, asking(request, options), prefer)
     else
       {:error, :malformed} -> send_resp(conn, 400, "")
       {:error, :bad_depth} -> send_resp(conn, 400, "")
@@ -850,6 +890,13 @@ defmodule Dav.Web.Plug do
       {:error, :not_modified} -> send_resp(conn, 304, "")
     end
   end
+
+  # The attributes a client wrote on the properties it asked for,
+  # carried where a hook computing one of them can read it. RFC 7265's
+  # `content-type` is the case: a property's *value* depends on how it
+  # was asked for, and nothing else in the request says so.
+  defp asking({:prop, _names, asked}, options), do: Map.put(options, :asked, asked)
+  defp asking(_allprop_or_propname, options), do: Map.put(options, :asked, %{})
 
   # A missing resource usually answers `404` — but an extension
   # holding private material may refuse to say even that much, the
@@ -1378,10 +1425,16 @@ defmodule Dav.Web.Plug do
   # request, and the others report `424 Failed Dependency` — they would
   # have worked, and did not, because of something else.
   defp applied(resource, instructions, options) do
-    case Enum.find(instructions, &protected?/1) ||
-           refused_by_hook(resource, instructions, options) do
-      nil -> attempt(resource, instructions, options)
+    case Enum.find(instructions, &protected?/1) do
+      nil -> judged(resource, instructions, options)
       blocked -> blocked_by(resource, instructions, blocked)
+    end
+  end
+
+  defp judged(resource, instructions, options) do
+    case Hook.patching(resource, instructions, options) do
+      {:ok, revised} -> attempt(resource, revised, options)
+      {:error, blocked} -> blocked_by(resource, instructions, blocked)
     end
   end
 
@@ -1389,16 +1442,9 @@ defmodule Dav.Web.Plug do
   # refuse — an href set naming collections that must exist, say. The
   # base server cannot judge it, so each instruction is offered to the
   # hooks before anything is stored.
-  defp refused_by_hook(resource, instructions, options) do
-    judges = Enum.filter(options.hooks, &implements?(&1, :patchable, 3))
-
-    Enum.find(instructions, fn instruction ->
-      Enum.any?(judges, &match?({:error, _name}, &1.patchable(resource, instruction, options)))
-    end)
-  end
-
   defp attempt(resource, instructions, options) do
     names = for instruction <- instructions, do: name_of(instruction)
+    instructions = Enum.map(instructions, &untyped/1)
 
     case options.store.patch(resource, instructions, options.context) do
       :ok ->
@@ -1408,6 +1454,14 @@ defmodule Dav.Web.Plug do
         {Resource.href(resource), [{"HTTP/1.1 403 Forbidden", for(n <- names, do: {n, nil})}]}
     end
   end
+
+  # A client may say which syntax it wrote a property's value in. If a
+  # hook recognised the type it has already converted the value; if
+  # none did, the text is stored as it was written rather than the
+  # `{:typed, …}` wrapper, which is a fact about the request and not
+  # about the property.
+  defp untyped({:set, name, {:typed, _type, text}}), do: {:set, name, text}
+  defp untyped(instruction), do: instruction
 
   defp blocked_by(resource, instructions, blocked) do
     refused = name_of(blocked)
@@ -1642,7 +1696,7 @@ defmodule Dav.Web.Plug do
   # A request routinely asks for properties that partly exist, which is
   # why one response carries a propstat per status rather than one
   # status per response.
-  defp response(%Resource{} = resource, {:prop, names}, reports, dead, options) do
+  defp response(%Resource{} = resource, {:prop, names, _asked}, reports, dead, options) do
     {found, missing} =
       Enum.reduce(names, {[], []}, fn qname, {found, missing} ->
         case fetch(resource, qname, reports, dead, options) do

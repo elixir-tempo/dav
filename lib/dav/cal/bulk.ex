@@ -59,6 +59,8 @@ defmodule Dav.Cal.Bulk do
 
   alias Dav.Cal
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.JCal
+  alias Dav.Cal.Selection
   alias Dav.Web.Hook
   alias Dav.Web.Resource
   alias Dav.Web.Store
@@ -325,11 +327,13 @@ defmodule Dav.Cal.Bulk do
   # The form is read off the body rather than the `Content-Type`,
   # for the reason `Dav.Cal.Post` routes that way: a client that
   # mislabelled its document deserves an answer about the document.
+  # `<` opens an `MM:multiput`, `[` opens jCal, and anything else is
+  # iCalendar.
   defp requested(body, calendar) do
-    if String.starts_with?(String.trim_leading(body), "<") do
-      crud(body, calendar)
-    else
-      simple(body, calendar)
+    case String.first(String.trim_leading(body)) do
+      "<" -> crud(body, calendar)
+      "[" -> simple(body, calendar, :jcal)
+      _icalendar -> simple(body, calendar, :icalendar)
     end
   end
 
@@ -337,17 +341,26 @@ defmodule Dav.Cal.Bulk do
   # creation at a name the server chooses, which is why a `UID` the
   # collection already holds is `CALDAV:no-uid-conflict` rather than
   # an update: the client never said which resource it meant.
-  defp simple(body, calendar) do
-    case ICalendar.parse(body) do
+  defp simple(body, calendar, syntax) do
+    case read_calendar(body, syntax) do
       {:ok, %{name: "VCALENDAR"} = document} ->
+        groups = divided(document)
+
         {:ok,
-         for {uid, object} <- divided(document) do
+         for {uid, object} <- groups do
            %{
              action: :put,
              path: calendar.path ++ [minted()],
              body: ICalendar.write(object),
              uid: uid,
-             etag: nil
+             etag: nil,
+             syntax: syntax,
+             # Whether this resource *is* the document the client
+             # sent. One component group written in the syntax the
+             # store keeps is; anything else — a document divided
+             # between resources, or one converted from jCal — differs
+             # from what arrived no matter what the store did with it.
+             whole?: length(groups) == 1 and syntax == :icalendar
            }
          end}
 
@@ -355,6 +368,9 @@ defmodule Dav.Cal.Bulk do
         {:error, :malformed}
     end
   end
+
+  defp read_calendar(body, :jcal), do: JCal.decode(body)
+  defp read_calendar(body, :icalendar), do: ICalendar.parse(body)
 
   # One calendar per `UID`, in the order the components first appear,
   # each carrying only the `VTIMEZONE`s its own components reference.
@@ -419,14 +435,20 @@ defmodule Dav.Cal.Bulk do
       path: addressed(element, calendar),
       etag: conditioned(element),
       body: nil,
-      uid: nil
+      uid: nil,
+      syntax: :icalendar,
+      # The client named this resource's data exactly, so what it sent
+      # and what the resource holds are the same thing to compare.
+      whole?: true
     }
 
     if find(element, {@namespace, "delete"}) do
       Map.put(request, :action, :delete)
     else
-      body = given(element)
-      %{request | body: body, uid: identified(body)} |> Map.put(:action, :put)
+      {body, syntax} = given(element)
+
+      %{request | body: body, uid: identified(body), syntax: syntax}
+      |> Map.put(:action, :put)
     end
   end
 
@@ -453,15 +475,26 @@ defmodule Dav.Cal.Bulk do
   end
 
   # `D:set` holds the data either directly or inside a `D:prop`; the
-  # fixtures use both spellings and CalendarServer accepts both.
+  # fixtures use both spellings and CalendarServer accepts both. The
+  # element's own `content-type` says which syntax it is written in,
+  # the same attribute a report uses to ask for one.
   defp given(element) do
     with %{} = set <- find(element, {Xml.dav(), "set"}),
          %{} = data <- deep(set, {Xml.caldav(), "calendar-data"}) do
-      String.trim(data.text)
+      supplied(String.trim(data.text), Selection.syntax(data))
     else
-      _nothing_to_write -> nil
+      _nothing_to_write -> {nil, :icalendar}
     end
   end
+
+  defp supplied(text, :jcal) do
+    case JCal.decode(text) do
+      {:ok, component} -> {ICalendar.write(component), :jcal}
+      {:error, :malformed} -> {nil, :jcal}
+    end
+  end
+
+  defp supplied(text, _icalendar), do: {text, :icalendar}
 
   defp identified(nil), do: nil
 
@@ -616,12 +649,33 @@ defmodule Dav.Cal.Bulk do
   defp rewritten(request, resource, true, options) do
     case Write.contents(resource, options) do
       stored when is_binary(stored) ->
-        if lines(stored) == lines(request.body),
+        if kept?(request, stored),
           do: [],
-          else: [{{Xml.caldav(), "calendar-data"}, stored}]
+          else: [{{Xml.caldav(), "calendar-data"}, syntaxed(stored, request.syntax)}]
 
       _unreadable ->
         []
+    end
+  end
+
+  # Whether the resource holds what the client sent for it. A request
+  # that was not the whole document — one group of several, or a jCal
+  # document converted on the way in — is answered whatever the store
+  # did, because the resource is not the thing that arrived.
+  defp kept?(request, stored) do
+    request.whole? and lines(stored) == lines(request.body)
+  end
+
+  # Answered in the syntax it was asked in. A client that posted jCal
+  # and is handed iCalendar has been given data it must convert before
+  # it can read, which is the work `return-changed-data` exists to
+  # save.
+  defp syntaxed(stored, :icalendar), do: stored
+
+  defp syntaxed(stored, :jcal) do
+    case ICalendar.parse(stored) do
+      {:ok, component} -> {:typed, JCal.content_type(), JCal.encode(component)}
+      _unreadable -> stored
     end
   end
 

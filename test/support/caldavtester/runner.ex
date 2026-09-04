@@ -1589,6 +1589,7 @@ defmodule Dav.CalDAVTester.Runner do
       hooks: [
         Cal.Scheduling,
         Cal.Bulk,
+        Cal.JCal,
         Cal.Sharing,
         Cal.Attachments,
         Cal.Delegation,

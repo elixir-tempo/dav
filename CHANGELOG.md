@@ -7,11 +7,15 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 * Apple's bulk `POST` (`Dav.Cal.Bulk`): a whole `VCALENDAR` divided into one resource per `UID`, or an `MM:multiput` naming writes, updates and deletes at once, answered with a `207` reporting each entry on its own.
+* jCal — RFC 7265 (`Dav.Cal.JCal`): calendar data written as JSON, taken on a write and offered on a read wherever a client asks for it. What is stored stays iCalendar.
 * `Dav.Web.Write.document/5`, the single-document write `PUT` performs — validators in front, hooks behind — so an extension writing on a client's behalf writes the same way.
+* `c:Dav.Web.Hook.taken/4` and `c:Dav.Web.Hook.offered/6`, content negotiation's two halves, so an extension decides which media types a collection accepts and offers.
 
 ### Changed
 
 * `SEQUENCE` now rises whenever an organiser changes what the attendees hold, not only when a scheduling message goes out. An event whose only attendee is its own organiser numbers its revisions.
+* `Dav.Xml.parse_propfind/1` returns `{:prop, names, attributes}` rather than `{:prop, names}`, carrying the attributes a client wrote on the properties it asked for.
+* `c:Dav.Web.Hook.patchable/3` may return `{:ok, instruction}` to revise a `PROPPATCH` instruction, not only `:ok` or a refusal.
 
 ## [0.1.0] - 2026-09-02
 

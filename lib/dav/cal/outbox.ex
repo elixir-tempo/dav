@@ -50,6 +50,7 @@ defmodule Dav.Cal.Outbox do
   alias Dav.Cal.Delegation
   alias Dav.Cal.FreeBusy
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.JCal
   alias Dav.Cal.Schedule
   alias Dav.Cal.TimeRange
   alias Dav.Web.Resource
@@ -76,9 +77,11 @@ defmodule Dav.Cal.Outbox do
     with {:ok, resource} <- resolve(path, options),
          {:ok, kind} <- accepts(resource),
          :ok <- caller_allowed(kind, resource, options),
-         {:ok, body, conn} <- request_body(conn, options),
+         {:ok, sent, conn} <- request_body(conn, options),
          :ok <- media_type(conn),
-         :ok <- readable(body),
+         :ok <- readable(sent),
+         {:ok, body, syntax} <- as_icalendar(sent, conn),
+         options = Map.put(options, :syntax, syntax),
          {:ok, calendar, component} <- scheduling_message(body),
          :ok <- unrestricted(calendar),
          :ok <- bounded_in_utc(component),
@@ -151,7 +154,23 @@ defmodule Dav.Cal.Outbox do
   defp media_type(conn) do
     type = conn |> get_req_header("content-type") |> List.first() || "text/calendar"
 
-    if calendar_type?(type), do: :ok, else: {:error, caldav("supported-calendar-data")}
+    if calendar_type?(type) or JCal.jcal?(type),
+      do: :ok,
+      else: {:error, caldav("supported-calendar-data")}
+  end
+
+  # A scheduling message may be written as jCal, and everything past
+  # this point works on the iCalendar it means — the syntax travels
+  # alongside so the answer can go back the way the question came.
+  defp as_icalendar(body, conn) do
+    if conn |> get_req_header("content-type") |> List.first() |> JCal.jcal?() do
+      case JCal.decode(body) do
+        {:ok, component} -> {:ok, ICalendar.write(component), :jcal}
+        {:error, :malformed} -> {:error, caldav("valid-calendar-data")}
+      end
+    else
+      {:ok, body, :icalendar}
+    end
   end
 
   # The declared charset is utf-8, and bytes that are not UTF-8 are
@@ -165,6 +184,10 @@ defmodule Dav.Cal.Outbox do
     type |> String.split(";") |> List.first() |> String.trim() |> String.downcase() ==
       "text/calendar"
   end
+
+  # The syntax the question arrived in, which is the one the answer
+  # goes back in.
+  defp syntax(options), do: Map.get(options, :syntax, :icalendar)
 
   defp caldav(name), do: {Xml.caldav(), name}
 
@@ -332,7 +355,7 @@ defmodule Dav.Cal.Outbox do
 
         conn
         |> put_resp_content_type("application/xml", "utf-8")
-        |> send_resp(200, Schedule.schedule_response(responses))
+        |> send_resp(200, Schedule.schedule_response(responses, syntax(options)))
 
       true ->
         deliver(conn, calendar, component, recipients, options)
@@ -356,7 +379,7 @@ defmodule Dav.Cal.Outbox do
 
     conn
     |> put_resp_content_type("application/xml", "utf-8")
-    |> send_resp(200, Schedule.schedule_response(responses))
+    |> send_resp(200, Schedule.schedule_response(responses, syntax(options)))
   end
 
   defp delivery_status(home, recipient, calendar, component, options) do
@@ -493,7 +516,7 @@ defmodule Dav.Cal.Outbox do
 
     conn
     |> put_resp_content_type("application/xml", "utf-8")
-    |> send_resp(200, Schedule.schedule_response(responses))
+    |> send_resp(200, Schedule.schedule_response(responses, syntax(options)))
   end
 
   # Read as the person being asked about, not as the person asking.

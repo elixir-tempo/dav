@@ -22,6 +22,7 @@ defmodule Dav.Cal do
   """
 
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.JCal
   alias Dav.Cal.Selection
   alias Dav.Web.Properties
   alias Dav.Web.Resource
@@ -241,9 +242,23 @@ defmodule Dav.Cal do
           Resource.t(),
           [Xml.qname()] | :allprop | :propname,
           binary(),
-          Selection.t()
+          Selection.t(),
+          :icalendar | :jcal
         ) :: {String.t(), [{String.t(), [{Xml.qname(), Xml.value()}]}]}
-  def report_response(%Resource{} = object, wanted, data, selection) do
-    report_response(object, wanted, Selection.apply(data, selection))
+  def report_response(%Resource{} = object, wanted, data, selection, syntax \\ :icalendar) do
+    report_response(object, wanted, written_as(Selection.apply(data, selection), syntax))
+  end
+
+  # The selection decides *what* comes back and this decides how it is
+  # written. A jCal answer says so in the element's `content-type`,
+  # because a client reading the multistatus has no other way to tell
+  # which of the two syntaxes it received.
+  defp written_as(data, :icalendar), do: data
+
+  defp written_as(data, :jcal) do
+    case ICalendar.parse(data) do
+      {:ok, component} -> {:typed, JCal.content_type(), JCal.encode(component)}
+      _unreadable -> data
+    end
   end
 end

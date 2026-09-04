@@ -1,6 +1,6 @@
 # Status
 
-Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-04, against `47c7ba6` plus the bulk `POST` batch.
+Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-04, against `3f5c917` plus the jCal batch.
 
 `CONFORMANCE.md` explains *what* was built and why each remaining failure is acceptable. This file is the working state: the numbers, the loop, and what to pick up next.
 
@@ -9,13 +9,13 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | | |
 | --- | ---: |
 | Scenarios | 162 |
-| Tests | 4,941 |
-| Passing | 4,844 |
+| Tests | 4,994 |
+| Passing | 4,896 |
 | **RFC-required failing** | **0** |
 | Apple/interop failing | 58 |
-| Incidental, cited | 39 |
+| Incidental, cited | 40 |
 | **Unclassified** | **0** |
-| Features declared | 46 |
+| Features declared | 47 |
 
 RFC-required has been 0 for the whole drive and is the number that must not move. Unclassified is the queue that has to be empty before a batch closes: a failure nobody has classified is a failure nobody has looked at.
 
@@ -49,14 +49,13 @@ A batch is done when the corpus is net-zero-or-better, RFC-required is 0, Unclas
 
 ## What is left
 
-### Pools not yet opened — 26 files, 664 tests
+### Pools not yet opened — 24 files, 599 tests
 
 Each is gated shut by a feature this server does not implement. Declaring a feature without building it inflates the denominator and turns the conformance figure into a claim, so the gate stays until the code exists.
 
 | pool | tests | needs |
 | --- | ---: | --- |
 | `collection-redirects.xml` | 72 | directory listing |
-| `json.xml` | 65 | jCal |
 | `implicitgroup.xml`, `trash-implicitgroup.xml` | 97 | group attendee expansion, `control-api` |
 | `partitioning-*.xml` | 48+ | multi-node partitioning |
 | `dropbox.xml`, `implicitdropbox.xml` | 66 | legacy dropbox |
@@ -64,11 +63,11 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 | `availability.xml` | 29 | `VAVAILABILITY` |
 | `polls.xml` | 28 | `VPOLL` |
 
-Best value next is `json` — 65 tests, and the two things it needed are now one: bulk `POST` is built, so what is left is jCal itself, the JSON spelling of iCalendar in RFC 7265, plus `bad-json.xml` beside it. The `jsonPointerMatch` verifier it needs already exists, ported for the timezone work. `collection-redirects` is 72 tests and self-contained. `partitioning-*` is a deployment topology rather than a library feature and is probably never worth declaring.
+Best value next is `collection-redirects` — 72 tests, self-contained, and the largest single pool left. After that the choice is between two features rather than one: `availability.xml` wants `VAVAILABILITY` (RFC 7953, 29 tests) and `polls.xml` wants `VPOLL` (a draft that never became an RFC, 28 tests), and of the two only the first is a standard. `partitioning-*` is a deployment topology rather than a library feature and is probably never worth declaring.
 
-### Two files open but scoring zero — checked, and not worth returning to
+### Three files open but scoring zero — checked, and not worth returning to
 
-`bad-ical.xml` and `schedulenomore.xml` are not gated and pass nothing, which usually means one early request fails and takes the rest of the file with it. It does not here, and both are already cited as incidental: `Resource/CalDAV/bad-ical/` is empty in the archived upstream, so every request in that file has no body to send, and `schedulenomore.xml` exercises a `SCHEDULE` method that was never standardised and that no server should implement. Neither is a pool.
+`bad-ical.xml`, `bad-json.xml` and `schedulenomore.xml` are not gated and pass nothing, which usually means one early request fails and takes the rest of the file with it. It does not here, and all three are cited as incidental: `Resource/CalDAV/bad-ical/` and `Resource/CalDAV/bad-json/` are empty in the archived upstream, so every request in those files has no body to send, and `schedulenomore.xml` exercises a `SCHEDULE` method that was never standardised and that no server should implement. None is a pool.
 
 ### The Apple queue — 58 failing tests across 40 files
 
@@ -97,6 +96,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **jCal** (`Dav.Cal.JCal`) — RFC 7265, calendar data as JSON. 52 tests gained, `json.xml` in full. One syntax is stored, iCalendar, and the JSON is converted at the edges: a codec keyed on RFC 5545's value-type table, plus negotiation on six surfaces (`Accept`, `Prefer: return=representation`, a report's `calendar-data content-type`, an Outbox `POST`, a bulk request, and `CALDAV:calendar-timezone`). Three base seams came out of it — `c:Dav.Web.Hook.taken/4` and `c:Dav.Web.Hook.offered/6` for negotiation, a revising `c:Dav.Web.Hook.patchable/3`, and `Dav.Xml.parse_propfind/1` now returning the attributes a client wrote on the properties it asked for. Nothing else in the corpus moved, which was worth checking: the change touches `PROPFIND`, `PROPPATCH`, `GET`, `PUT` and both reports.
 
 * **Apple's bulk `POST`** (`Dav.Cal.Bulk`), both forms — the simple `VCALENDAR` divided per `UID` and the `MM:multiput` CRUD document — with `MM:bulk-requests`, `X-MobileMe-DAV-Options: return-changed-data` and the ctag `If` condition. 59 tests gained, `bulk.xml` in full. Two seams came out of it: `Dav.Web.Write.document/5` is the write `PUT` performs, now shared rather than reimplemented, and `Dav.Web.Hook.removing/2` and `removal/3` are the delete side of the same thing. One scheduling rule moved with it: `SEQUENCE` rises on a significant organiser change rather than only when a message goes out, which cost nothing elsewhere in the corpus.
 

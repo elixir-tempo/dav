@@ -80,6 +80,12 @@ defmodule Dav.Xml do
     rather than by the element — `{:names, …}` would keep only that
     every entry was a `comp`, which is the one thing that was never
     in doubt.
+
+  * `{:typed, media_type, text}` is text that says which syntax it is
+    written in, through a `content-type` attribute. RFC 4791 gives
+    `CALDAV:calendar-data` that attribute for exactly one reason: once
+    a calendar can be written as iCalendar or as jCal, a client
+    reading the element has no other way to know which it received.
   """
   @type value ::
           String.t()
@@ -88,6 +94,7 @@ defmodule Dav.Xml do
           | {:hrefs, [String.t()]}
           | {:elements, [String.t()], iodata()}
           | {:components, [String.t()]}
+          | {:typed, String.t(), String.t()}
           | nil
 
   @doc """
@@ -398,28 +405,29 @@ defmodule Dav.Xml do
       nil ->
         ["<", tag, "/>"]
 
-      {:names, names} ->
-        ["<", tag, ">", Enum.map(names, &empty(&1, prefixes)), "</", tag, ">"]
-
-      {:report_set, names} ->
-        ["<", tag, ">", Enum.map(names, &report(&1, prefixes)), "</", tag, ">"]
-
-      {:hrefs, hrefs} ->
-        ["<", tag, ">", Enum.map(hrefs, &href(&1, prefixes)), "</", tag, ">"]
-
       {:elements, _namespaces, inner} ->
         ["<", tag, ">", inner, "</", tag, ">"]
 
-      {:components, names} ->
-        ["<", tag, ">", Enum.map(names, &component(&1, prefixes)), "</", tag, ">"]
+      {:typed, media_type, text} ->
+        ["<", tag, ~s( content-type="), escape(media_type), ~s(">), escape(text), "</", tag, ">"]
 
       {:lang, language, inner} ->
         ["<", tag, " xml:lang='", escape(language), "'>", spoken(inner, prefixes), "</", tag, ">"]
 
       text when is_binary(text) ->
         ["<", tag, ">", escape(text), "</", tag, ">"]
+
+      listed ->
+        ["<", tag, ">", listed(listed, prefixes), "</", tag, ">"]
     end
   end
+
+  # The values that are a list of one kind of child element, which is
+  # the only thing separating them.
+  defp listed({:names, names}, prefixes), do: Enum.map(names, &empty(&1, prefixes))
+  defp listed({:report_set, names}, prefixes), do: Enum.map(names, &report(&1, prefixes))
+  defp listed({:hrefs, hrefs}, prefixes), do: Enum.map(hrefs, &href(&1, prefixes))
+  defp listed({:components, names}, prefixes), do: Enum.map(names, &component(&1, prefixes))
 
   defp spoken(text, _prefixes) when is_binary(text), do: escape(text)
   defp spoken({:names, names}, prefixes), do: Enum.map(names, &empty(&1, prefixes))
@@ -435,6 +443,7 @@ defmodule Dav.Xml do
   defp within({:hrefs, _hrefs}), do: [dav()]
   defp within({:elements, namespaces, _inner}), do: namespaces
   defp within({:components, _names}), do: [caldav()]
+  defp within({:typed, _media_type, _text}), do: []
   defp within({:lang, _language, inner}), do: within(inner)
   defp within(_other), do: []
 
@@ -511,7 +520,12 @@ defmodule Dav.Xml do
 
   * `{:ok, :propname}` — the *names* of properties, without values; or
 
-  * `{:ok, {:prop, names}}` — the named properties, as `t:qname/0`s; or
+  * `{:ok, {:prop, names, attributes}}` — the named properties, as
+    `t:qname/0`s, and a map from each name to the attributes the client
+    wrote on it. RFC 7265 needs the second half: `content-type` on a
+    requested property is the client saying which syntax it wants the
+    value back in, and a parser that keeps only the name throws that
+    away; or
 
   * `{:error, :malformed}` when the body is not XML, or is XML that is
     not a `propfind`.
@@ -525,14 +539,23 @@ defmodule Dav.Xml do
       {:ok, :allprop}
 
       iex> Dav.Xml.parse_propfind(~s(<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>))
-      {:ok, {:prop, [{"DAV:", "getetag"}]}}
+      {:ok, {:prop, [{"DAV:", "getetag"}], %{}}}
+
+      iex> body = ~s(<?xml version="1.0"?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><C:calendar-timezone content-type="application/calendar+json"/></D:prop></D:propfind>)
+      iex> {:ok, {:prop, _names, attributes}} = Dav.Xml.parse_propfind(body)
+      iex> attributes
+      %{{"urn:ietf:params:xml:ns:caldav", "calendar-timezone"} => %{"content-type" => "application/calendar+json"}}
 
       iex> Dav.Xml.parse_propfind("not xml at all")
       {:error, :malformed}
 
   """
   @spec parse_propfind(binary()) ::
-          {:ok, :allprop | :propname | {:prop, [qname()]}} | {:error, :malformed}
+          {:ok,
+           :allprop
+           | :propname
+           | {:prop, [qname()], %{optional(qname()) => %{optional(String.t()) => String.t()}}}}
+          | {:error, :malformed}
   def parse_propfind(body) when is_binary(body) do
     case String.trim(body) do
       "" -> {:ok, :allprop}
@@ -555,7 +578,7 @@ defmodule Dav.Xml do
     case Enum.filter(~w(allprop propname prop), &child?(document, &1)) do
       ["allprop"] -> {:ok, :allprop}
       ["propname"] -> {:ok, :propname}
-      ["prop"] -> {:ok, {:prop, requested(document)}}
+      ["prop"] -> {:ok, {:prop, requested(document), asked(document)}}
       _none_or_several -> {:error, :malformed}
     end
   end
@@ -600,6 +623,26 @@ defmodule Dav.Xml do
         element |> children_of() |> Enum.flat_map(&qname/1) |> Enum.uniq()
     end
   end
+
+  # Only the properties the client wrote an attribute on, so the map is
+  # empty for the requests — nearly all of them — that wrote none.
+  defp asked(document) do
+    case find_prop(document) do
+      nil ->
+        %{}
+
+      element ->
+        for child <- children_of(element),
+            [name] <- [qname(child)],
+            written = attributes_of(child),
+            written != %{},
+            into: %{},
+            do: {name, written}
+    end
+  end
+
+  defp attributes_of({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, attributes, _c, _l, _pa, _t}),
+    do: Map.new(attributes, &attribute/1)
 
   defp find_prop({:xmlElement, _n, _e, _nsi, _ns, _p, _pos, _a, content, _l, _pa, _t} = element) do
     if local_name(element) == "prop" do
@@ -866,10 +909,37 @@ defmodule Dav.Xml do
   defp named_value(
          {:xmlElement, _n, _e, _nsi, _ns, _p, _pos, attributes, content, _l, _pa, _t} = element
        ) do
-    [{element_qname(element), content |> structured() |> language_tagged(attributes)}]
+    value =
+      content
+      |> structured()
+      |> language_tagged(attributes)
+      |> content_typed(attributes)
+
+    [{element_qname(element), value}]
   end
 
   defp named_value(_other), do: []
+
+  # RFC 7265 section 5: `content-type` on a property being set says
+  # which syntax its value is written in. It is not part of the value
+  # the way `xml:lang` is — it says how to *read* the value — so it
+  # travels only as far as the hook that converts it, and
+  # `Dav.Web.Plug` stores the text alone if none does.
+  defp content_typed(value, attributes) when is_binary(value) do
+    case stated_type(attributes) do
+      nil -> value
+      type -> {:typed, type, value}
+    end
+  end
+
+  defp content_typed(value, _attributes), do: value
+
+  defp stated_type(attributes) do
+    Enum.find_value(attributes, fn
+      {:xmlAttribute, :"content-type", _e, _nsi, _ns, _p, _pos, _l, found, _norm} -> text(found)
+      _other -> nil
+    end)
+  end
 
   # RFC 4918 section 4.3: `xml:lang` on a stored property is part of
   # the value and comes back with it — dropping the attribute stores a

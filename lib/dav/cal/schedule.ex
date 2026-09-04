@@ -36,6 +36,8 @@ defmodule Dav.Cal.Schedule do
 
   """
 
+  alias Dav.Cal.ICalendar
+  alias Dav.Cal.JCal
   alias Dav.Web.Resource
   alias Dav.Xml
 
@@ -191,13 +193,13 @@ defmodule Dav.Cal.Schedule do
   # reference emits it: unprefixed elements with one `xmlns` on the
   # root. Prefixes would be equivalent XML, but clients (and the
   # conformance suite) match these responses textually.
-  def schedule_response(responses) do
+  def schedule_response(responses, syntax \\ :icalendar) do
     [
       ~s(<?xml version="1.0" encoding="utf-8"?>),
       ~s(<schedule-response xmlns:D="DAV:" xmlns="),
       Xml.caldav(),
       ~s(">),
-      Enum.map(responses, &response/1),
+      Enum.map(responses, &response(&1, syntax)),
       "</schedule-response>"
     ]
   end
@@ -207,14 +209,15 @@ defmodule Dav.Cal.Schedule do
   # the failed precondition alongside the `3.7` status — so a client
   # can tell "no such user" from a user who exists but cannot be
   # scheduled with.
-  defp response({recipient, status, data, :missing}) do
+  defp response({recipient, status, data, :missing}, syntax) do
     failed = ["<D:error><recipient-exists xmlns='", Xml.caldav(), "'/></D:error>"]
-    response({recipient, status, data}, failed)
+    response({recipient, status, data}, syntax, failed)
   end
 
-  defp response({recipient, status, data}), do: response({recipient, status, data}, [])
+  defp response({recipient, status, data}, syntax),
+    do: response({recipient, status, data}, syntax, [])
 
-  defp response({recipient, status, data}, failed) do
+  defp response({recipient, status, data}, syntax, failed) do
     [
       "<response>",
       "<recipient><D:href>",
@@ -223,16 +226,36 @@ defmodule Dav.Cal.Schedule do
       "<request-status>",
       escape(status),
       "</request-status>",
-      calendar_data(data),
+      calendar_data(data, syntax),
       failed,
       "</response>"
     ]
   end
 
-  defp calendar_data(nil), do: []
+  defp calendar_data(nil, _syntax), do: []
 
-  defp calendar_data(data),
+  defp calendar_data(data, :icalendar),
     do: ["<calendar-data>", escape(IO.iodata_to_binary(data)), "</calendar-data>"]
+
+  # A busy-time answer is written in the syntax the question was asked
+  # in, and says which one that is: the `content-type` attribute is
+  # the only thing telling a client whether to reach for its iCalendar
+  # parser or its JSON one.
+  defp calendar_data(data, :jcal) do
+    case data |> IO.iodata_to_binary() |> ICalendar.parse() do
+      {:ok, component} ->
+        [
+          ~s(<calendar-data content-type="),
+          JCal.content_type(),
+          ~s(">),
+          escape(JCal.encode(component)),
+          "</calendar-data>"
+        ]
+
+      _unreadable ->
+        calendar_data(data, :icalendar)
+    end
+  end
 
   defp escape(text) do
     text

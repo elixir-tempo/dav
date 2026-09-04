@@ -175,6 +175,7 @@ defmodule Dav.Cal.Query do
   defp matching(target, filter, depth, document, options) do
     wanted = requested(document)
     selection = Selection.from_element(calendar_data(document))
+    syntax = Selection.syntax(calendar_data(document))
     expand = Expand.from_element(calendar_data(document))
     floating = floating_zone(document, target, options)
 
@@ -182,7 +183,14 @@ defmodule Dav.Cal.Query do
         {:ok, data} <- [read(object, options)],
         {:ok, calendar} <- [ICalendar.parse(data)],
         Filter.match?(filter, calendar, time_range: ranged(floating), calendar: calendar),
-        do: Cal.report_response(object, wanted, Expand.apply(data, expand, floating), selection)
+        do:
+          Cal.report_response(
+            object,
+            wanted,
+            Expand.apply(data, expand, floating),
+            selection,
+            syntax
+          )
   end
 
   # A `VALARM` has no time of its own — it fires relative to whatever

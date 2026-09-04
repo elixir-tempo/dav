@@ -47,10 +47,10 @@ defmodule Dav.Cal.Selection do
   Whether the client asked for calendar data this server can return.
 
   `CALDAV:calendar-data` may carry `content-type` and `version`
-  attributes naming the form the client wants back. There is one form
-  this server returns — iCalendar 2.0 — and a client that asked for
-  jCal and received iCalendar would mis-parse every object rather than
-  fail cleanly, so the request is refused instead.
+  attributes naming the form the client wants back. Two forms are
+  returned — iCalendar 2.0 and RFC 7265's jCal — and a client that
+  asked for a third would mis-parse every object rather than fail
+  cleanly, so the request is refused instead.
 
   ### Arguments
 
@@ -65,25 +65,58 @@ defmodule Dav.Cal.Selection do
       iex> body = ~s(<?xml version="1.0"?><C:calendar-data xmlns:C="urn:ietf:params:xml:ns:caldav" content-type="application/calendar+json"/>)
       iex> {:ok, element} = Dav.Xml.parse(body)
       iex> Dav.Cal.Selection.supported(element)
-      {:error, {"urn:ietf:params:xml:ns:caldav", "supported-calendar-data"}}
+      :ok
 
-      iex> body = ~s(<?xml version="1.0"?><C:calendar-data xmlns:C="urn:ietf:params:xml:ns:caldav" content-type="text/calendar" version="2.0"/>)
+      iex> body = ~s(<?xml version="1.0"?><C:calendar-data xmlns:C="urn:ietf:params:xml:ns:caldav" content-type="text/vcard"/>)
       iex> {:ok, element} = Dav.Xml.parse(body)
       iex> Dav.Cal.Selection.supported(element)
-      :ok
+      {:error, {"urn:ietf:params:xml:ns:caldav", "supported-calendar-data"}}
 
   """
   @spec supported(Xml.element() | nil) :: :ok | {:error, Xml.qname()}
   def supported(nil), do: :ok
 
   def supported(element) do
-    type = Map.get(element.attributes, "content-type", "text/calendar")
     version = Map.get(element.attributes, "version", "2.0")
 
-    if type == "text/calendar" and version == "2.0" do
+    if syntax(element) != :unsupported and version == "2.0" do
       :ok
     else
       {:error, {Xml.caldav(), "supported-calendar-data"}}
+    end
+  end
+
+  @doc """
+  Which syntax the client asked the calendar data back in.
+
+  ### Arguments
+
+  * `element` is the `calendar-data` element, or `nil`.
+
+  ### Returns
+
+  * `:icalendar`, `:jcal`, or `:unsupported` for a media type this
+    server does not write.
+
+  ### Examples
+
+      iex> body = ~s(<?xml version="1.0"?><C:calendar-data xmlns:C="urn:ietf:params:xml:ns:caldav" content-type="application/calendar+json"/>)
+      iex> {:ok, element} = Dav.Xml.parse(body)
+      iex> Dav.Cal.Selection.syntax(element)
+      :jcal
+
+      iex> Dav.Cal.Selection.syntax(nil)
+      :icalendar
+
+  """
+  @spec syntax(Xml.element() | nil) :: :icalendar | :jcal | :unsupported
+  def syntax(nil), do: :icalendar
+
+  def syntax(element) do
+    case Map.get(element.attributes, "content-type", "text/calendar") do
+      "text/calendar" -> :icalendar
+      "application/calendar+json" -> :jcal
+      _another_server_writes_it -> :unsupported
     end
   end
 

@@ -91,7 +91,7 @@
   "implicittimezones.xml" => 12,
   "implicittodo.xml" => 63,
   "implicitxdash.xml" => 43,
-  "json.xml" => 0,
+  "json.xml" => 52,
   "limits.xml" => 0,
   "managed-attachments-dropbox.xml" => 18,
   "managed-attachments-implicit.xml" => 83,

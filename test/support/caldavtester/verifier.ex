@@ -15,6 +15,7 @@ defmodule Dav.CalDAVTester.Verifier do
   """
 
   alias Dav.Cal.ICalendar
+  alias Dav.Cal.JCal
   alias Dav.CalDAVTester.Calendars
   alias Dav.CalDAVTester.Scenario.Verify
   alias Dav.CalDAVTester.ServerInfo
@@ -111,6 +112,22 @@ defmodule Dav.CalDAVTester.Verifier do
     with :ok <- status_in(conn, codes),
          {:ok, expected} <- calendar_expected(args, substitutions) do
       Calendars.compare(conn.resp_body, expected, Map.get(args, "filter", []))
+    end
+  end
+
+  # Upstream hands this straight to `calendarDataMatch` with a JSON
+  # flag, because the comparison rules are the calendar's rather than
+  # the syntax's. Read back into components, both sides are the same
+  # calendar written two ways, and everything that already knows how
+  # to compare one applies unchanged.
+  def run(%Verify{callback: "jcalDataMatch", args: args}, conn, substitutions) do
+    codes = Map.get(args, "status", ~w(200 201 207))
+
+    with :ok <- status_in(conn, codes),
+         {:ok, expected} <- calendar_expected(args, substitutions),
+         {:ok, actual} <- as_calendar(conn.resp_body, "response"),
+         {:ok, wanted} <- as_calendar(expected, "expectation") do
+      Calendars.compare(actual, wanted, Map.get(args, "filter", []))
     end
   end
 
@@ -318,6 +335,16 @@ defmodule Dav.CalDAVTester.Verifier do
     case File.read(Path.join("rfc/conformance/caldavtester", path)) do
       {:ok, contents} -> {:ok, ServerInfo.expand(contents, substitutions)}
       _missing -> {:failed, "fixture #{path} is missing"}
+    end
+  end
+
+  # Both sides of a jCal comparison come back through the components,
+  # so a difference is a difference in the calendar rather than in how
+  # the JSON was laid out.
+  defp as_calendar(body, side) do
+    case JCal.decode(body) do
+      {:ok, component} -> {:ok, ICalendar.write(component)}
+      {:error, :malformed} -> {:failed, "#{side} is not jCal"}
     end
   end
 
@@ -727,7 +754,21 @@ defmodule Dav.CalDAVTester.Verifier do
 
   defp test_node(node, "||"), do: String.trim(node.text) != "" or node.children != []
 
+  # Upstream's two parse tests: the element's text must actually be
+  # calendar data in the syntax named. They are what stops a server
+  # answering a request for jCal with iCalendar and passing anyway,
+  # which is the whole question `json.xml` asks.
+  defp test_node(node, "json"), do: match?({:ok, _document}, JCal.decode(node.text))
+
+  defp test_node(node, "icalendar") do
+    match?({:ok, _component}, ICalendar.parse(unescaped(node.text)))
+  end
+
   defp test_node(_node, _unknown), do: true
+
+  # `calendar-data` arrives as XML text, so the CRLFs the parser needs
+  # are numeric references by the time they are read back.
+  defp unescaped(text), do: String.replace(text, "&#13;", "\r")
 
   # An href's trailing slash is a serialisation choice — upstream
   # emits collection hrefs with one, expectations are written with

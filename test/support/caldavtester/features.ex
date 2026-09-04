@@ -184,7 +184,14 @@ defmodule Dav.CalDAVTester.Features do
                 # an `MM:multiput` naming a write, an update and a
                 # delete at once. Each entry is an ordinary write
                 # through `Dav.Web.Write.document/5`.
-                "bulk-post"
+                "bulk-post",
+                # RFC 7265 jCal, in `Dav.Cal.JCal`: the same calendar
+                # data written as JSON, taken on a write and offered on
+                # a read wherever a client asks for it — `Accept`, a
+                # report's `calendar-data` `content-type`, an Outbox
+                # `POST`, a bulk request, and the `calendar-timezone`
+                # property.
+                "json-data"
               ]
 
   @doc """
