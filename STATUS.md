@@ -1,6 +1,6 @@
 # Status
 
-Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `c1a934e` plus the group-membership batch.
+Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `48d3490` plus the notification-access batch.
 
 `CONFORMANCE.md` explains *what* was built and why each remaining failure is acceptable. This file is the working state: the numbers, the loop, and what to pick up next.
 
@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,073 |
+| Passing | 5,077 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 31 |
+| Apple/interop failing | 27 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,20 +62,24 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 31, and measured rather than estimated — it sits in four places:
+The Apple queue is now 27, and measured rather than estimated — it sits in four places:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `sharing-quota.xml` | 14 | nothing winnable — see below |
 | room auto-scheduling | 6 | the reference's two-phase delivery |
-| `sharing-unshare-groups.xml`, `sharing-groups.xml` | 6 | effective access in a re-invitation notification |
+| `sharing-groups.xml`, `sharing-unshare-groups.xml` | 2 | a proxy-read binding's privileges |
 | elsewhere | 5 | singletons, cited individually |
 
 `sharing-quota.xml` was read and is **not winnable**, which the earlier note in this file guessed wrong: twelve of its fourteen compare byte counts that encode the reference's on-disk per-user wrapper, and the other two want a second object with the same `UID` in one calendar, which RFC 4791 section 5.3.2 forbids. The behaviour underneath — a shared calendar's bytes belong to its owner — was already right and is now covered by `Dav.Cal.SharingTest` rather than by a comment alone. Cited in full in `classification.exs`.
 
-**Best value next is the six-test notification cluster** in `sharing-unshare-groups.xml` and `sharing-groups.xml`: a re-invitation notification must state a person's *effective* access rather than the access the request just granted. Somebody already holding a read-write share who is then reached by a read-only group is still read-write, and the notification should say so. One attempt at this took the file backwards and was reverted — notifying with the merged record changes the invitation *state* as well as the access, and the two need resolving separately. CONFORMANCE.md has the detail.
+**What is left is small and mostly not winnable.** Fourteen of the twenty-seven are `sharing-quota.xml`, which encodes the reference's storage layout; five are cited singletons. That leaves two clusters worth anything:
 
-After that the queue is only the room auto-scheduling six and five cited singletons, and the remaining gated pools are all Apple legacy, a dead draft, or a deployment topology. **The interop phase is close to done.**
+* **Room auto-scheduling, six.** The reference answers an invitation to a managed room in two phases — accept, then confirm — and this engine answers in one pass on the organiser's side. Reproducing it means modelling a delivery that pauses, which is a real change to `Dav.Cal.Scheduling` for six tests.
+
+* **A proxy-read binding's privileges, two.** `?action=share` binds a calendar into the home of somebody who reaches it as a read *proxy* rather than as a sharee; the view's privileges should follow the proxy grant rather than a group share that also reaches them. Small, self-contained, and the cheapest thing left.
+
+The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is essentially done**; what remains is a judgement about whether any of it is worth building rather than a queue to work through.
 
 Read a file before committing to it. Three estimates in this section have now been wrong — `sharing-quota` was called winnable and is not, per-user data was called large and was small, and `sharing-groups-changes` was called 16 tests of group re-derivation when five of them were a broken verifier.
 
@@ -122,6 +126,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **A notification says what the person holds** (`Dav.Cal.Sharing`). `sharing-groups.xml` 83 to 84 and `sharing-unshare-groups.xml` 84 to 87; the Apple queue fell 31 to 27. Only the *access* is taken from the merged view — the first attempt at this took a whole merged record and regressed the invitation state, since a newly created record says `noresponse` and overwrote people who had already accepted. Access and state are separate questions and are now answered separately.
 
 * **A share to a group is a share to the group** (`Dav.Cal.Sharing`, `Dav.CalDAVTester.Control`). `sharing-groups-changes.xml` went 4 to 20 — the whole file — and the Apple queue fell 47 to 31. The group is now recorded in its own right rather than only expanded, so an empty group is still a share; `regrouped/2` re-derives a calendar's group shares after membership changes; and the harness grew the suite's `/control` back door. The last five failures were a **verifier** bug: a predicate followed by more path had its tail silently swallowed, so `href[=X]/../access/read` never checked the access. That is the failure mode this harness exists to avoid, and upstream's own assertions are now tests here.
 

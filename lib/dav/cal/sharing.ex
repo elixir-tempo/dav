@@ -780,13 +780,34 @@ defmodule Dav.Cal.Sharing do
         invitations = Enum.map(invitations, &carried_state(&1, existing, options))
 
         record(calendar, invitations, removals, options)
-        for invitation <- invitations, do: notify(calendar, invitation, options)
+
+        # Told what they hold, not what this request granted. Somebody
+        # already holding a read-write share who is then reached by a
+        # read-only group is still read-write, and a notification
+        # saying otherwise tells them their access was cut when it was
+        # not. Only the *access* is taken from the merged view: the
+        # answer they gave is theirs and was carried above.
+        settled = effective(calendar, options)
+
+        for invitation <- invitations do
+          notify(calendar, %{invitation | access: granted(invitation, settled, options)}, options)
+        end
+
         parted(calendar, removals, existing, options)
 
         send_resp(conn, 200, "")
 
       refused ->
         withheld(conn, invitations, refused)
+    end
+  end
+
+  defp granted(invitation, settled, options) do
+    wanted = canonical(invitation.href, options)
+
+    case Enum.find(settled, &(canonical(&1.href, options) == wanted)) do
+      %{access: access} -> access
+      _unrecorded -> invitation.access
     end
   end
 

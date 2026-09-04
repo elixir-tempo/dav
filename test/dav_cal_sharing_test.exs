@@ -216,6 +216,26 @@ defmodule Dav.Cal.SharingTest do
       )
     end
 
+    # The most recently written notification in the sharee's own
+    # collection, which is the one the invitation just made.
+    defp latest_notification(options) do
+      listing =
+        conn(
+          "PROPFIND",
+          "/both/notification",
+          ~s(<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>)
+        )
+        |> Conn.put_req_header("depth", "1")
+        |> DavPlug.call(options)
+
+      listing.resp_body
+      |> then(
+        &Regex.scan(~r|<[^:]+:href>(/both/notification/[^<]+)</|, &1, capture: :all_but_first)
+      )
+      |> List.flatten()
+      |> Enum.map_join("\n", &DavPlug.call(conn("GET", &1), options).resp_body)
+    end
+
     defp sharees(options) do
       propfind("/alice/shared", "<CS:invite/>", options).resp_body
     end
@@ -239,6 +259,28 @@ defmodule Dav.Cal.SharingTest do
       invite(~s(<CS:remove><D:href>mailto:one@example.com</D:href></CS:remove>), context.options)
 
       assert sharees(context.options) =~ "mailto:both@example.com"
+    end
+
+    # Somebody already holding a read-write share who is then reached
+    # by a read-only group is still read-write, and a notification
+    # saying otherwise tells them their access was cut when it was not.
+    test "a notification states what the person holds, not what this request gave", context do
+      invite(
+        ~s(<CS:set><D:href>mailto:both@example.com</D:href><CS:read-write/></CS:set>),
+        context.options
+      )
+
+      invite(
+        ~s(<CS:set><D:href>mailto:one@example.com</D:href><CS:read/></CS:set>),
+        context.options
+      )
+
+      told = latest_notification(context.options)
+
+      assert told =~ "read-write"
+      # And no notification says otherwise: the read-only group share
+      # did not reduce what they hold.
+      refute told =~ "<CS:read/>"
     end
 
     test "uninviting the last group that reached someone ends their share", context do

@@ -29,6 +29,7 @@ All notable changes to this project are documented here. The format follows [Kee
 * Per-user data on a shared calendar is removed with the resource it belongs to, so an object written at a path a deleted one used no longer inherits a stranger's alarms.
 * Uninviting a group from a shared calendar withdraws that group's share alone. A member another group still reaches keeps their view, and is told what their share is now.
 * A calendar shared to a group lists the group itself in `CS:invite`, not only the people it currently reaches, so an empty group is still a share.
+* A sharing notification states the access the person holds rather than the access the request just granted, so a read-only group share no longer appears to cut a read-write one.
 
 ## [0.1.0] - 2026-09-02
 

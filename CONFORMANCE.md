@@ -213,9 +213,13 @@ which threw that away and dropped every record the person held. Uninviting one s
 
 Who is left without a share is then a separate question, asked after the sources have gone: somebody another group still reaches keeps their view and is told what their share is now, and only somebody left with nothing is unshared. Eleven of the file's tests were checking exactly that — a `PROPFIND` on the sharee's calendar returning `2xx` rather than `404`.
 
-### What is still open there
+### Telling somebody what they hold
 
-Six tests across `sharing-unshare-groups.xml` and `sharing-groups.xml` want a notification to state a person's *effective* access rather than the access the request just granted — somebody already holding a read-write share who is then reached by a read-only group is still read-write, and the notification should say so. Notifying with the merged record was tried and is not simply that: the merge picks one record, and its invitation *state* is not always the one to report. It needs access and state resolved separately, and is left cited rather than half-done.
+Four of those six wanted a notification to state a person's *effective* access rather than the access the request just granted: somebody already holding a read-write share who is then reached by a read-only group is still read-write, and a notification saying otherwise tells them their access was cut when it was not.
+
+The first attempt notified with the merged record and took the file backwards, because the merge picks one whole record and its invitation *state* is not always the one to report — a newly created record says `noresponse`, and using it regressed people who had already accepted. Only the **access** comes from the merged view; the answer they gave is theirs, and was already carried onto the invitation before this point. Separating the two is the whole fix.
+
+The two that remain are a different mechanism: `?action=share` binds a calendar into the home of somebody who reaches it as a *read proxy* rather than as a sharee, and the view's privileges should follow the proxy grant rather than a group share that also reaches them.
 
 ## The travel-time model
 
