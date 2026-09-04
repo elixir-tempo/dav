@@ -7,7 +7,7 @@
   "add-member.xml" => 4,
   "alarm-dismissal.xml" => 9,
   "attachments.xml" => 8,
-  "availability.xml" => 0,
+  "availability.xml" => 7,
   "bad-ical.xml" => 0,
   "bad-json.xml" => 0,
   "brief.xml" => 15,

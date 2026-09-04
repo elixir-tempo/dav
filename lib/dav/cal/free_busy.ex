@@ -78,6 +78,10 @@ defmodule Dav.Cal.FreeBusy do
   # about whether its owner is occupied.
   @considered ["VEVENT", "VFREEBUSY"]
 
+  # The busy types written as two instants rather than as a start and
+  # a duration — see `period/2`.
+  @bounded ~w(BUSY-UNAVAILABLE)
+
   @impl Dav.Web.Report
   def run(resource, body, depth, options)
 
@@ -536,14 +540,26 @@ defmodule Dav.Cal.FreeBusy do
   defp bound(name, value), do: [name <> ":" <> value]
 
   defp freebusy({type, bounds}) do
-    "FREEBUSY;FBTYPE=" <> type <> ":" <> Enum.map_join(bounds, ",", &period/1)
+    "FREEBUSY;FBTYPE=" <> type <> ":" <> Enum.map_join(bounds, ",", &period(&1, type))
   end
 
   # RFC 5545 section 3.3.9 allows a period to be written as two
-  # instants or as a start and a duration, and RFC 5546 section 3.3.2
-  # uses the second form for free/busy. It says the same thing in
-  # fewer characters, and a busy list for a month is mostly periods.
-  defp period({began, ended}) do
+  # instants or as a start and a duration, and each specification
+  # writes its own busy types the way its own examples do: RFC 5546
+  # section 3.3.2 states busy time as a start and a duration, while
+  # RFC 7953 section 5 states unavailable time as two instants.
+  #
+  # The difference is not cosmetic. A busy period is something that
+  # *lasts* — a meeting of an hour — and the duration is what the
+  # organiser agreed to. An unavailable period is the gap between two
+  # moments a rule produced, and its ends are the meaningful part.
+  defp period(bounds, type) when type in @bounded do
+    {began, ended} = bounds
+
+    utc(began) <> "/" <> utc(ended)
+  end
+
+  defp period({began, ended}, _type) do
     case elapsed(began, ended) do
       {:ok, total} -> utc(began) <> "/" <> lasting(total)
       :error -> utc(began) <> "/" <> utc(ended)

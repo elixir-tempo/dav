@@ -1167,6 +1167,7 @@ defmodule Dav.CalDAVTester.Runner do
       principal_properties(people, substitutions)
       |> Map.merge(group_properties(substitutions))
       |> Map.merge(proxy_grants(rooms, substitutions))
+      |> Map.merge(event_properties(homes))
       |> Map.merge(tasks_properties(homes))
       |> Map.merge(timezone_service_properties(homes)),
       canonical_addresses(people, substitutions),
@@ -1489,6 +1490,22 @@ defmodule Dav.CalDAVTester.Runner do
     is_binary(href) and href in within
   end
 
+  # The reference deployment's event calendar states which components
+  # it holds, which is how `availability.xml` checks that
+  # `VAVAILABILITY` is not among them. RFC 4791 section 5.2.3 makes
+  # the property optional and its absence means "anything"; a
+  # deployment that means something narrower has to say so, and this
+  # one does.
+  defp event_properties(homes) do
+    for home <- homes, into: %{} do
+      {home ++ ["calendar"],
+       %{
+         {Xml.caldav(), "supported-calendar-component-set"} =>
+           {:components, ~w(VEVENT VTODO VTIMEZONE VFREEBUSY)}
+       }}
+    end
+  end
+
   # The reference deployment's tasks calendar holds to-dos and stays
   # out of free-busy: it declares `VTODO` as its only component and is
   # transparent, which keeps it off `CALDAV:calendar-free-busy-set`
@@ -1612,6 +1629,7 @@ defmodule Dav.CalDAVTester.Runner do
         Cal.Split,
         Cal.Trash,
         Cal.Alarms,
+        Cal.Availability,
         Dav.CalDAVTester.Indexes
       ],
       authentication: :required,
@@ -1633,7 +1651,8 @@ defmodule Dav.CalDAVTester.Runner do
            calendarserver-sharing calendarserver-sharing-no-scheduling
            calendarserver-home-sync calendar-query-extended calendar-managed-attachments
            calendar-proxy calendarserver-private-events calendarserver-private-comments
-           calendar-default-alarms calendarserver-group-sharee calendarserver-recurrence-split),
+           calendar-default-alarms calendarserver-group-sharee calendarserver-recurrence-split
+           calendar-availability inbox-availability),
       # The reference deployment shares these extensions between
       # participants; everything else a client hangs on its own copy
       # stays there. The suite's fixtures name them, so the harness

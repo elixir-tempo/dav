@@ -47,6 +47,7 @@ defmodule Dav.Cal.Outbox do
   import Plug.Conn
 
   alias Dav.Cal
+  alias Dav.Cal.Availability
   alias Dav.Cal.Delegation
   alias Dav.Cal.FreeBusy
   alias Dav.Cal.ICalendar
@@ -702,12 +703,36 @@ defmodule Dav.Cal.Outbox do
         {all_periods ++ periods, all_events ++ events}
       end)
 
-    FreeBusy.vfreebusy(periods, range,
+    FreeBusy.vfreebusy(periods ++ unavailable(address, window, options), range,
       attendee: attendee,
       organizer: organiser,
       method: "REPLY",
       events: events
     )
+  end
+
+  # RFC 7953: the time this person would not accept a meeting in,
+  # which is a different answer from the time they are already busy —
+  # an empty calendar at three in the morning is not an invitation.
+  # It is stated once for the whole person, on their Inbox, rather
+  # than per calendar.
+  defp unavailable(address, window, options) do
+    with %Resource{} = home <- principal(address, options),
+         %Resource{} = inbox <- inbox_of(home, options) do
+      Availability.unavailable(stated_availability(inbox, options), window, nil)
+    else
+      _no_inbox -> []
+    end
+  end
+
+  defp stated_availability(inbox, %{store: store, context: context}) do
+    with true <- Store.supports?(store, :properties),
+         %{} = properties <- store.properties(inbox, context),
+         value when is_binary(value) <- Map.get(properties, Availability.property()) do
+      value
+    else
+      _unstated -> nil
+    end
   end
 
   defp periods(

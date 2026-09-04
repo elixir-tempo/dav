@@ -197,7 +197,13 @@ defmodule Dav.CalDAVTester.Features do
                 # deployment asks for it with `listings: true` — a
                 # listing of what the collection holds, in
                 # `Dav.Web.Plug`.
-                "directory listing"
+                "directory listing",
+                # RFC 7953 `VAVAILABILITY`, in `Dav.Cal.Availability`:
+                # the hours a person would accept a meeting in, kept in
+                # Apple's `CS:calendar-availability` on the Inbox and
+                # subtracted from every busy-time answer as
+                # `FBTYPE=BUSY-UNAVAILABLE`.
+                "vavailability"
               ]
 
   @doc """
