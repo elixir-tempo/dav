@@ -1,6 +1,6 @@
 # Status
 
-Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-04, against `3f5c917` plus the jCal batch.
+Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-04, against `5ea15e8` plus the collection-read batch.
 
 `CONFORMANCE.md` explains *what* was built and why each remaining failure is acceptable. This file is the working state: the numbers, the loop, and what to pick up next.
 
@@ -9,13 +9,13 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | | |
 | --- | ---: |
 | Scenarios | 162 |
-| Tests | 4,994 |
-| Passing | 4,896 |
+| Tests | 5,085 |
+| Passing | 4,987 |
 | **RFC-required failing** | **0** |
 | Apple/interop failing | 58 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
-| Features declared | 47 |
+| Features declared | 48 |
 
 RFC-required has been 0 for the whole drive and is the number that must not move. Unclassified is the queue that has to be empty before a batch closes: a failure nobody has classified is a failure nobody has looked at.
 
@@ -49,13 +49,12 @@ A batch is done when the corpus is net-zero-or-better, RFC-required is 0, Unclas
 
 ## What is left
 
-### Pools not yet opened — 24 files, 599 tests
+### Pools not yet opened — 21 files, 508 tests
 
 Each is gated shut by a feature this server does not implement. Declaring a feature without building it inflates the denominator and turns the conformance figure into a claim, so the gate stays until the code exists.
 
 | pool | tests | needs |
 | --- | ---: | --- |
-| `collection-redirects.xml` | 72 | directory listing |
 | `implicitgroup.xml`, `trash-implicitgroup.xml` | 97 | group attendee expansion, `control-api` |
 | `partitioning-*.xml` | 48+ | multi-node partitioning |
 | `dropbox.xml`, `implicitdropbox.xml` | 66 | legacy dropbox |
@@ -63,7 +62,7 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 | `availability.xml` | 29 | `VAVAILABILITY` |
 | `polls.xml` | 28 | `VPOLL` |
 
-Best value next is `collection-redirects` — 72 tests, self-contained, and the largest single pool left. After that the choice is between two features rather than one: `availability.xml` wants `VAVAILABILITY` (RFC 7953, 29 tests) and `polls.xml` wants `VPOLL` (a draft that never became an RFC, 28 tests), and of the two only the first is a standard. `partitioning-*` is a deployment topology rather than a library feature and is probably never worth declaring.
+The single-feature pools are gone; what is left needs either a feature of real size or a deployment this library is not. Best value next is **`VAVAILABILITY`** — RFC 7953, `availability.xml`, 29 tests, and the only remaining standard among them: a `VAVAILABILITY` component states when a person is *available to be asked*, which free-busy then reads through. `implicitgroup` is 97 tests but wants group attendee expansion and a `control-api` the suite uses to drive directory changes, which is two features and one of them is not a protocol. `polls.xml` is `VPOLL`, a draft that never became an RFC. `partitioning-*` is a deployment topology rather than a library feature and is probably never worth declaring.
 
 ### Three files open but scoring zero — checked, and not worth returning to
 
@@ -96,6 +95,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **What a `GET` on a collection does**, in `Dav.Web.Plug` (`directory listing`). 91 tests gained across three files — `collection-redirects.xml`, `directory.xml` and two gated suites of `get.xml`, all passing in full. A collection addressed without its trailing slash redirects to the one it has; a deployment may ask for a listing with `listings: true`; a browser gets that listing ahead of whatever an extension would render; and a collection read carries an `ETag` over the rendering plus a `Last-Modified`, and answers `304`. `c:Dav.Web.Hook.rendered/2` gained `{:error, :forbidden}` for a collection that may be addressed but not enumerated. Nothing else in the corpus moved.
 
 * **jCal** (`Dav.Cal.JCal`) — RFC 7265, calendar data as JSON. 52 tests gained, `json.xml` in full. One syntax is stored, iCalendar, and the JSON is converted at the edges: a codec keyed on RFC 5545's value-type table, plus negotiation on six surfaces (`Accept`, `Prefer: return=representation`, a report's `calendar-data content-type`, an Outbox `POST`, a bulk request, and `CALDAV:calendar-timezone`). Three base seams came out of it — `c:Dav.Web.Hook.taken/4` and `c:Dav.Web.Hook.offered/6` for negotiation, a revising `c:Dav.Web.Hook.patchable/3`, and `Dav.Xml.parse_propfind/1` now returning the attributes a client wrote on the properties it asked for. Nothing else in the corpus moved, which was worth checking: the change touches `PROPFIND`, `PROPPATCH`, `GET`, `PUT` and both reports.
 

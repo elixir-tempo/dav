@@ -81,6 +81,13 @@ defmodule Dav.Web.Plug do
     `DAV:principal-collection-set` on every resource. Empty by
     default, and the property is simply absent then.
 
+  * `:listings` answers a `GET` on a collection with a list of what it
+    holds, where no extension offered a rendering of its own. `false`
+    by default: RFC 4918 leaves `GET` on a collection to the server,
+    and a listing puts member names in front of anything that can read
+    the collection — which a `PROPFIND` already does, but in a browser
+    rather than in a client. That is a deployment's decision.
+
   * `:reports`, `:validators`, `:hooks` and `:methods` are the four
     extension points, each a list the request dispatches through.
 
@@ -115,7 +122,8 @@ defmodule Dav.Web.Plug do
       well_known: Map.new(Keyword.get(options, :well_known, [])),
       administrators: Keyword.get(options, :administrators, []),
       principals: Keyword.get(options, :principals, []),
-      client_repairs: Keyword.get(options, :client_repairs, [])
+      client_repairs: Keyword.get(options, :client_repairs, []),
+      listings: Keyword.get(options, :listings, false)
     }
   end
 
@@ -162,7 +170,7 @@ defmodule Dav.Web.Plug do
 
       _elsewhere ->
         if authenticated?(options) or anonymous_endpoint?(conn, options),
-          do: dispatch(conn.method, conn, options |> scoped() |> repairing(conn)),
+          do: dispatch(conn.method, conn, options |> scoped() |> stated_by(conn)),
           else: challenge(conn)
     end
   end
@@ -324,9 +332,13 @@ defmodule Dav.Web.Plug do
     with :ok <- capable(options, :read),
          {:ok, resource} <- resolve(conn, options),
          :ok <- permitted(resource, options),
-         {:ok, type, body} <- retrieved(resource, wanted(conn), options) do
+         :ok <- addressed_as_collection(conn, resource),
+         {:ok, type, body} <- retrieved(resource, wanted(conn), options),
+         validator = validating(resource, body),
+         :ok <- still_current(conn, resource, validator) do
       conn
-      |> etag(resource)
+      |> tagged(validator)
+      |> stamped(resource)
       |> contributed_headers(resource, options)
       |> put_resp_content_type(type)
       |> send_resp(200, if(method == "HEAD", do: "", else: body))
@@ -352,16 +364,75 @@ defmodule Dav.Web.Plug do
       # extension offered a rendering for this one.
       {:error, :is_collection} ->
         send_resp(conn, 405, "")
+
+      {:error, {:moved, location}} ->
+        conn
+        |> put_resp_header("location", location)
+        |> send_resp(301, "")
+
+      {:error, :not_modified} ->
+        send_resp(conn, 304, "")
     end
   end
 
-  # Whether this client is one the deployment repairs after. Recorded
-  # once, here, so a hook deciding whether to correct what it was sent
-  # does not go looking through the request for the answer.
-  defp repairing(options, conn) do
+  # What the entity being returned is identified by. A document has an
+  # `ETag` of its own; a collection has no body until one is rendered,
+  # and the rendering is what the client is holding — so it is the
+  # rendering that gets the validator, and a listing that changes gets
+  # a new one without the store having to account for it.
+  defp validating(%Resource{collection?: true}, body),
+    do: ~s("#{:erlang.phash2(body)}")
+
+  defp validating(%Resource{etag: etag}, _body), do: etag
+
+  defp tagged(conn, nil), do: conn
+  defp tagged(conn, validator), do: put_resp_header(conn, "etag", validator)
+
+  # RFC 9110 section 13.1: a `GET` the client already has the answer
+  # to is answered `304`, and the point is the body that is not sent.
+  # A calendar home polled every minute is the case that matters.
+  defp still_current(conn, resource, validator) do
+    with :ok <- matching(conn, validator) do
+      changed_since(conn, resource)
+    end
+  end
+
+  defp matching(conn, validator) do
+    case get_req_header(conn, "if-none-match") do
+      [] -> :ok
+      [asked | _rest] -> if listed?(asked, validator), do: {:error, :not_modified}, else: :ok
+    end
+  end
+
+  # A collection addressed without its trailing slash is a different
+  # base for every relative reference inside what it returns: a member
+  # named `1.ics` resolves against `/calendars/kim/` one way and
+  # against `/calendars/kim` another, and the second is wrong. So the
+  # client is sent to the address the collection actually has, rather
+  # than served at one that will mislead whatever it does next.
+  defp addressed_as_collection(conn, %Resource{collection?: true} = resource) do
+    if String.ends_with?(conn.request_path, "/"),
+      do: :ok,
+      else: {:error, {:moved, Resource.href(resource)}}
+  end
+
+  defp addressed_as_collection(_conn, _document), do: :ok
+
+  # What the client said about itself, recorded once so that nothing
+  # downstream goes looking through the request for it.
+  #
+  # `repairing?` is whether this is a client the deployment repairs
+  # after. `browsing?` is whether it is a browser — every browser
+  # since Netscape says `Mozilla` in its `User-Agent`, which is the
+  # only thing that string has ever reliably meant, and a person
+  # pointed at a calendar wants to see what is in it rather than
+  # download it.
+  defp stated_by(options, conn) do
     agent = conn |> get_req_header("user-agent") |> List.first()
 
-    Map.put(options, :repairing?, agent in Map.get(options, :client_repairs, []))
+    options
+    |> Map.put(:repairing?, agent in Map.get(options, :client_repairs, []))
+    |> Map.put(:browsing?, is_binary(agent) and String.contains?(agent, "Mozilla"))
   end
 
   # An extension holding private material refuses the read here —
@@ -808,10 +879,18 @@ defmodule Dav.Web.Plug do
   # RFC 4918 leaves GET on a collection to the server; an extension
   # may render one — a calendar rolled up into a single object — and
   # a collection nothing renders is refused.
+  # A browser is offered the listing ahead of whatever an extension
+  # would render, because the two answer different questions: a
+  # calendar client asking for a calendar wants the events, and a
+  # person looking at the same URL wants to see what is in there.
   defp retrieved(%Resource{collection?: true} = collection, _accept, options) do
-    case Hook.rendering(collection, options) do
+    with :skip <- refused(collection, options),
+         :skip <- browsed(collection, options),
+         :skip <- Hook.rendering(collection, options) do
+      listing(collection, options)
+    else
       {:ok, type, body} -> {:ok, type, body}
-      :skip -> {:error, :is_collection}
+      {:error, :forbidden} -> {:error, :forbidden}
     end
   end
 
@@ -850,6 +929,102 @@ defmodule Dav.Web.Plug do
       accept,
       options
     )
+  end
+
+  # A refusal to render outranks the listing, and the browser's
+  # preference for one: a collection nobody may enumerate is not
+  # enumerated for a person either.
+  defp refused(collection, options) do
+    case Hook.rendering(collection, options) do
+      {:error, :forbidden} -> {:error, :forbidden}
+      _rendered_or_not -> :skip
+    end
+  end
+
+  defp browsed(collection, %{browsing?: true} = options), do: listing(collection, options)
+  defp browsed(_collection, _options), do: :skip
+
+  # What a collection holds, for a client that is not a DAV client. A
+  # browser pointed at a calendar home gets somewhere to click rather
+  # than a `405` it cannot act on, and each member is named by the
+  # href it actually has — a collection with its trailing slash, so
+  # the next request needs no redirect.
+  defp listing(collection, %{listings: true} = options) do
+    {:ok, "text/html; charset=utf-8", page(collection, members(collection, options))}
+  end
+
+  defp listing(_collection, %{browsing?: true}), do: :skip
+  defp listing(_collection, _options), do: {:error, :is_collection}
+
+  defp members(collection, %{store: store, context: context} = options) do
+    {:ok, children} = store.children(collection, context)
+
+    children
+    |> Enum.reject(&Hook.concealed?(&1, options))
+    |> Enum.sort_by(&Resource.href/1)
+  end
+
+  defp page(collection, members) do
+    href = Resource.href(collection)
+
+    [
+      "<!DOCTYPE html>\n<html><head><title>",
+      escaped(href),
+      "</title></head><body><h1>",
+      escaped(href),
+      "</h1>\n<table>\n",
+      "<tr><th>Name</th><th>Type</th><th>Size</th><th>Last modified</th></tr>\n",
+      Enum.map(members, &row/1),
+      "</table>\n</body></html>\n"
+    ]
+    |> IO.iodata_to_binary()
+  end
+
+  defp row(member) do
+    [
+      "<tr><td><a href=\"",
+      escaped(Resource.href(member)),
+      "\">",
+      escaped(label(member)),
+      "</a></td><td>",
+      escaped(shown_type(member)),
+      "</td><td>",
+      shown_length(member),
+      "</td><td>",
+      shown_date(member),
+      "</td></tr>\n"
+    ]
+  end
+
+  # The media type without its parameters: a listing says what kind of
+  # thing a member is, and `charset` is not part of that answer.
+  defp shown_type(%Resource{collection?: true}), do: "httpd/unix-directory"
+  defp shown_type(%Resource{content_type: nil}), do: ""
+
+  defp shown_type(%Resource{content_type: type}),
+    do: type |> String.split(";") |> List.first() |> String.trim()
+
+  defp shown_length(%Resource{content_length: length}) when is_integer(length),
+    do: Integer.to_string(length)
+
+  defp shown_length(_unmeasured), do: ""
+
+  defp shown_date(%Resource{modified_at: %DateTime{} = at}), do: Properties.http_date(at)
+  defp shown_date(_undated), do: ""
+
+  defp label(member) do
+    case Resource.name(member) do
+      nil -> Resource.href(member)
+      name -> if member.collection?, do: name <> "/", else: name
+    end
+  end
+
+  defp escaped(text) do
+    text
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
   end
 
   defp no_body(""), do: :ok

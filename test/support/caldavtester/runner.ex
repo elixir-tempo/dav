@@ -1047,7 +1047,7 @@ defmodule Dav.CalDAVTester.Runner do
     aliases = alias_homes(people, substitutions)
 
     resources =
-      ([[] | ancestors(homes)] ++ homes ++ ancestors(aliases))
+      ([[] | ancestors(homes)] ++ homes ++ ancestors(aliases) ++ provisioned(substitutions))
       |> Enum.uniq()
       |> Enum.reject(&(&1 in aliases))
       |> Enum.map(&container(&1, owners, named))
@@ -1572,6 +1572,20 @@ defmodule Dav.CalDAVTester.Runner do
     }
   end
 
+  # The containers the reference deployment has whether or not anybody
+  # is in them. Its directory carries group, location and resource
+  # records as well as users, so `/principals/groups/` and its
+  # neighbours are collections that exist and are empty rather than
+  # collections that are not there — which is what `directory.xml`
+  # asks about.
+  defp provisioned(substitutions) do
+    for key <- ~w($principals_groups: $principals_locations: $principals_resources:
+                  $calendars_users: $calendars_locations: $calendars_resources:),
+        path = substitutions[key],
+        is_binary(path),
+        do: segments(path)
+  end
+
   defp ancestors(homes) do
     homes
     |> Enum.flat_map(fn home -> for n <- 1..length(home)//1, do: Enum.take(home, n) end)
@@ -1597,9 +1611,14 @@ defmodule Dav.CalDAVTester.Runner do
         Cal.Rollup,
         Cal.Split,
         Cal.Trash,
-        Cal.Alarms
+        Cal.Alarms,
+        Dav.CalDAVTester.Indexes
       ],
       authentication: :required,
+      # The reference deployment answers a `GET` on a collection with
+      # a listing rather than a `405`, which is what
+      # `collection-redirects.xml` and `directory.xml` are about.
+      listings: true,
       well_known: [
         {"caldav", substitutions["$hostssl:"] <> "/"},
         {"timezone", @timezone_service}

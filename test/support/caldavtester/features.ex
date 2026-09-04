@@ -191,7 +191,13 @@ defmodule Dav.CalDAVTester.Features do
                 # report's `calendar-data` `content-type`, an Outbox
                 # `POST`, a bulk request, and the `calendar-timezone`
                 # property.
-                "json-data"
+                "json-data",
+                # A `GET` on a collection: the trailing-slash redirect
+                # RFC 3986 relative references need, and — where a
+                # deployment asks for it with `listings: true` — a
+                # listing of what the collection holds, in
+                # `Dav.Web.Plug`.
+                "directory listing"
               ]
 
   @doc """

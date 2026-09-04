@@ -439,7 +439,7 @@ defmodule Dav.Web.Hook do
 
   """
   @callback rendered(collection :: Resource.t(), options :: map()) ::
-              {:ok, String.t(), binary()} | :skip
+              {:ok, String.t(), binary()} | {:error, :forbidden} | :skip
 
   @doc """
   The first rendering any hook offers for a collection.
@@ -452,18 +452,28 @@ defmodule Dav.Web.Hook do
 
   ### Returns
 
-  * `{:ok, content_type, body}` from the first hook that renders it,
-    or `:skip`.
+  * `{:ok, content_type, body}` from the first hook that renders it;
+
+  * `{:error, :forbidden}` from the first hook that refuses to. A
+    collection can be addressable without being *enumerable* — an
+    index keyed by opaque identifier is exactly that, and listing it
+    would hand out every identifier in it — and the refusal is a
+    rendering decision rather than an access one, because the
+    collection's members are readable by anyone entitled to them; or
+
+  * `:skip` when no hook has anything to say.
 
   """
-  @spec rendering(Resource.t(), map()) :: {:ok, String.t(), binary()} | :skip
+  @spec rendering(Resource.t(), map()) ::
+          {:ok, String.t(), binary()} | {:error, :forbidden} | :skip
   def rendering(collection, options) do
     options
     |> Map.get(:hooks, [])
-    |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :rendered, 2)))
+    |> Enum.filter(&exports?(&1, :rendered, 2))
     |> Enum.find_value(:skip, fn hook ->
       case hook.rendered(collection, options) do
         {:ok, type, body} -> {:ok, type, body}
+        {:error, :forbidden} -> {:error, :forbidden}
         :skip -> nil
       end
     end)

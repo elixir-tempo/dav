@@ -33,6 +33,10 @@ defmodule Dav.Web.MethodsTest do
     DavPlug.call(conn, options)
   end
 
+  defp listing(context) do
+    DavPlug.init(store: WritableStore, context: context.writable.context, listings: true)
+  end
+
   describe "a store's capabilities decide the server's" do
     test "a read-only store advertises no write methods", context do
       conn = send_request("OPTIONS", "/", context.read_only)
@@ -85,9 +89,78 @@ defmodule Dav.Web.MethodsTest do
     end
 
     test "a collection is refused rather than given an invented listing", context do
-      conn = send_request("GET", "/files", context.writable)
+      conn = send_request("GET", "/files/", context.writable)
 
       assert conn.status == 405
+    end
+
+    # RFC 3986 section 5: a relative reference resolves against the
+    # base, and `/files` and `/files/` are different bases. A member
+    # named `note.txt` resolves to `/note.txt` from the first and
+    # `/files/note.txt` from the second, so the client is sent to the
+    # address the collection actually has.
+    test "a collection addressed without its trailing slash is moved", context do
+      conn = send_request("GET", "/files", context.writable)
+
+      assert conn.status == 301
+      assert get_resp_header(conn, "location") == ["/files/"]
+    end
+
+    test "a document is not moved, whatever its name looks like", context do
+      conn = send_request("GET", "/files/note.txt", context.writable)
+
+      assert conn.status == 200
+    end
+
+    test "a listing is served where the deployment asked for one", context do
+      conn = send_request("GET", "/files/", listing(context))
+
+      assert conn.status == 200
+      assert [type] = get_resp_header(conn, "content-type")
+      assert type =~ "text/html"
+      assert conn.resp_body =~ ~s(<a href="/files/note.txt">note.txt</a>)
+      assert conn.resp_body =~ "<td>text/plain</td>"
+    end
+
+    # A person and a calendar client asking the same URL want
+    # different answers, and the only thing that separates them is
+    # what they say they are.
+    test "a browser is given the listing even where nothing else asked for one", context do
+      conn =
+        send_request("GET", "/files/", listing(context), "", [
+          {"user-agent", "Mozilla/5.0 (Macintosh)"}
+        ])
+
+      assert conn.status == 200
+      assert conn.resp_body =~ "<td>text/plain</td>"
+    end
+
+    # RFC 9110 section 13.1. A calendar home polled every minute is
+    # the case this exists for: the point is the body that is not sent.
+    test "a collection GET is conditional on its validator", context do
+      conn = send_request("GET", "/files/", listing(context))
+
+      assert [validator] = get_resp_header(conn, "etag")
+
+      again = send_request("GET", "/files/", listing(context), "", [{"if-none-match", validator}])
+
+      assert again.status == 304
+      assert again.resp_body == ""
+    end
+
+    # The validator is over the rendering, not over the store's idea
+    # of the collection: what the client is holding is the listing,
+    # and a listing that changed is a different entity.
+    test "a listing that changes gets a new validator", context do
+      before = send_request("GET", "/files/", listing(context))
+
+      send_request("PUT", "/files/other.txt", context.writable, "x", [
+        {"content-type", "text/plain"}
+      ])
+
+      after_write = send_request("GET", "/files/", listing(context))
+
+      assert get_resp_header(before, "etag") != get_resp_header(after_write, "etag")
     end
 
     test "something absent is 404", context do

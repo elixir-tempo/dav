@@ -19,8 +19,10 @@ defmodule Dav.Cal.Rollup do
   alias Dav.Web.Hook
   alias Dav.Web.Resource
   alias Dav.Web.Store
+  alias Dav.Xml
 
   @access "X-CALENDARSERVER-ACCESS"
+  @calendar_name "X-WR-CALNAME"
   @calendar_type "text/calendar; charset=utf-8"
 
   @doc """
@@ -94,8 +96,43 @@ defmodule Dav.Cal.Rollup do
           {:ok, calendar} <- [ICalendar.parse(body)],
           do: calendar
 
-    ICalendar.write(merged(calendars))
+    calendars |> merged() |> named(collection, options) |> ICalendar.write()
   end
+
+  # `X-WR-CALNAME` is what every client shows this file as once it has
+  # been saved or subscribed to, and the collection's `DAV:displayname`
+  # is the only name it has. Without it the calendar arrives called
+  # whatever the file was called, which for a rollup is nothing.
+  defp named(calendar, collection, options) do
+    case display_name(collection, options) do
+      nil ->
+        calendar
+
+      name ->
+        stated = %{name: @calendar_name, parameters: %{}, value: name}
+
+        %{
+          calendar
+          | properties: Enum.reject(calendar.properties, &(&1.name == @calendar_name)) ++ [stated]
+        }
+    end
+  end
+
+  # The stored property first, then whatever the resource says it is
+  # called: a client that renamed the calendar has said so by storing
+  # `DAV:displayname`, and that answer outranks the derived one.
+  defp display_name(collection, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :properties),
+         %{} = stored <- store.properties(collection, context),
+         name when is_binary(name) <- Map.get(stored, {Xml.dav(), "displayname"}) do
+      name
+    else
+      _unstored -> named_by(collection, options)
+    end
+  end
+
+  defp named_by(%Resource{display_name: name}, _options) when is_binary(name), do: name
+  defp named_by(_collection, _options), do: nil
 
   defp members(collection, %{store: store, context: context}) do
     case store.children(collection, context) do
