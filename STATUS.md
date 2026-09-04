@@ -1,6 +1,6 @@
 # Status
 
-Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `c5c3e03` plus the per-user data batch.
+Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `c866b08` plus the group-withdrawal batch.
 
 `CONFORMANCE.md` explains *what* was built and why each remaining failure is acceptable. This file is the working state: the numbers, the loop, and what to pick up next.
 
@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,046 |
+| Passing | 5,057 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 58 |
+| Apple/interop failing | 47 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,7 +62,21 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-**Best value next is the group-sharing tail** — 33 failures across 13 `sharing-*` files, the largest single cluster left and now more than half of the Apple queue. It is not a gated pool, so it opens nothing new; it turns already-counted failures into passes. Per-user data went the same way and cost far less than its estimate, so the cluster is worth re-measuring before assuming its size.
+The Apple queue is now 47, and measured rather than estimated — it sits in four places:
+
+| where | failing | what it wants |
+| --- | ---: | --- |
+| `sharing-groups-changes.xml` | 16 | the suite's `/control` API, to change group membership mid-scenario |
+| `sharing-quota.xml` | 14 | quota accounting across a shared calendar |
+| room auto-scheduling | 6 | the reference's two-phase delivery |
+| `sharing-unshare-groups.xml`, `sharing-groups.xml` | 6 | effective access in a re-invitation notification |
+| elsewhere | 5 | singletons, cited individually |
+
+**Best value next is `sharing-quota.xml`** — 14 failures in one file, no harness back door needed, and quota is already implemented for the unshared case (`c:Dav.Web.Store.quota/2`). What it asks is whose account a write against a shared calendar lands in.
+
+`sharing-groups-changes.xml` is the largest single file but needs `/control`, a four-action JSON endpoint (`addgroupmembers`, `removegroupmembers`, `refreshgroups`, `schedulingdone`) the suite uses to drive the reference's directory. Building it in the harness is legitimate — the harness is the deployment — but it also needs the library to re-derive group shares when membership changes, which is a real feature and not a small one.
+
+The six remaining group-sharing failures are described in CONFORMANCE.md; they want access and invitation state resolved separately in a notification, and one attempt at it made things worse before being reverted.
 
 Of the gated pools, every remaining standard is now declared. What is left needs either a feature of real size or a deployment this library is not:
 
@@ -105,6 +119,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **Withdrawing one share out of several** (`Dav.Cal.Sharing`). `sharing-unshare-groups.xml` went 73 to 84 and the Apple queue fell 58 to 47. Uninviting a group dropped every record the affected people held rather than the ones that group gave — the surrounding comments already said it should be the second. The withdrawal now carries its source, and who is left with nothing is worked out afterwards. Nothing else in the corpus moved.
 
 * **Per-user data on a shared calendar**, widened from `TRANSP` and `VALARM` to every `X-` property and subcomponent — the rule `Dav.Cal.Object` had written down all along for deciding what a sharee may change. `sharing-traveltime.xml` went 9 to 27 and the Apple queue fell 76 to 58. `X-CALENDARSERVER-ACCESS` stays shared: a privacy mark kept per reader stops being one. It also turned up a store bug — per-user data outlived the resource it belonged to, so an object written at a deleted one's path inherited a stranger's alarms.
 

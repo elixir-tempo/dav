@@ -151,7 +151,7 @@
   "sharing-replies.xml" => 10,
   "sharing-sync.xml" => 45,
   "sharing-traveltime.xml" => 27,
-  "sharing-unshare-groups.xml" => 73,
+  "sharing-unshare-groups.xml" => 84,
   "sharing-unshare.xml" => 29,
   "sharing-webcal.xml" => 0,
   "sync-report.xml" => 100,

@@ -675,11 +675,13 @@ defmodule Dav.Cal.Sharing do
     # Removing a group removes the shares it gave, and only those: a
     # member invited in their own right keeps that invitation, and a
     # member who is in the group twice over — through a subgroup —
-    # keeps the one the other group gave them.
+    # keeps the one the other group gave them. So a withdrawal names
+    # the *source* to drop rather than the person, and who ends up
+    # without a share is worked out afterwards.
     removals =
       for element <- children(document, "remove"),
-          href <- withdrawn_by(href_of(element), calendar, options),
-          do: href
+          source <- withdrawn_by(href_of(element), calendar, options),
+          do: source
 
     # One person, one invitation: somebody reached through two groups,
     # or through a group and directly, is invited once, at the access
@@ -697,7 +699,7 @@ defmodule Dav.Cal.Sharing do
 
         record(calendar, invitations, removals, options)
         for invitation <- invitations, do: notify(calendar, invitation, options)
-        for href <- removals, do: uninvite(calendar, href, existing, options)
+        parted(calendar, removals, existing, options)
 
         send_resp(conn, 200, "")
 
@@ -727,7 +729,7 @@ defmodule Dav.Cal.Sharing do
   defp withdrawn_by(href, calendar, options) do
     case group_members(href, options) do
       [] ->
-        [href]
+        [{href, nil}]
 
       members ->
         wanted = canonical(href, options)
@@ -737,8 +739,28 @@ defmodule Dav.Cal.Sharing do
             is_binary(group),
             canonical(group, options) == wanted,
             canonical(theirs, options) in Enum.map(members, &canonical(&1, options)),
-            do: theirs
+            do: {theirs, group}
     end
+  end
+
+  # What a withdrawal does to the people it touched, decided once the
+  # sources have gone: somebody another group still reaches keeps
+  # their view and is told what their share is now, and only somebody
+  # left with nothing is unshared. Uninviting one subgroup of a
+  # supergroup ends nobody's access on its own.
+  defp parted(calendar, removals, existing, options) do
+    surviving = effective(calendar, options)
+
+    for {href, _group} <- Enum.uniq_by(removals, &canonical(elem(&1, 0), options)) do
+      wanted = canonical(href, options)
+
+      case Enum.find(surviving, &(canonical(&1.href, options) == wanted)) do
+        nil -> uninvite(calendar, href, existing, options)
+        held -> notify(calendar, held, options)
+      end
+    end
+
+    :ok
   end
 
   defp carried_state(invitation, existing, options) do
@@ -897,13 +919,18 @@ defmodule Dav.Cal.Sharing do
             into: MapSet.new(),
             do: source_of(invitation, options)
 
+      # By source, not by person. A withdrawal names which share to
+      # take away, and dropping every record a person holds would end
+      # an access the sharer never touched.
       dropped =
-        for who <- removals, into: MapSet.new(), do: canonical(who, options)
+        for {who, group} <- removals,
+            into: MapSet.new(),
+            do: {canonical(who, options), group && canonical(group, options)}
 
       kept =
         Enum.reject(existing, fn held ->
           MapSet.member?(replaced, source_of(held, options)) or
-            MapSet.member?(dropped, canonical(held.href, options))
+            MapSet.member?(dropped, source_of(held, options))
         end)
 
       store.patch(calendar, [{:set, invite_property(), encode(kept ++ invitations)}], context)

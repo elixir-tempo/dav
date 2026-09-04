@@ -152,6 +152,109 @@ defmodule Dav.Cal.SharingTest do
     assert listing.resp_body =~ "can-be-shared"
   end
 
+  describe "sharing with groups" do
+    setup do
+      # Two groups, one member each way: `both` is in each of them, so
+      # a calendar shared to both reaches them twice over.
+      agent =
+        SchedulingStore.start(
+          [
+            %Resource{path: [], collection?: true},
+            %Resource{path: ["alice"], collection?: true, owner: "/p/alice/"},
+            %Resource{
+              path: ["alice", "shared"],
+              collection?: true,
+              types: [Cal.calendar()],
+              owner: "/p/alice/"
+            },
+            %Resource{path: ["both"], collection?: true, owner: "/p/both/"},
+            %Resource{
+              path: ["both", "notification"],
+              collection?: true,
+              types: [Sharing.notification()],
+              owner: "/p/both/"
+            },
+            %Resource{path: ["teams"], collection?: true},
+            %Resource{path: ["teams", "one"], collection?: true},
+            %Resource{path: ["teams", "two"], collection?: true}
+          ],
+          %{
+            "mailto:alice@example.com" => ["alice"],
+            "mailto:both@example.com" => ["both"],
+            "mailto:one@example.com" => ["teams", "one"],
+            "mailto:two@example.com" => ["teams", "two"]
+          },
+          %{
+            ["teams", "one"] => %{
+              {"DAV:", "group-member-set"} => {:hrefs, ["mailto:both@example.com"]}
+            },
+            ["teams", "two"] => %{
+              {"DAV:", "group-member-set"} => {:hrefs, ["mailto:both@example.com"]}
+            }
+          }
+        )
+
+      options =
+        DavPlug.init(
+          store: SchedulingStore,
+          context: agent,
+          methods: [{"POST", Cal.Post}],
+          hooks: [Cal.Sharing]
+        )
+
+      %{options: options}
+    end
+
+    defp invite(inner, options) do
+      DavPlug.call(
+        conn(
+          "POST",
+          "/alice/shared/",
+          ~s(<?xml version="1.0" encoding="utf-8"?><CS:share xmlns:D="DAV:" xmlns:CS="http://calendarserver.org/ns/">#{inner}</CS:share>)
+        ),
+        options
+      )
+    end
+
+    defp sharees(options) do
+      propfind("/alice/shared", "<CS:invite/>", options).resp_body
+    end
+
+    # The withdrawal names which share to take away, not who to take
+    # it from. A member reached through a second group still holds
+    # that group's share, and ending one of them is not ending both.
+    test "uninviting one group leaves the share another group gave", context do
+      invite(
+        ~s(<CS:set><D:href>mailto:one@example.com</D:href><CS:read/></CS:set>),
+        context.options
+      )
+
+      invite(
+        ~s(<CS:set><D:href>mailto:two@example.com</D:href><CS:read/></CS:set>),
+        context.options
+      )
+
+      assert sharees(context.options) =~ "mailto:both@example.com"
+
+      invite(~s(<CS:remove><D:href>mailto:one@example.com</D:href></CS:remove>), context.options)
+
+      assert sharees(context.options) =~ "mailto:both@example.com"
+    end
+
+    test "uninviting the last group that reached someone ends their share", context do
+      invite(
+        ~s(<CS:set><D:href>mailto:one@example.com</D:href><CS:read/></CS:set>),
+        context.options
+      )
+
+      assert sharees(context.options) =~ "mailto:both@example.com"
+
+      invite(~s(<CS:remove><D:href>mailto:one@example.com</D:href></CS:remove>), context.options)
+
+      refute sharees(context.options) =~ "mailto:both@example.com"
+    end
+  end
+
   test "POST routes a calendar body to scheduling, not sharing", context do
     # `POST` is the one method CalDAV overloads, and the body is the
     # only reliable way to tell an invitation from a scheduling

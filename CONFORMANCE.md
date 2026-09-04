@@ -181,6 +181,24 @@ Three seams came out of it, all in the base. `c:Dav.Web.Hook.taken/4` and `c:Dav
 
 `bad-json.xml` is open and cited rather than passing: its fixture directory, like `bad-ical`'s, is empty in the archived upstream.
 
+## Withdrawing one share out of several
+
+`sharing-unshare-groups.xml` went from 73 to 84 on one change, and the bug it found is worth stating because the code had the right rule written down and did not follow it.
+
+A calendar shared to a group is shared with the people in it, and each derived invitation remembers which group reached them — so a person in two of the groups holds two records, one per source. `record/4` said as much: *"withdrawing either leaves the other standing"*. `withdrawn_by/3` did the work to identify precisely which source a withdrawal names.
+
+And then the removal was applied **by person**:
+
+    dropped = for who <- removals, into: MapSet.new(), do: canonical(who, options)
+
+which threw that away and dropped every record the person held. Uninviting one subgroup of a supergroup ended the access every other group had granted. The withdrawal now carries `{href, group}` and matches on the source, which is what the surrounding comments already claimed.
+
+Who is left without a share is then a separate question, asked after the sources have gone: somebody another group still reaches keeps their view and is told what their share is now, and only somebody left with nothing is unshared. Eleven of the file's tests were checking exactly that — a `PROPFIND` on the sharee's calendar returning `2xx` rather than `404`.
+
+### What is still open there
+
+Six tests across `sharing-unshare-groups.xml` and `sharing-groups.xml` want a notification to state a person's *effective* access rather than the access the request just granted — somebody already holding a read-write share who is then reached by a read-only group is still read-write, and the notification should say so. Notifying with the merged record was tried and is not simply that: the merge picks one record, and its invitation *state* is not always the one to report. It needs access and state resolved separately, and is left cited rather than half-done.
+
 ## The travel-time model
 
 Apple's `X-APPLE-TRAVEL-DURATION`, in `Dav.Cal.Travel` (`travel-time-busy` declared). An hour-long meeting across town does not occupy an hour, and a busy-time answer that ignores the journey offers a slot nobody can reach.
