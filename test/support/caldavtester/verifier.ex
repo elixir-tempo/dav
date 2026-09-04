@@ -681,29 +681,86 @@ defmodule Dav.CalDAVTester.Verifier do
   end
 
   defp path_check({:exists, path}, root) do
-    if nodes_for(root, path) == [], do: {:failed, "missing #{path}"}, else: :passed
+    if matched?(root, path, []), do: :passed, else: {:failed, "missing #{path}"}
   end
 
   defp path_check({:notexists, path}, root) do
-    if nodes_for(root, path) == [], do: :passed, else: {:failed, "unexpected #{path}"}
+    if matched?(root, path, []), do: {:failed, "unexpected #{path}"}, else: :passed
   end
 
-  # A path is `/{ns}root/{ns}child` with optional `[test]` predicates.
-  # The leading step names the root itself; the rest descend.
-  defp nodes_for(root, path) do
-    {steps, tests} = split_path(path)
+  # A path is `/{ns}root/{ns}child` with optional `[test]` predicates,
+  # and a predicate may be followed by *more path*. Upstream's own
+  # example is `…/{DAV:}c[=C]/../{DAV:}d[=D]` — "the `d` beside the
+  # `c` whose text is C" — which is how a test on one child leads to a
+  # test on its sibling. So matching is a walk rather than a filter:
+  # resolve as far as the first predicate, keep the nodes that pass
+  # it, and carry on from each of those.
+  defp matched?(node, path, ancestors) do
+    {names, tests} = split_path(path)
+    {node, ancestors, names} = risen(node, ancestors, names)
+    found = reached(node, ancestors, names)
 
-    steps
-    |> Enum.reduce([root], fn step, nodes -> Enum.flat_map(nodes, &step_into(&1, step)) end)
-    |> Enum.filter(fn node -> Enum.all?(tests, &test_node(node, &1)) end)
+    if is_nil(tests), do: found != [], else: Enum.any?(found, &passes?(&1, tests))
   end
 
   defp split_path(path) do
-    [names | tests] = String.split(path, "[")
+    case String.split(path, "[", parts: 2) do
+      [names] -> {names, nil}
+      [names, tests] -> {names, tests}
+    end
+  end
 
-    steps = names |> String.trim_leading("/") |> segments() |> Enum.reject(&(&1 == ""))
+  # `../` steps out to the parent. A path that asks for one when
+  # nothing is above stays where it is and matches nothing, which is
+  # what a test naming a parent the document does not have deserves.
+  defp risen(_node, [parent | above], "../" <> rest), do: risen(parent, above, rest)
+  defp risen(node, ancestors, names), do: {node, ancestors, names}
 
-    {steps, Enum.map(tests, &String.trim_trailing(&1, "]"))}
+  # Each node is carried with the ancestors it was reached through,
+  # since there are no parent pointers to look them up with later.
+  defp reached(node, ancestors, names) do
+    names
+    |> String.trim_leading("/")
+    |> segments()
+    |> Enum.reject(&(&1 == "" or &1 == "."))
+    |> Enum.reduce([{node, ancestors}], fn step, nodes ->
+      Enum.flat_map(nodes, fn {found, above} -> stepped(found, above, step) end)
+    end)
+  end
+
+  defp passes?({node, ancestors}, tests) do
+    {here, onward} = divided(tests)
+
+    Enum.all?(here, &test_node(node, &1)) and
+      (is_nil(onward) or matched?(node, onward, ancestors))
+  end
+
+  # The node's own predicates, and whatever path follows them. The
+  # split is at the first `]/`, exactly as upstream does it.
+  defp divided(tests) do
+    case :binary.match(tests, "]/") do
+      :nomatch ->
+        {predicates(tests), nil}
+
+      {at, _length} ->
+        {predicates(binary_part(tests, 0, at + 1)),
+         binary_part(tests, at + 2, byte_size(tests) - at - 2)}
+    end
+  end
+
+  defp predicates(text), do: text |> String.trim_trailing("]") |> String.split("][")
+
+  # The nodes a path reaches, for the `parent` argument — which names
+  # a single element to run everything else against rather than
+  # asking whether one exists.
+  defp nodes_for(root, path) do
+    {names, tests} = split_path(path)
+    {node, ancestors, names} = risen(root, [], names)
+    found = reached(node, ancestors, names)
+
+    kept = if is_nil(tests), do: found, else: Enum.filter(found, &passes?(&1, tests))
+
+    for {node, _above} <- kept, do: node
   end
 
   # A step is Clark notation, and a namespace URI has `/` in it. Only
@@ -719,11 +776,11 @@ defmodule Dav.CalDAVTester.Verifier do
 
   # The first step names the node already in hand rather than one of
   # its children, which is how upstream anchors an absolute path.
-  defp step_into(node, step) do
+  defp stepped(node, ancestors, step) do
     if clark(node.name) == step do
-      [node]
+      [{node, ancestors}]
     else
-      Enum.filter(node.children, &(clark(&1.name) == step))
+      for child <- node.children, clark(child.name) == step, do: {child, [node | ancestors]}
     end
   end
 

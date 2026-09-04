@@ -138,7 +138,7 @@
   "sharing-errors.xml" => 8,
   "sharing-feature.xml" => 7,
   "sharing-freebusy.xml" => 16,
-  "sharing-groups-changes.xml" => 4,
+  "sharing-groups-changes.xml" => 20,
   "sharing-groups.xml" => 83,
   "sharing-invites.xml" => 28,
   "sharing-moves.xml" => 28,

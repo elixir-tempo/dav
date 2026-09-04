@@ -29,6 +29,7 @@ defmodule Dav.CalDAVTester.Runner do
   alias Dav.Cal.Sharing
   alias Dav.Cal.TimezoneQuery
   alias Dav.Cal.TimezoneService
+  alias Dav.CalDAVTester.Control
   alias Dav.CalDAVTester.Features
   alias Dav.CalDAVTester.Scenario
   alias Dav.CalDAVTester.ServerInfo
@@ -60,6 +61,10 @@ defmodule Dav.CalDAVTester.Runner do
   @timezone_mount String.trim_leading(@timezone_service, "/")
 
   @timezone_query_mount String.trim_leading(@timezone_query, "/")
+
+  # The suite's administrative back door, for the directory changes no
+  # CalDAV request can make. See `Dav.CalDAVTester.Control`.
+  @control_mount "control"
 
   @timezone_query_options TimezoneQuery.init([])
 
@@ -98,12 +103,18 @@ defmodule Dav.CalDAVTester.Runner do
   # both a direct form (`DAV:group-member-set`) and a transitive one
   # (Apple's `CS:expanded-group-member-set`) — the difference between
   # them is the whole point of those tests, so the graph has to nest.
+  # `{subgroups, members}` per group. 20 and 21 start empty on
+  # purpose: `sharing-groups-changes.xml` shares a calendar to a group
+  # nobody is in yet and then adds somebody, which is the case a
+  # server gets wrong by treating an empty group as a person.
   @groups %{
     2 => {[], [6, 7]},
     3 => {[], [8, 9]},
     4 => {[2, 3], [10]},
     5 => {[6], []},
-    6 => {[], [21]}
+    6 => {[], [21]},
+    20 => {[], []},
+    21 => {[], []}
   }
 
   @typedoc "What became of one test."
@@ -619,6 +630,7 @@ defmodule Dav.CalDAVTester.Runner do
     case List.first(conn.path_info) do
       @timezone_mount -> TimezoneService.call(conn, @timezone_options)
       @timezone_query_mount -> TimezoneQuery.call(conn, @timezone_query_options)
+      @control_mount -> Control.call(conn, options)
       _elsewhere -> DavPlug.call(conn, options)
     end
   end

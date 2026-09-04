@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 * A `GET` on a collection: a `301` to the trailing-slash address, an optional listing (`listings: true`), an `ETag` and `Last-Modified` over the rendering, and `304` for a conditional read.
 * `Dav.Cal.Availability` — RFC 7953 `VAVAILABILITY`, kept in `CS:calendar-availability` on the Inbox and reported as `FBTYPE=BUSY-UNAVAILABLE` in every busy-time answer.
 * `Dav.Cal.Travel` — Apple's `X-APPLE-TRAVEL-DURATION` and `X-APPLE-TRAVEL-RETURN-DURATION` extend a busy period either side of the event.
+* `Dav.Cal.Sharing.regrouped/2` brings a shared calendar's group shares up to date after directory membership changes.
 * Per-user data on a shared calendar covers every `X-` property and subcomponent, not `TRANSP` and `VALARM` alone, so each sharee's own view of one event stays theirs.
 * `X-WR-CALNAME` on the rolled-up calendar a `GET` on a calendar collection returns, from its `DAV:displayname`.
 
@@ -27,6 +28,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 * Per-user data on a shared calendar is removed with the resource it belongs to, so an object written at a path a deleted one used no longer inherits a stranger's alarms.
 * Uninviting a group from a shared calendar withdraws that group's share alone. A member another group still reaches keeps their view, and is told what their share is now.
+* A calendar shared to a group lists the group itself in `CS:invite`, not only the people it currently reaches, so an empty group is still a share.
 
 ## [0.1.0] - 2026-09-02
 

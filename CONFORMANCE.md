@@ -181,6 +181,24 @@ Three seams came out of it, all in the base. `c:Dav.Web.Hook.taken/4` and `c:Dav
 
 `bad-json.xml` is open and cited rather than passing: its fixture directory, like `bad-ical`'s, is empty in the archived upstream.
 
+## A share to a group is a share to the group
+
+`sharing-groups-changes.xml` went from 4 to 20 — the whole file — on three changes, and the first of them is the one worth stating.
+
+**The group is recorded in its own right.** A calendar shared to a group was expanded into per-member invitations and nothing else, so `CS:invite` listed today's members and never said a group had been shared with. An *empty* group was worse than incomplete: with no members to expand into, its invitation was recorded as though it named a person, and somebody joining later reached a calendar that had no idea it was shared to a group at all. The record now points at itself — `group == href` — which tells a group's own entry from a person's without a second field to keep in step, and survives everybody leaving.
+
+**Membership changes re-derive the shares.** Directory membership changes without any request reaching this server, so `Dav.Cal.Sharing.regrouped/2` brings one calendar's group shares up to date: whoever joined gets the view and the notification the original invitation would have given them, whoever left keeps neither unless another group or a direct share still reaches them. The *calendar* is named rather than the group, because a share is recorded on the calendar it is a share of — only the deployment knows which calendars exist, and asking it to hand them over keeps the library out of the business of scanning a store.
+
+**The harness grew the suite's back door.** `sharing-groups-changes.xml` `POST`s JSON at `/control` to add and remove group members, because directory membership is not the protocol's to change and the reference server has exactly this endpoint for exactly these tests. `Dav.CalDAVTester.Control` implements its four actions. It is harness code: the deployment is the thing the suite is driving.
+
+### A verifier that was passing checks it never made
+
+The last five failures were not the server's. Upstream's `xmlElementMatch` allows a predicate to be followed by *more path* — its own self-test is `…/{DAV:}c[=C]/../{DAV:}d[=D]`, "the `d` beside the `c` whose text is C" — and this port split a path at the first `[` and treated everything after as predicates. The tail was silently swallowed, so `href[=group20]/../{CS:}access/{CS:}read` asked only whether an `href` equal to group20 existed and never checked the access beside it.
+
+That is the failure mode this harness exists to avoid: a check that passes without testing anything. Matching is now a walk — resolve to the first predicate, keep the nodes that pass it, carry on from each — with `../` stepping to the parent through an ancestor chain carried alongside each node, since the element tree has no parent pointers. Upstream's two assertions are now tests here, along with the case where two candidates share a predicate and differ after it.
+
+Nothing else in the corpus moved, which for a change touching every `xmlElementMatch` in 162 scenarios is the result that matters.
+
 ## Withdrawing one share out of several
 
 `sharing-unshare-groups.xml` went from 73 to 84 on one change, and the bug it found is worth stating because the code had the right rule written down and did not follow it.

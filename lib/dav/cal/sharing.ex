@@ -160,6 +160,88 @@ defmodule Dav.Cal.Sharing do
   def written(_change, _options), do: :ok
 
   @doc """
+  Re-derive the shares a calendar's invited groups currently give.
+
+  A share to a group is a share to whoever is in it *at the time*, and
+  directory membership changes without any request reaching this
+  server. Somebody who joins is owed the view and the notification the
+  original invitation would have given them; somebody who leaves keeps
+  neither, unless another group or a direct share still reaches them.
+
+  The calendar is named rather than the group, because a share is
+  recorded on the calendar it is a share *of*: only the deployment
+  knows which calendars exist, and asking it to hand them over one at
+  a time keeps the library out of the business of scanning a store.
+
+  ### Arguments
+
+  * `calendar` is the shared calendar to bring up to date.
+
+  * `options` carries `:store`, `:context` and `:hooks`.
+
+  ### Returns
+
+  * `:ok`, whether or not anything changed.
+
+  ### Examples
+
+      iex> Dav.Cal.Sharing.regrouped(%Dav.Web.Resource{path: ["c"]}, %{store: Dav.Web.Store, context: nil})
+      :ok
+
+  """
+  @spec regrouped(Resource.t(), map()) :: :ok
+  def regrouped(%Resource{} = calendar, options) do
+    held = current(calendar, options.store, options.context)
+
+    case Enum.filter(held, &own?(&1, options)) do
+      [] -> :ok
+      groups -> rederived(calendar, held, groups, options)
+    end
+  end
+
+  defp rederived(calendar, held, groups, options) do
+    # Everything not owed to a group's membership stays as it is: the
+    # groups themselves, and anybody invited in their own right.
+    kept = Enum.reject(held, &(is_binary(&1.group) and not own?(&1, options)))
+
+    derived =
+      for group <- groups,
+          member <- group_members(group.href, options),
+          do: %{group | href: member, group: group.href}
+
+    wanted = Enum.map(kept ++ derived, &carried_state(&1, held, options))
+
+    if Store.supports?(options.store, :patch) do
+      options.store.patch(
+        calendar,
+        [{:set, invite_property(), encode(wanted)}],
+        options.context
+      )
+    end
+
+    told(calendar, merged(held, options), merged(wanted, options), held, options)
+  end
+
+  # Who gained a share and who lost one, once the records have settled.
+  defp told(calendar, was, now, held, options) do
+    for invitation <- now, not among?(invitation, was, options) do
+      notify(calendar, invitation, options)
+    end
+
+    for invitation <- was, not among?(invitation, now, options) do
+      uninvite(calendar, invitation.href, held, options)
+    end
+
+    :ok
+  end
+
+  defp among?(invitation, others, options) do
+    wanted = canonical(invitation.href, options)
+
+    Enum.any?(others, &(canonical(&1.href, options) == wanted))
+  end
+
+  @doc """
   Withdraw a deleted calendar's outstanding invitations.
 
   ### Arguments
@@ -729,17 +811,22 @@ defmodule Dav.Cal.Sharing do
   defp withdrawn_by(href, calendar, options) do
     case group_members(href, options) do
       [] ->
-        [{href, nil}]
+        if group?(href, options), do: [{href, href}], else: [{href, nil}]
 
       members ->
         wanted = canonical(href, options)
         held = current(calendar, options.store, options.context)
 
-        for %{href: theirs, group: group} <- held,
-            is_binary(group),
-            canonical(group, options) == wanted,
-            canonical(theirs, options) in Enum.map(members, &canonical(&1, options)),
-            do: {theirs, group}
+        derived =
+          for %{href: theirs, group: group} <- held,
+              is_binary(group),
+              canonical(group, options) == wanted,
+              canonical(theirs, options) in Enum.map(members, &canonical(&1, options)),
+              do: {theirs, group}
+
+        # And the group's own record, which is the share the owner
+        # actually asked to withdraw.
+        [{href, href} | derived]
     end
   end
 
@@ -838,13 +925,45 @@ defmodule Dav.Cal.Sharing do
   defp membered(invitation, options) do
     case group_members(invitation.href, options) do
       [] ->
-        [Map.put(invitation, :group, nil)]
+        # An empty group is still a group. Recorded as a person it
+        # would be indistinguishable from one, and a member joining it
+        # later would reach a calendar that has no idea it was shared
+        # to a group at all.
+        if group?(invitation.href, options),
+          do: [itself(invitation)],
+          else: [Map.put(invitation, :group, nil)]
 
       members ->
         # Each derived invitation remembers the group it came from, so
         # that unsharing the group withdraws exactly these and leaves
         # a member invited in their own right alone.
-        for href <- members, do: %{invitation | href: href, group: invitation.href}
+        derived = for href <- members, do: %{invitation | href: href, group: invitation.href}
+
+        [itself(invitation) | derived]
+    end
+  end
+
+  # The group is recorded in its own right as well as expanded: what
+  # the owner granted was a share to *the group*, and a panel listing
+  # only today's members would not say so — nor survive everybody
+  # leaving it. A record pointing at itself is how one is told apart
+  # from a person's, without a second field to keep in step.
+  defp itself(invitation), do: %{invitation | group: invitation.href}
+
+  defp own?(invitation, options) do
+    is_binary(invitation.group) and
+      canonical(invitation.group, options) == canonical(invitation.href, options)
+  end
+
+  # Whether an address names a group, asked of the directory rather
+  # than of its membership — an empty group is a group.
+  defp group?(href, %{store: store, context: context} = options) do
+    with true <- Store.supports?(store, :principal),
+         {:ok, %Resource{} = principal} <- store.principal(href, context),
+         %{} = properties <- stored_properties(principal, options) do
+      Map.has_key?(properties, {Xml.dav(), "group-member-set"})
+    else
+      _not_a_group -> false
     end
   end
 

@@ -1,6 +1,6 @@
 # Status
 
-Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `c866b08` plus the group-withdrawal batch.
+Where the CalDAVTester conformance work stands, and how to continue it. Written 2026-09-05, against `c1a934e` plus the group-membership batch.
 
 `CONFORMANCE.md` explains *what* was built and why each remaining failure is acceptable. This file is the working state: the numbers, the loop, and what to pick up next.
 
@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,057 |
+| Passing | 5,073 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 47 |
+| Apple/interop failing | 31 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,25 +62,22 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 47, and measured rather than estimated — it sits in four places:
+The Apple queue is now 31, and measured rather than estimated — it sits in four places:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
-| `sharing-groups-changes.xml` | 16 | the suite's `/control` API, to change group membership mid-scenario |
-| `sharing-quota.xml` | 14 | quota accounting across a shared calendar |
+| `sharing-quota.xml` | 14 | nothing winnable — see below |
 | room auto-scheduling | 6 | the reference's two-phase delivery |
 | `sharing-unshare-groups.xml`, `sharing-groups.xml` | 6 | effective access in a re-invitation notification |
 | elsewhere | 5 | singletons, cited individually |
 
 `sharing-quota.xml` was read and is **not winnable**, which the earlier note in this file guessed wrong: twelve of its fourteen compare byte counts that encode the reference's on-disk per-user wrapper, and the other two want a second object with the same `UID` in one calendar, which RFC 4791 section 5.3.2 forbids. The behaviour underneath — a shared calendar's bytes belong to its owner — was already right and is now covered by `Dav.Cal.SharingTest` rather than by a comment alone. Cited in full in `classification.exs`.
 
-**Best value next is `sharing-groups-changes.xml`**, the largest single file left. It needs two things:
+**Best value next is the six-test notification cluster** in `sharing-unshare-groups.xml` and `sharing-groups.xml`: a re-invitation notification must state a person's *effective* access rather than the access the request just granted. Somebody already holding a read-write share who is then reached by a read-only group is still read-write, and the notification should say so. One attempt at this took the file backwards and was reverted — notifying with the merged record changes the invitation *state* as well as the access, and the two need resolving separately. CONFORMANCE.md has the detail.
 
-* `/control`, a four-action JSON endpoint (`addgroupmembers`, `removegroupmembers`, `refreshgroups`, `schedulingdone`) the suite uses to drive the reference's directory. Building it in the harness is legitimate — the harness is the deployment — and it is small.
+After that the queue is only the room auto-scheduling six and five cited singletons, and the remaining gated pools are all Apple legacy, a dead draft, or a deployment topology. **The interop phase is close to done.**
 
-* The library re-deriving a group's shares when its membership changes. `Dav.Cal.Sharing` already expands a group share into per-member invitations and remembers which group each came from, so the shape is there; what is missing is a way to say "this group changed" and have the calendars it reached catch up. Finding those calendars is the hard part — invitations are recorded on the shared calendar, so something has to know where to look.
-
-Read the file before committing to it. The last two estimates in this section were both wrong in different directions.
+Read a file before committing to it. Three estimates in this section have now been wrong — `sharing-quota` was called winnable and is not, per-user data was called large and was small, and `sharing-groups-changes` was called 16 tests of group re-derivation when five of them were a broken verifier.
 
 The six remaining group-sharing failures are described in CONFORMANCE.md; they want access and invitation state resolved separately in a notification, and one attempt at it made things worse before being reverted.
 
@@ -125,6 +122,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **A share to a group is a share to the group** (`Dav.Cal.Sharing`, `Dav.CalDAVTester.Control`). `sharing-groups-changes.xml` went 4 to 20 — the whole file — and the Apple queue fell 47 to 31. The group is now recorded in its own right rather than only expanded, so an empty group is still a share; `regrouped/2` re-derives a calendar's group shares after membership changes; and the harness grew the suite's `/control` back door. The last five failures were a **verifier** bug: a predicate followed by more path had its tail silently swallowed, so `href[=X]/../access/read` never checked the access. That is the failure mode this harness exists to avoid, and upstream's own assertions are now tests here.
 
 * **Quota on a shared calendar, read rather than assumed.** `sharing-quota.xml` gains nothing: its numbers encode the reference's storage layout and two of its writes are refused by RFC 4791. The citation now says which, and the behaviour the file is actually about is covered by tests. No production code changed.
 
