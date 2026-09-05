@@ -746,6 +746,11 @@ defmodule Dav.Web.Hook do
   hook's needs grow: iTIP has to know the *previous* body to tell a
   significant change (which bumps `SEQUENCE` and re-invites everyone)
   from an insignificant one.
+
+  `:merge` says the writer asked the server to reconcile a copy it
+  knows is stale, and `:recovered` that the save is a restoration
+  rather than a fresh write — both are things only the caller knows
+  and no amount of comparing bodies would reveal.
   """
   @type change :: %{
           required(:resource) => Resource.t(),
@@ -753,7 +758,8 @@ defmodule Dav.Web.Hook do
           required(:previous) => binary() | nil,
           required(:collection) => Resource.t() | nil,
           optional(:properties) => %{optional(term()) => term()},
-          optional(:merge) => boolean()
+          optional(:merge) => boolean(),
+          optional(:recovered) => boolean()
         }
 
   @callback written(change :: change(), options :: map()) :: :ok
