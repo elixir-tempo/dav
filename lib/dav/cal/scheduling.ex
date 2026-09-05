@@ -3794,7 +3794,7 @@ defmodule Dav.Cal.Scheduling do
     properties =
       Enum.map(component.properties, fn property ->
         if property.name == "ATTENDEE",
-          do: %{property | parameters: awaiting(property.parameters)},
+          do: %{property | parameters: asked(property.parameters)},
           else: property
       end)
 
@@ -3836,6 +3836,23 @@ defmodule Dav.Cal.Scheduling do
     if split? and Map.get(stated, "PARTSTAT") == "NEEDS-ACTION",
       do: Map.delete(stated, "RSVP"),
       else: stated
+  end
+
+  # The asking adds `RSVP=TRUE` where an answer is still wanted, and
+  # takes nothing away — the rule `delivered/2` already states for the
+  # delivery mark. An organiser's client that wrote `RSVP=TRUE` beside
+  # an answer it was restating meant something by it, and dropping it
+  # here made the message disagree with the copy the organiser holds:
+  # the recipient is then told nothing moved on a line that did.
+  #
+  # Covered by `implicitschedulechanges.xml`'s "Private Comment", and
+  # only there. It takes an organiser restating an answer somebody has
+  # already given, so a unit fixture has to get a real reply recorded
+  # first; three attempts at one passed for other reasons instead.
+  defp asked(parameters) do
+    if Map.get(parameters, "PARTSTAT", "NEEDS-ACTION") == "NEEDS-ACTION",
+      do: Map.put(parameters, "RSVP", "TRUE"),
+      else: parameters
   end
 
   # Spelled in UTC, the way the reference writes a derived exclusion

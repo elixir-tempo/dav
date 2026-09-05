@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,093 |
+| Passing | 5,094 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 11 |
+| Apple/interop failing | 10 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,12 +62,12 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 11, and it sits in four files:
+The Apple queue is now 10, and it sits in four files:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `privatecomments.xml` | 1 | the organiser's copy restamped when only a comment changed |
-| `implicitschedulechanges.xml` | 4 | two mechanisms — see below |
+| `implicitschedulechanges.xml` | 3 | two mechanisms — see below |
 | `trash.xml` | 4 | a sharee's delete, splitting round a trashed copy, an attachment |
 | `default-alarms.xml` | 2 | an `ETag` on a sharee's own write, and an invitation taking a default |
 
@@ -83,11 +83,9 @@ The Apple queue is now 11, and it sits in four files:
 
 * **Two** want `DTEND` named when the *start* moved and the end is written as a `DURATION` (`Organizer Changes` 6, `Multi-instance change` 6). Neither copy has a `DTEND` at all, so `Dav.Cal.Changes` correctly reports none; the reference names it because `Component.normalizeAll` has materialised the end before it diffs. That call is not in the vendored subset — `ical.py` is not there — so confirm it before building to it.
 
-* **One** wants `ATTENDEE` named after a comment round (`Private Comment` 6). Probing showed both sides of the diff holding the same `PARTSTAT`, but the instrumentation was not suite-tagged and the file runs ten suites, so which round produced it is still unknown. Tag the probe by suite before going further.
+* **One** is a resource count, not a property list at all (`Organizer Changes` 8: "2 resources, expected 1"). Not yet read.
 
-* **One** is a resource count, not a property list at all (`Organizer Changes` 8: "2 resources, expected 1").
-
-The fourth, `Attendee instance change`, is closed — see below.
+`Attendee instance change` and `Private Comment` are both closed — see below. `scratchpad/suite.exs` (the pattern, not the file) is what cracked the second: `Scenario.read/1` gives a struct whose `suites` can be filtered before `Runner.run/2`, so a probe's output belongs to a known round. This file runs ten suites and probe output from all of them is unattributable otherwise.
 
 `privatecomments` was six and is now one; see below. It went the same way as the auto-schedule tail: three separate faults, none of them what its citation said.
 
@@ -138,6 +136,10 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **The asking takes nothing away** (`Dav.Cal.Scheduling`). `implicitschedulechanges.xml` 43 to 44; the Apple queue fell 11 to 10. An organiser restating an answer somebody has already given may write `RSVP=TRUE` beside it, and `asking/1` stripped it from the outgoing message — so the recipient's `schedule-changes` said nothing had moved on a line that had. `delivered/2` already states the rule for the delivery mark: add the asking where an answer is still wanted, take nothing away. `asking/1` now has its own `asked/1` that does the same. Deliberately narrow: `awaiting/1` has five callers and two apply it right after *setting* a `PARTSTAT`, where clearing a stale `RSVP` is right.
+
+  No unit test. It needs an organiser restating an answer already recorded, and three attempts at a fixture passed for other reasons — on a create the attendee is coerced to `NEEDS-ACTION` and asked regardless, which makes the assertion vacuous. Covered by the suite, and the code says so.
 
 * **An occurrence a rule alone makes is still one the recipient holds** (`Dav.Cal.Changes`). `implicitschedulechanges.xml` 42 to 43; the Apple queue fell 12 to 11. An attendee answering one occurrence of a series sends an override the organiser has no component for, and `changes/3` wrote `<CS:changes/>` empty for it — telling the organiser a reply arrived but not that anybody's `PARTSTAT` moved, which is the whole of what a reply says. It is now compared against the instance the master implies, as the reference derives one to diff against (`deriveInstance`, the `oldset - newset` branch of `whatIsDifferent`). The "wholly new component" rule still holds for a component that genuinely is new — a recipient holding nothing at all. `test/dav_cal_changes_test.exs` is new; `describe/4` is pure, so it needs no fixture.
 

@@ -187,8 +187,6 @@
   # --- apple: the schedule-changes tail ----------------------------------
   {"implicitschedulechanges.xml", "Organizer Changes"} =>
     {:apple, "a changed DTEND is not named among the changed properties"},
-  {"implicitschedulechanges.xml", "Private Comment"} =>
-    {:apple, "an ATTENDEE changed by a comment round is not named"},
   {"implicitschedulechanges.xml", "Multi-instance change"} =>
     {:apple, "a changed DTEND across instances is not named"},
 
