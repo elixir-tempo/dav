@@ -218,9 +218,19 @@ defmodule Dav.CalDAVTester.Corpus do
     #{length(outcomes)} tests: #{passed} passed, \
     #{length(outcomes) - passed - skipped} failed, #{skipped} skipped \
     (the figures the README quotes)
-    """ <> Enum.map_join([:unclassified, :rfc], "", &breakdown(&1, Map.get(by_class, &1, [])))
+    """ <>
+      Enum.map_join(
+        [:unclassified, :rfc, :apple],
+        "",
+        &breakdown(&1, Map.get(by_class, &1, []))
+      )
   end
 
+  # `:apple` is listed as well as the two queues that must stay empty.
+  # A class that is only ever counted is a class nobody checks: this
+  # file's own summary claimed for months that fourteen of the Apple
+  # failures were `sharing-quota.xml`, which is cited `:incidental`
+  # and had never been in the queue at all. A tally is not evidence.
   defp breakdown(_class, []), do: ""
 
   defp breakdown(class, listed) do

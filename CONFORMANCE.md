@@ -9,7 +9,7 @@ This file records the CalDAVTester conformance drive: where it ended, how to rep
 | Class | Failing | Meaning |
 | --- | --- | --- |
 | RFC-required | **0** | defects against RFC 4791/5545/5546/6638/7809 behaviour |
-| Apple/interop | 19 | a shared calendar's quota accounting and five cited singletons — see below |
+| Apple/interop | 19 | private comments, the `schedule-changes` property list, four trash edges and default alarms — see below |
 | Incidental | 40 | expectations that cannot be met on principle, each cited below and in the classification file |
 | Unclassified | 0 | new failures needing triage |
 

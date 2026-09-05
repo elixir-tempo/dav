@@ -62,24 +62,38 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 19, and every entry is cited for what it specifically wants:
+The Apple queue is now 19, and it sits in four files:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
-| `sharing-quota.xml` | 14 | nothing winnable — see below |
-| elsewhere | 5 | singletons, cited individually |
+| `privatecomments.xml` | 6 | `X-CALENDARSERVER-ATTENDEE-COMMENT` on the organiser's copy |
+| `implicitschedulechanges.xml` | 5 | three mechanisms — see below |
+| `trash.xml` | 5 | four separate edges of recovery and splitting |
+| `default-alarms.xml` | 3 | a sharee's empty defaults, and an invitation taking one |
+
+**This table was wrong until 2026-09-05 and is worth reading twice.** It listed fourteen of the nineteen as `sharing-quota.xml` and called the queue closed. `sharing-quota.xml` is classified `:incidental`, not `:apple` — it is part of the forty, and always was. Nobody had listed the Apple queue test by test, because `Corpus.headline/1` breaks down only `:unclassified` and `:rfc`; the summary line was taken on trust through several edits. Run the listing before planning against this table.
 
 **Every sharing file now passes in full.** The group-sharing tail is closed.
 
-`sharing-quota.xml` was read and is **not winnable**, which the earlier note in this file guessed wrong: twelve of its fourteen compare byte counts that encode the reference's on-disk per-user wrapper, and the other two want a second object with the same `UID` in one calendar, which RFC 4791 section 5.3.2 forbids. The behaviour underneath — a shared calendar's bytes belong to its owner — was already right and is now covered by `Dav.Cal.SharingTest` rather than by a comment alone. Cited in full in `classification.exs`.
+`sharing-quota.xml` is **not winnable**, which an earlier note in this file guessed wrong in the other direction: twelve of its fourteen compare byte counts that encode the reference's on-disk per-user wrapper, and the other two want a second object with the same `UID` in one calendar, which RFC 4791 section 5.3.2 forbids. The behaviour underneath — a shared calendar's bytes belong to its owner — was already right and is now covered by `Dav.Cal.SharingTest` rather than by a comment alone. Cited in full in `classification.exs`.
 
-**The auto-scheduling work is finished, and nothing else here is worth working.** Fourteen of the nineteen are `sharing-quota.xml`, which encodes the reference's storage layout; the other five are cited singletons.
+**The auto-scheduling work is finished. What is left is four clusters of real behaviour, not a closed queue.**
+
+`implicitschedulechanges` is three mechanisms, not one — a first reading of the failure text said one, and the fixtures said otherwise:
+
+* **Two** want `DTEND` named when the *start* moved and the end is written as a `DURATION` (`Organizer Changes` 6, `Multi-instance change` 6). Neither copy has a `DTEND` at all, so `Dav.Cal.Changes` correctly reports none; the reference names it because `Component.normalizeAll` has materialised the end before it diffs. That call is not in the vendored subset — `ical.py` is not there — so confirm it before building to it.
+
+* **Two** want `ATTENDEE` named after a reply or a comment round (`Private Comment` 6, `Attendee instance change` 4). Not yet read.
+
+* **One** is a resource count, not a property list at all (`Organizer Changes` 8: "2 resources, expected 1").
+
+Three of the six `privatecomments` failures give one identical message — `X-CALENDARSERVER-ATTENDEE-COMMENT` absent from the organiser's copy — which is the best candidate for a single fault. Not yet read against the reference; every citation in this group that *has* been read turned out to describe the wrong one.
 
 The "auto-schedule tail" is closed. All six of its files pass in full, and none of the four faults was what its label said — most were the same shape: **an answer computed correctly and then overwritten while the outgoing copy is built.** That is worth knowing before anyone models a "two-phase delivery" that was never the problem; CONFORMANCE.md traces each to the line, along with the engine difference that produced three of them.
 
-The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is done**; what remains is a judgement about whether any of the gated pools is worth building, rather than a queue to work through.
+The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). Those are a judgement about whether the feature is worth building. The nineteen above are not: they are behaviour this server already claims.
 
-Read a file before committing to it. Three estimates in this section have now been wrong — `sharing-quota` was called winnable and is not, per-user data was called large and was small, and `sharing-groups-changes` was called 16 tests of group re-derivation when five of them were a broken verifier.
+Read a file before committing to it, and run the listing before believing a tally. Four estimates in this section have now been wrong — the Apple queue's own contents most recently — `sharing-quota` was called winnable and is not, per-user data was called large and was small, and `sharing-groups-changes` was called 16 tests of group re-derivation when five of them were a broken verifier.
 
 Of the gated pools, every remaining standard is now declared. What is left needs either a feature of real size or a deployment this library is not:
 
@@ -122,6 +136,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **The Apple queue was never what this file said** (`Dav.CalDAVTester.Corpus`, STATUS.md, README, CONFORMANCE.md). No test moved. The queue's own summary here claimed fourteen of its nineteen were `sharing-quota.xml`; that file is cited `:incidental` and has never been in the queue. `Corpus.headline/1` broke down only `:unclassified` and `:rfc`, so the Apple tally was a number nobody could check, and it survived several rounds of edits — including four in this drive — on trust. The report now lists `:apple` test by test as well, and the table above says what is actually in it: `privatecomments` 6, `implicitschedulechanges` 5, `trash` 5, `default-alarms` 3, all of them live behaviour rather than the closed queue this file described.
 
 * **A record, not a question, on somebody else's copy** (`Dav.Cal.Scheduling`). `implicitautopast.xml` 23 to 24, complete; the Apple queue fell 20 to 19, and **the auto-schedule tail is closed**. A room accepts what is still to come and leaves the occurrences already over unanswered, so the server splits those out of the master to record the difference. `asking/1` then put `RSVP=TRUE` on every unanswered attendee of the outgoing `REQUEST`, which is right for the recipient and wrong for everyone else's view of the room: on their copy that override is a record, and re-asking there showed a bystander a question that is not theirs to answer. `recorded_room/4` states the room's participation as the organiser's copy holds it and takes the asking back off a derived override, leaving the recipient's own line alone. Two differences were stacked here, the verifier reporting one at a time, and the citation described only the first.
 
