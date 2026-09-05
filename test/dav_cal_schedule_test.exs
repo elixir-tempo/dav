@@ -831,6 +831,66 @@ defmodule Dav.Cal.ScheduleTest do
     end
   end
 
+  describe "a room that answers some occurrences and not others" do
+    # Dated from the clock rather than written down: the point of the
+    # series is that some occurrences are behind it and some ahead,
+    # and a fixed date stops being both after a month.
+    defp series do
+      start =
+        DateTime.utc_now()
+        |> DateTime.add(-12 * 24 * 3600, :second)
+        |> Calendar.strftime("%Y%m%dT210000Z")
+
+      Enum.join(
+        [
+          "BEGIN:VCALENDAR",
+          "BEGIN:VEVENT",
+          "UID:series",
+          "SUMMARY:Series",
+          "ORGANIZER:mailto:alice@example.com",
+          "ATTENDEE;PARTSTAT=ACCEPTED:mailto:alice@example.com",
+          "ATTENDEE:mailto:bob@example.com",
+          "ATTENDEE;CUTYPE=RESOURCE:mailto:room@example.com",
+          "DTSTART:" <> start,
+          "RRULE:FREQ=WEEKLY;COUNT=5",
+          "END:VEVENT",
+          "END:VCALENDAR"
+        ],
+        "\r\n"
+      ) <> "\r\n"
+    end
+
+    defp split_off(body) do
+      body
+      |> String.replace("\r\n ", "")
+      |> String.split("BEGIN:VEVENT")
+      |> Enum.find("", &String.contains?(&1, "RECURRENCE-ID"))
+    end
+
+    test "the occurrence it left alone is a record to others and a question to itself",
+         context do
+      DavPlug.call(conn("PUT", "/alice/calendar/s.ics", series()), context.options)
+
+      bystander =
+        DavPlug.call(conn("GET", "/bob/calendar/series.ics", ""), context.options).resp_body
+
+      room = DavPlug.call(conn("GET", "/room/calendar/series.ics", ""), context.options).resp_body
+
+      # The room accepts what is still to come and leaves the
+      # occurrences already over unanswered, so the server splits
+      # those out of the master to record the difference.
+      #
+      # On the room's own copy that override is the question still
+      # open to it. On everybody else's it is the record of a question
+      # nobody is putting to them, and re-asking there showed Bob an
+      # `RSVP` on a line that is not his to answer.
+      assert line_for(split_off(bystander), "room@example.com") =~ "PARTSTAT=NEEDS-ACTION"
+      refute line_for(split_off(bystander), "room@example.com") =~ "RSVP"
+
+      assert line_for(split_off(room), "room@example.com") =~ "RSVP=TRUE"
+    end
+  end
+
   describe "the ETag a scheduling write reports" do
     test "names the version the store actually holds", context do
       event =

@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,084 |
+| Passing | 5,085 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 20 |
+| Apple/interop failing | 19 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,29 +62,24 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 20, and every entry is cited for what it specifically wants:
+The Apple queue is now 19, and every entry is cited for what it specifically wants:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `sharing-quota.xml` | 14 | nothing winnable — see below |
-| `implicitautopast.xml` | 1 | `RSVP` on a server-derived override |
 | elsewhere | 5 | singletons, cited individually |
 
 **Every sharing file now passes in full.** The group-sharing tail is closed.
 
 `sharing-quota.xml` was read and is **not winnable**, which the earlier note in this file guessed wrong: twelve of its fourteen compare byte counts that encode the reference's on-disk per-user wrapper, and the other two want a second object with the same `UID` in one calendar, which RFC 4791 section 5.3.2 forbids. The behaviour underneath — a shared calendar's bytes belong to its owner — was already right and is now covered by `Dav.Cal.SharingTest` rather than by a comment alone. Cited in full in `classification.exs`.
 
-**What is left is one test of auto-scheduling, and nothing else worth working.** Fourteen of the twenty are `sharing-quota.xml`, which encodes the reference's storage layout; five are cited singletons.
+**The auto-scheduling work is finished, and nothing else here is worth working.** Fourteen of the nineteen are `sharing-quota.xml`, which encodes the reference's storage layout; the other five are cited singletons.
 
-The "auto-schedule tail" turned out not to be one thing, and every part of it has now been traced to the line. None was what its label said, and most were the same shape: **an answer computed correctly and then overwritten while the outgoing copy is built.** That is worth knowing before anyone models a "two-phase delivery" that was never the problem. Five of its six files — `implicitauto2`, `implicitauto3`, `implicitauto4`, `implicitauto9` and `implicitauto10` — pass in full and have been unlisted. One test remains, inside `Dav.Cal.Scheduling`, which is the largest module here and carries roughly 1,500 corpus tests, so it wants its own batch and its own corpus run:
+The "auto-schedule tail" is closed. All six of its files pass in full, and none of the four faults was what its label said — most were the same shape: **an answer computed correctly and then overwritten while the outgoing copy is built.** That is worth knowing before anyone models a "two-phase delivery" that was never the problem; CONFORMANCE.md traces each to the line, along with the engine difference that produced three of them.
 
-* **`implicitautopast`, one test**, is now diagnosed exactly, and it is *not* what its name suggests. Both of the event's overrides are in the past, so being past does not separate them: the client's own override keeps `RSVP=TRUE` and the one the server derived must not have it. `mixed_answers/5` already drops it correctly; `asking/1` puts it back while building the outgoing `REQUEST`. Fixing it means carrying "this component was derived" from `mixed_answers/5` down to `viewed/4`. Small in principle, several layers in practice.
-
-The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is done except for that one**; what remains is a judgement about whether any of it is worth building rather than a queue to work through.
+The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is done**; what remains is a judgement about whether any of the gated pools is worth building, rather than a queue to work through.
 
 Read a file before committing to it. Three estimates in this section have now been wrong — `sharing-quota` was called winnable and is not, per-user data was called large and was small, and `sharing-groups-changes` was called 16 tests of group re-derivation when five of them were a broken verifier.
-
-The six remaining group-sharing failures are described in CONFORMANCE.md; they want access and invitation state resolved separately in a notification, and one attempt at it made things worse before being reverted.
 
 Of the gated pools, every remaining standard is now declared. What is left needs either a feature of real size or a deployment this library is not:
 
@@ -127,6 +122,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **A record, not a question, on somebody else's copy** (`Dav.Cal.Scheduling`). `implicitautopast.xml` 23 to 24, complete; the Apple queue fell 20 to 19, and **the auto-schedule tail is closed**. A room accepts what is still to come and leaves the occurrences already over unanswered, so the server splits those out of the master to record the difference. `asking/1` then put `RSVP=TRUE` on every unanswered attendee of the outgoing `REQUEST`, which is right for the recipient and wrong for everyone else's view of the room: on their copy that override is a record, and re-asking there showed a bystander a question that is not theirs to answer. `recorded_room/4` states the room's participation as the organiser's copy holds it and takes the asking back off a derived override, leaving the recipient's own line alone. Two differences were stacked here, the verifier reporting one at a time, and the citation described only the first.
 
 * **A forced re-invitation reaches one attendee without disturbing the rest** (`Dav.Cal.Scheduling`). `implicitauto10.xml` 23 to 25, complete; the Apple queue fell 22 to 20. Two faults, and the citation named neither. `cleared_status/2` wiped `SCHEDULE-STATUS` from every attendee line whenever a round delivered anything — harmless when the round is the whole attendee list, but a `SCHEDULE-FORCE-SEND` re-invitation names its recipients, so a reply already in hand was reported as never having arrived. And `asked_afresh/3` put the question back over a re-invited recipient's carried answer on their own copy, which is right for a person and threw away the reply for a room — the same shape as the entry three below. Both found by dumping each comparison rather than reading the citation.
 

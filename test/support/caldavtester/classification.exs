@@ -18,27 +18,12 @@
 # named more specifically. Unlisted failures report as :unclassified so
 # new ones are triaged rather than silently binned.
 %{
-  # --- apple: the open auto-schedule tail --------------------------------
-  # Room auto-accept (RFC 6638 with CalendarServer's answering modes)
-  # landed with the `auto-accept` feature and most of it now passes:
-  # `implicitauto2`, `implicitauto3`, `implicitauto4`, `implicitauto9`
-  # and `implicitauto10` are complete and no longer listed here. One
-  # test remains, and it is not the "two-phase delivery" the group was
-  # once filed as; it is named for what it actually wants. Narrowed to
-  # the suite so a new failure elsewhere in these files still reports
-  # as unclassified.
-  #
-  # `RSVP` on a *derived* override. Both of this event's overrides are
-  # in the past, so being past is not what separates them: the one the
-  # client sent keeps `RSVP=TRUE` and the one the server split out to
-  # record a different answer must not have it. `mixed_answers/5`
-  # already gets this right — a derived override takes its asking from
-  # the master, which carried none — and then `asking/1` puts `RSVP`
-  # back on every unanswered attendee as the outgoing `REQUEST` is
-  # built. It would have to know which components were derived, and
-  # `viewed/4` is several layers below where that is known.
-  {"implicitautopast.xml", "#3 Recurring some in the past"} =>
-    {:apple, "RSVP on a server-derived override; see CONFORMANCE.md"},
+  # The auto-schedule tail is closed: all six of the room-scheduling
+  # files it was filed under pass in full, and nothing is cited here
+  # any more. It was never the "two-phase delivery" the group was
+  # named for — see CONFORMANCE.md, which traces each part to the
+  # line. A new failure in those files reports as unclassified, which
+  # is what should happen.
 
   # --- incidental: cannot pass as vendored -------------------------------
   {"reports.xml", "basic query reports"} =>

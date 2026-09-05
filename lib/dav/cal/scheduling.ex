@@ -3670,6 +3670,16 @@ defmodule Dav.Cal.Scheduling do
   defp send_to(_recipients, _method, [], _zones, _options, _announced), do: []
 
   defp send_to(recipients, method, components, zones, options, announced) do
+    # Which of these the server derived, taken before the normalising
+    # below strips the mark that says so. `viewed/4` needs it to tell
+    # a question from a record, and the mark itself never travels.
+    derived =
+      for component <- components,
+          Enum.any?(component.properties, &(&1.name == "X-DAV-SPLIT")),
+          do: value(component, "RECURRENCE-ID")
+
+    options = Map.put(options, :derived, derived)
+
     # The delivered copy carries canonical addresses too. Sending one
     # spelling and storing another is how an attendee's reply stops
     # matching the invitation it answers.
@@ -3720,6 +3730,14 @@ defmodule Dav.Cal.Scheduling do
     kept
     |> excluding_unseen(removed)
     |> Enum.map(&asking/1)
+    |> Enum.map(
+      &recorded_room(
+        &1,
+        address,
+        Map.get(options, :derived, []),
+        Map.get(options, :auto_replied, [])
+      )
+    )
   end
 
   defp viewed(_method, components, _recipient, _options), do: components
@@ -3738,6 +3756,43 @@ defmodule Dav.Cal.Scheduling do
       end)
 
     %{component | properties: properties}
+  end
+
+  # What a bystander sees of a room's line. The server answered for
+  # the room this round, so the organiser's copy states its
+  # participation outright — and on an override the server split out
+  # of the master to record that one occurrence answered differently,
+  # asks nothing further, `unsplit/1` having taken the `RSVP` off.
+  # Everyone else's copy should say the same, because it is the same
+  # record: an attendee reading the room's line is reading what became
+  # of it, not being handed the question.
+  #
+  # The recipient's own line is left exactly as it stands, because for
+  # them the message *is* the asking. So a room re-reading its own
+  # copy still finds itself asked about the occurrence it has not
+  # answered, while the other attendees see only that it has not.
+  defp recorded_room(%{name: "VTIMEZONE"} = zone, _address, _derived, _replied), do: zone
+
+  defp recorded_room(component, address, derived, replied) do
+    split? = value(component, "RECURRENCE-ID") in derived
+
+    properties =
+      Enum.map(component.properties, fn property ->
+        if property.name == "ATTENDEE" and property.value != address and
+             unattended?(property.parameters) and property.value in replied,
+           do: %{property | parameters: as_recorded(property.parameters, split?)},
+           else: property
+      end)
+
+    %{component | properties: properties}
+  end
+
+  defp as_recorded(parameters, split?) do
+    stated = Map.put_new(parameters, "PARTSTAT", "NEEDS-ACTION")
+
+    if split? and Map.get(stated, "PARTSTAT") == "NEEDS-ACTION",
+      do: Map.delete(stated, "RSVP"),
+      else: stated
   end
 
   # Spelled in UTC, the way the reference writes a derived exclusion
