@@ -2870,10 +2870,38 @@ defmodule Dav.Cal.Scheduling do
           reasked,
           options
         )
+        |> restated_comments(counterpart(component, held))
 
       _unreadable ->
         component
     end
+  end
+
+  # An attendee's comment is theirs. A client that does not
+  # understand `X-CALENDARSERVER-ATTENDEE-COMMENT` drops it from every
+  # save it makes, and restoring the lines a save left out keeps an
+  # old organiser's client from silently erasing what somebody said —
+  # the reference puts them back the same way.
+  #
+  # A line the save *carries* stands as it was written: changing the
+  # text is something the organiser may do, and only the lines that
+  # went missing are restored.
+  defp restated_comments(component, nil), do: component
+
+  defp restated_comments(component, counterpart) do
+    carried =
+      for property <- component.properties,
+          property.name == @attendee_comment,
+          into: MapSet.new(),
+          do: Map.get(property.parameters, @attendee_ref)
+
+    dropped =
+      for property <- counterpart.properties,
+          property.name == @attendee_comment,
+          Map.get(property.parameters, @attendee_ref) not in carried,
+          do: property
+
+    %{component | properties: component.properties ++ dropped}
   end
 
   defp asked_again?(component, held) do
@@ -4960,6 +4988,13 @@ defmodule Dav.Cal.Scheduling do
   # an attendee who had left one is that attendee taking it back, so
   # the tagged line goes rather than lingering as something they no
   # longer say.
+  #
+  # An *empty* comment is not the same as none. A client withdrawing
+  # what it said sends `X-CALENDARSERVER-PRIVATE-COMMENT` with nothing
+  # in it, which is a thing said rather than silence, and the
+  # reference keeps the tagged line with an empty value. Dropping it
+  # instead loses the record that this attendee ever commented, and
+  # the organiser's copy then disagrees with every later round.
   defp commented(component, replies) do
     # One reply may speak for several instances, and the comment rides
     # on whichever of them the attendee wrote it against. Taking the
@@ -4982,7 +5017,6 @@ defmodule Dav.Cal.Scheduling do
       for {address, said} <- spoken,
           is_binary(address),
           is_map(said),
-          said.value != "",
           do: %{
             name: @attendee_comment,
             parameters: %{@attendee_ref => address},

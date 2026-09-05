@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,085 |
+| Passing | 5,090 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 19 |
+| Apple/interop failing | 14 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,16 +62,16 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 19, and it sits in four files:
+The Apple queue is now 14, and it sits in four files:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
-| `privatecomments.xml` | 6 | `X-CALENDARSERVER-ATTENDEE-COMMENT` on the organiser's copy |
+| `privatecomments.xml` | 1 | the organiser's copy restamped when only a comment changed |
 | `implicitschedulechanges.xml` | 5 | three mechanisms — see below |
 | `trash.xml` | 5 | four separate edges of recovery and splitting |
 | `default-alarms.xml` | 3 | a sharee's empty defaults, and an invitation taking one |
 
-**This table was wrong until 2026-09-05 and is worth reading twice.** It listed fourteen of the nineteen as `sharing-quota.xml` and called the queue closed. `sharing-quota.xml` is classified `:incidental`, not `:apple` — it is part of the forty, and always was. Nobody had listed the Apple queue test by test, because `Corpus.headline/1` breaks down only `:unclassified` and `:rfc`; the summary line was taken on trust through several edits. Run the listing before planning against this table.
+**This table was wrong until 2026-09-05 and is worth reading twice.** It listed fourteen of what were then nineteen as `sharing-quota.xml` and called the queue closed. `sharing-quota.xml` is classified `:incidental`, not `:apple` — it is part of the forty, and always was. Nobody had listed the Apple queue test by test, because `Corpus.headline/1` breaks down only `:unclassified` and `:rfc`; the summary line was taken on trust through several edits. Run the listing before planning against this table.
 
 **Every sharing file now passes in full.** The group-sharing tail is closed.
 
@@ -87,7 +87,7 @@ The Apple queue is now 19, and it sits in four files:
 
 * **One** is a resource count, not a property list at all (`Organizer Changes` 8: "2 resources, expected 1").
 
-Three of the six `privatecomments` failures give one identical message — `X-CALENDARSERVER-ATTENDEE-COMMENT` absent from the organiser's copy — which is the best candidate for a single fault. Not yet read against the reference; every citation in this group that *has* been read turned out to describe the wrong one.
+`privatecomments` was six and is now one; see below. It went the same way as the auto-schedule tail: three separate faults, none of them what its citation said.
 
 The "auto-schedule tail" is closed. All six of its files pass in full, and none of the four faults was what its label said — most were the same shape: **an answer computed correctly and then overwritten while the outgoing copy is built.** That is worth knowing before anyone models a "two-phase delivery" that was never the problem; CONFORMANCE.md traces each to the line, along with the engine difference that produced three of them.
 
@@ -136,6 +136,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **What an attendee said is theirs** (`Dav.Cal.Scheduling`, `Dav.Cal.Object`). `privatecomments.xml` 68 to 73; the Apple queue fell 19 to 14. Three faults, none of them what its citation said. An *empty* `X-CALENDARSERVER-PRIVATE-COMMENT` is a client taking back what it wrote, not silence, and the tagged line stays with nothing in it — dropping it lost the record that the attendee ever commented, and every later round then disagreed. An organiser's client that does not understand `X-CALENDARSERVER-ATTENDEE-COMMENT` drops it from every save, so the lines a save leaves out are restored — and only those, because the fixtures show a save that *carries* a line with new text keeps the organiser's edit. And two lines tagged with the same attendee are refused as `CS:no-duplicate-private-comments` rather than accepted, because nothing decides which the organiser's copy should keep.
 
 * **The Apple queue was never what this file said** (`Dav.CalDAVTester.Corpus`, STATUS.md, README, CONFORMANCE.md). No test moved. The queue's own summary here claimed fourteen of its nineteen were `sharing-quota.xml`; that file is cited `:incidental` and has never been in the queue. `Corpus.headline/1` broke down only `:unclassified` and `:rfc`, so the Apple tally was a number nobody could check, and it survived several rounds of edits — including four in this drive — on trust. The report now lists `:apple` test by test as well, and the table above says what is actually in it: `privatecomments` 6, `implicitschedulechanges` 5, `trash` 5, `default-alarms` 3, all of them live behaviour rather than the closed queue this file described.
 

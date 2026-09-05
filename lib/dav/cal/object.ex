@@ -52,6 +52,9 @@ defmodule Dav.Cal.Object do
   # to refuse an abusive one.
   @max_attendees 100
   @max_attachments 5
+  @calendarserver "http://calendarserver.org/ns/"
+  @attendee_comment "X-CALENDARSERVER-ATTENDEE-COMMENT"
+  @attendee_ref "X-CALENDARSERVER-ATTENDEE-REF"
 
   @typedoc "The precondition that failed, as a qualified name."
   @type violation :: Xml.qname()
@@ -107,6 +110,7 @@ defmodule Dav.Cal.Object do
          :ok <- instances_valid(calendar),
          :ok <- within_limits(calendar),
          :ok <- unique_uid(calendar),
+         :ok <- one_comment_each(calendar),
          :ok <- welcomed(calendar, collection, options),
          # The UID test comes before the participation ones: writing a
          # second copy of a meeting into another calendar is refused
@@ -122,6 +126,27 @@ defmodule Dav.Cal.Object do
          :ok <- agent_unchanged(calendar, collection, path, options) do
       same_organizer(calendar, path, options)
     end
+  end
+
+  # Apple's `CS:no-duplicate-private-comments`: one comment per
+  # attendee per component. Two lines tagged with the same
+  # `X-CALENDARSERVER-ATTENDEE-REF` claim that person said two things
+  # at once, and nothing decides which the organiser's copy should
+  # keep — so the reference refuses the write rather than choosing for
+  # them.
+  defp one_comment_each(calendar) do
+    if Enum.any?(calendar.components, &twice_commented?/1),
+      do: {:error, {@calendarserver, "no-duplicate-private-comments"}},
+      else: :ok
+  end
+
+  defp twice_commented?(component) do
+    refs =
+      for property <- component.properties,
+          property.name == @attendee_comment,
+          do: Map.get(property.parameters, @attendee_ref)
+
+    length(refs) != length(Enum.uniq(refs))
   end
 
   # A calendar shared read-only may be read. Writing to it is refused

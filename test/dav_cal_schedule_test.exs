@@ -891,6 +891,78 @@ defmodule Dav.Cal.ScheduleTest do
     end
   end
 
+  describe "an attendee's private comment" do
+    defp spoken(comment) do
+      Enum.join(
+        [
+          "BEGIN:VCALENDAR",
+          "BEGIN:VEVENT",
+          "UID:spoken",
+          "SUMMARY:Spoken",
+          "ORGANIZER:mailto:alice@example.com",
+          "ATTENDEE;PARTSTAT=ACCEPTED:mailto:alice@example.com",
+          "ATTENDEE;PARTSTAT=ACCEPTED:mailto:bob@example.com"
+        ] ++
+          comment ++ ["DTSTART:20271215T090000Z", "END:VEVENT", "END:VCALENDAR"],
+        "\r\n"
+      ) <> "\r\n"
+    end
+
+    defp invited do
+      String.replace(spoken([]), "ATTENDEE;PARTSTAT=ACCEPTED:mailto:bob", "ATTENDEE:mailto:bob")
+    end
+
+    defp answered(context, comment) do
+      DavPlug.call(conn("PUT", "/alice/calendar/c.ics", invited()), context.options)
+      DavPlug.call(conn("PUT", "/bob/calendar/spoken.ics", spoken(comment)), context.options)
+
+      DavPlug.call(conn("GET", "/alice/calendar/c.ics", ""), context.options).resp_body
+    end
+
+    test "is recorded on the organiser's copy, tagged with whose it is", context do
+      stored = answered(context, ["X-CALENDARSERVER-PRIVATE-COMMENT:I can make it"])
+
+      assert line_for(stored, "ATTENDEE-COMMENT") =~ "I can make it"
+      assert line_for(stored, "ATTENDEE-COMMENT") =~ "bob@example.com"
+    end
+
+    test "withdrawn, leaves the line empty rather than gone", context do
+      stored = answered(context, ["X-CALENDARSERVER-PRIVATE-COMMENT:I can make it"])
+      assert line_for(stored, "ATTENDEE-COMMENT") =~ "I can make it"
+
+      DavPlug.call(
+        conn("PUT", "/bob/calendar/spoken.ics", spoken(["X-CALENDARSERVER-PRIVATE-COMMENT:"])),
+        context.options
+      )
+
+      after_withdrawing =
+        DavPlug.call(conn("GET", "/alice/calendar/c.ics", ""), context.options).resp_body
+
+      # An empty comment is a thing said, not silence: the client is
+      # taking back what it wrote, and the reference keeps the tagged
+      # line with nothing in it. Dropping the line instead loses the
+      # record that this attendee ever commented.
+      assert line_for(after_withdrawing, "ATTENDEE-COMMENT") =~ "bob@example.com"
+      refute line_for(after_withdrawing, "ATTENDEE-COMMENT") =~ "I can make it"
+    end
+
+    test "survives an organiser's client that does not know the property", context do
+      stored = answered(context, ["X-CALENDARSERVER-PRIVATE-COMMENT:I can make it"])
+      assert line_for(stored, "ATTENDEE-COMMENT") =~ "I can make it"
+
+      # The same event as the organiser's client understands it, which
+      # is to say without the comment it never parsed. Letting the
+      # save through as written would have an old client erase what
+      # somebody said, so the lines it left out are put back.
+      DavPlug.call(conn("PUT", "/alice/calendar/c.ics", spoken([])), context.options)
+
+      after_saving =
+        DavPlug.call(conn("GET", "/alice/calendar/c.ics", ""), context.options).resp_body
+
+      assert line_for(after_saving, "ATTENDEE-COMMENT") =~ "I can make it"
+    end
+  end
+
   describe "the ETag a scheduling write reports" do
     test "names the version the store actually holds", context do
       event =

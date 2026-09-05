@@ -83,6 +83,31 @@ defmodule Dav.Cal.ObjectTest do
     end
   end
 
+  describe "private comments" do
+    @calendarserver "http://calendarserver.org/ns/"
+
+    defp commented(refs) do
+      event(
+        for ref <- refs do
+          ~s(X-CALENDARSERVER-ATTENDEE-COMMENT;X-CALENDARSERVER-ATTENDEE-REF="#{ref}":hello)
+        end
+      )
+    end
+
+    test "one comment per attendee is accepted" do
+      assert validate(commented(["urn:x-uid:1", "urn:x-uid:2"])) == :ok
+    end
+
+    test "two comments from one attendee fail no-duplicate-private-comments" do
+      # Apple's precondition. Two lines tagged with the same attendee
+      # say that person said two things at once, and nothing decides
+      # which the organiser's copy keeps — the reference refuses the
+      # write rather than choosing for them.
+      assert validate(commented(["urn:x-uid:1", "urn:x-uid:1"])) ==
+               {:error, {@calendarserver, "no-duplicate-private-comments"}}
+    end
+  end
+
   describe "values" do
     test "a control character is refused" do
       assert validate(event(["SUMMARY:bad\ahere"])) ==
