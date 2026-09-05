@@ -54,11 +54,11 @@ Against that declaration the suite puts **5,144 tests**, of which:
 
 | outcome | tests | |
 | --- | ---: | --- |
-| passed | 5,092 | 99.0% |
-| failed | 49 | 1.0% |
+| passed | 5,093 | 99.0% |
+| failed | 48 | 0.9% |
 | skipped | 3 | 0.1% |
 
-Every failure is classified and cited: none are against RFC-required behaviour. Twelve are Apple's — the properties the `schedule-changes` report names, four edges of the trash, a sharee's default alarms, and one timestamp — and the remaining forty (failed plus skipped) are expectations that cannot be met on principle — the vendored, archived fixtures, the quota accounting a shared calendar implies, and nine that compare against another server's time zone compiler. Each has its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).
+Every failure is classified and cited: none are against RFC-required behaviour. Eleven are Apple's — the properties the `schedule-changes` report names, four edges of the trash, a sharee's default alarms, and one timestamp — and the remaining forty (failed plus skipped) are expectations that cannot be met on principle — the vendored, archived fixtures, the quota accounting a shared calendar implies, and nine that compare against another server's time zone compiler. Each has its reason recorded in the [conformance record](https://hexdocs.pm/dav/conformance.html).
 
 Fifteen verifiers are ported — `statusCode`, `header`, `multistatusItems`, `propfindItems`, `propfindValues`, `dataString`, `dataMatch`, `calendarDataMatch`, `xmlDataMatch`, `xmlElementMatch`, `prepostcondition`, `freeBusy` and `postFreeBusy` — along with the suite's compound directives (`DELETEALL`, `GETNEW`, `WAITCOUNT`, `GETCONTAINS`) and the `grab` elements that carry a value from one response into a later request. A check the harness cannot make is reported skipped, never counted as a pass.
 

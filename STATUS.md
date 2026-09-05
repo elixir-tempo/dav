@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,092 |
+| Passing | 5,093 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 12 |
+| Apple/interop failing | 11 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,12 +62,12 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 12, and it sits in four files:
+The Apple queue is now 11, and it sits in four files:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `privatecomments.xml` | 1 | the organiser's copy restamped when only a comment changed |
-| `implicitschedulechanges.xml` | 5 | three mechanisms — see below |
+| `implicitschedulechanges.xml` | 4 | two mechanisms — see below |
 | `trash.xml` | 4 | a sharee's delete, splitting round a trashed copy, an attachment |
 | `default-alarms.xml` | 2 | an `ETag` on a sharee's own write, and an invitation taking a default |
 
@@ -79,13 +79,15 @@ The Apple queue is now 12, and it sits in four files:
 
 **The auto-scheduling work is finished. What is left is four clusters of real behaviour, not a closed queue.**
 
-`implicitschedulechanges` is three mechanisms, not one — a first reading of the failure text said one, and the fixtures said otherwise:
+`implicitschedulechanges` was three mechanisms, and one is closed:
 
 * **Two** want `DTEND` named when the *start* moved and the end is written as a `DURATION` (`Organizer Changes` 6, `Multi-instance change` 6). Neither copy has a `DTEND` at all, so `Dav.Cal.Changes` correctly reports none; the reference names it because `Component.normalizeAll` has materialised the end before it diffs. That call is not in the vendored subset — `ical.py` is not there — so confirm it before building to it.
 
-* **Two** want `ATTENDEE` named after a reply or a comment round (`Private Comment` 6, `Attendee instance change` 4). Not yet read.
+* **One** wants `ATTENDEE` named after a comment round (`Private Comment` 6). Probing showed both sides of the diff holding the same `PARTSTAT`, but the instrumentation was not suite-tagged and the file runs ten suites, so which round produced it is still unknown. Tag the probe by suite before going further.
 
 * **One** is a resource count, not a property list at all (`Organizer Changes` 8: "2 resources, expected 1").
+
+The fourth, `Attendee instance change`, is closed — see below.
 
 `privatecomments` was six and is now one; see below. It went the same way as the auto-schedule tail: three separate faults, none of them what its citation said.
 
@@ -136,6 +138,8 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **An occurrence a rule alone makes is still one the recipient holds** (`Dav.Cal.Changes`). `implicitschedulechanges.xml` 42 to 43; the Apple queue fell 12 to 11. An attendee answering one occurrence of a series sends an override the organiser has no component for, and `changes/3` wrote `<CS:changes/>` empty for it — telling the organiser a reply arrived but not that anybody's `PARTSTAT` moved, which is the whole of what a reply says. It is now compared against the instance the master implies, as the reference derives one to diff against (`deriveInstance`, the `oldset - newset` branch of `whatIsDifferent`). The "wholly new component" rule still holds for a component that genuinely is new — a recipient holding nothing at all. `test/dav_cal_changes_test.exs` is new; `describe/4` is pure, so it needs no fixture.
 
 * **A restoration outranks the cancellation that withdrew it** (`Dav.Cal.Trash`, `Dav.Cal.Scheduling`). `trash.xml` 91 to 92; the Apple queue fell 13 to 12. Trashing an invitation sends a `CANCEL` numbered one past the copy it withdrew, so putting the event back at its old number hands every attendee a `REQUEST` older than the cancellation they hold, and a client that honours `SEQUENCE` keeps the meeting struck through. `Dav.Cal.Trash` marks the restoring save `recovered: true` and the numbering happens in `sequenced/2`, where it belongs.
 

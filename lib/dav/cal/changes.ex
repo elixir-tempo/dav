@@ -245,7 +245,38 @@ defmodule Dav.Cal.Changes do
   defp values_of(properties), do: Enum.map(properties, & &1.value)
 
   defp counterpart(component, held) do
-    Enum.find(held, &(value(&1, "RECURRENCE-ID") == value(component, "RECURRENCE-ID")))
+    Enum.find(held, &(value(&1, "RECURRENCE-ID") == value(component, "RECURRENCE-ID"))) ||
+      implied_instance(component, held)
+  end
+
+  # An occurrence the recipient holds only through their rule. An
+  # attendee answering one Tuesday of a series sends an override the
+  # organiser has no component for, and treating that as wholly new
+  # writes `<CS:changes/>` empty — telling the organiser a reply
+  # arrived but not that anybody's `PARTSTAT` moved, which is the
+  # whole of what a reply says.
+  #
+  # So it is compared against the instance the master implies, the way
+  # the reference derives one to diff against (`deriveInstance`, the
+  # `oldset - newset` branch of `whatIsDifferent`). Built here rather
+  # than sent, so it needs only the properties the comparison reads:
+  # the master's, at this occurrence's date.
+  defp implied_instance(component, held) do
+    with rid when is_binary(rid) <- value(component, "RECURRENCE-ID"),
+         %{} = master <- Enum.find(held, &is_nil(value(&1, "RECURRENCE-ID"))) do
+      dated = Enum.find(component.properties, &(&1.name == "RECURRENCE-ID"))
+      kept = Enum.reject(master.properties, &(&1.name in ~w(RRULE RDATE EXDATE DTSTART)))
+
+      %{
+        master
+        | properties: [
+            %{name: "DTSTART", parameters: dated.parameters, value: rid},
+            %{name: "RECURRENCE-ID", parameters: dated.parameters, value: rid} | kept
+          ]
+      }
+    else
+      _no_rule_of_their_own -> nil
+    end
   end
 
   defp dated(components) do
