@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,082 |
+| Passing | 5,084 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 22 |
+| Apple/interop failing | 20 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,12 +62,11 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 22, and every entry is cited for what it specifically wants:
+The Apple queue is now 20, and every entry is cited for what it specifically wants:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `sharing-quota.xml` | 14 | nothing winnable — see below |
-| `implicitauto10.xml` | 2 | delivery marks on the other party's line |
 | `implicitautopast.xml` | 1 | `RSVP` on a server-derived override |
 | elsewhere | 5 | singletons, cited individually |
 
@@ -75,15 +74,13 @@ The Apple queue is now 22, and every entry is cited for what it specifically wan
 
 `sharing-quota.xml` was read and is **not winnable**, which the earlier note in this file guessed wrong: twelve of its fourteen compare byte counts that encode the reference's on-disk per-user wrapper, and the other two want a second object with the same `UID` in one calendar, which RFC 4791 section 5.3.2 forbids. The behaviour underneath — a shared calendar's bytes belong to its owner — was already right and is now covered by `Dav.Cal.SharingTest` rather than by a comment alone. Cited in full in `classification.exs`.
 
-**What is left is three tests of auto-scheduling, and nothing else worth working.** Fourteen of the twenty-two are `sharing-quota.xml`, which encodes the reference's storage layout; five are cited singletons.
+**What is left is one test of auto-scheduling, and nothing else worth working.** Fourteen of the twenty are `sharing-quota.xml`, which encodes the reference's storage layout; five are cited singletons.
 
-The "auto-schedule tail" turned out not to be one thing, and all three of its parts have now been traced to the line. None was what its label said, and two were the same shape: **an answer computed correctly and then overwritten while the outgoing copy is built.** That is worth knowing before anyone models a "two-phase delivery" that was never the problem. Four of its six files — `implicitauto2`, `implicitauto3`, `implicitauto4` and `implicitauto9` — pass in full and have been unlisted; the three tests that remain are two unrelated problems, described in CONFORMANCE.md and cited individually rather than under one label. Both are changes inside `Dav.Cal.Scheduling`, which is the largest module here and carries roughly 1,500 corpus tests, so each wants its own batch and its own corpus run:
+The "auto-schedule tail" turned out not to be one thing, and every part of it has now been traced to the line. None was what its label said, and most were the same shape: **an answer computed correctly and then overwritten while the outgoing copy is built.** That is worth knowing before anyone models a "two-phase delivery" that was never the problem. Five of its six files — `implicitauto2`, `implicitauto3`, `implicitauto4`, `implicitauto9` and `implicitauto10` — pass in full and have been unlisted. One test remains, inside `Dav.Cal.Scheduling`, which is the largest module here and carries roughly 1,500 corpus tests, so it wants its own batch and its own corpus run:
 
 * **`implicitautopast`, one test**, is now diagnosed exactly, and it is *not* what its name suggests. Both of the event's overrides are in the past, so being past does not separate them: the client's own override keeps `RSVP=TRUE` and the one the server derived must not have it. `mixed_answers/5` already drops it correctly; `asking/1` puts it back while building the outgoing `REQUEST`. Fixing it means carrying "this component was derived" from `mixed_answers/5` down to `viewed/4`. Small in principle, several layers in practice.
 
-* **`implicitauto10` is down to two**, and the third is fixed: the room *did* answer, and RFC 6638 section 7.1's force-send reset was running after the rooms answered and throwing the reply away. It now runs before. What is left there is `SCHEDULE-STATUS` on the *other* party's line.
-
-The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is done except for those three**; what remains is a judgement about whether any of it is worth building rather than a queue to work through.
+The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). **The interop phase is done except for that one**; what remains is a judgement about whether any of it is worth building rather than a queue to work through.
 
 Read a file before committing to it. Three estimates in this section have now been wrong — `sharing-quota` was called winnable and is not, per-user data was called large and was small, and `sharing-groups-changes` was called 16 tests of group re-derivation when five of them were a broken verifier.
 
@@ -131,7 +128,11 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 
 ## Recently landed
 
-* **A re-invitation is a change worth sending** (`Dav.Cal.Scheduling`). `implicitauto9.xml` 17 to 19, complete; the Apple queue fell 24 to 22. An organiser writes a re-invitation as `PARTSTAT=NEEDS-ACTION` and nothing else, and the test deciding whether a save is worth announcing deleted `PARTSTAT` before comparing — so the whole of the change compared equal to the stored copy and no `REQUEST` went out. The reference keeps `PARTSTAT` in `organizerDiff` (`icaldiff.py`), dropping only `RSVP`, `SCHEDULE-STATUS` and `SCHEDULE-FORCE-SEND`; matching that moved nothing else in the corpus. The filed label — "a second scheduling round" — was wrong: dumping the components stage by stage showed the resource already re-accepting on the first pass.
+* **A forced re-invitation reaches one attendee without disturbing the rest** (`Dav.Cal.Scheduling`). `implicitauto10.xml` 23 to 25, complete; the Apple queue fell 22 to 20. Two faults, and the citation named neither. `cleared_status/2` wiped `SCHEDULE-STATUS` from every attendee line whenever a round delivered anything — harmless when the round is the whole attendee list, but a `SCHEDULE-FORCE-SEND` re-invitation names its recipients, so a reply already in hand was reported as never having arrived. And `asked_afresh/3` put the question back over a re-invited recipient's carried answer on their own copy, which is right for a person and threw away the reply for a room — the same shape as the entry three below. Both found by dumping each comparison rather than reading the citation.
+
+* **Ask the re-invitation question of the client's data** (`Dav.Cal.Scheduling`). No test moved; a wrong behaviour went. The entry below closed `implicitauto9` by comparing `PARTSTAT` in the set of things the attendees hold, and that set is built *after* the auto-answering — so a room's own acceptance read as an organiser's edit, and a `SCHEDULE-FORCE-SEND` re-invitation that changes nothing was renumbered. The reference numbers that one not at all. `re_asked?/2` now asks it of the client's body against the stored copy, which is where the reference asks it (`_diffNeedsAction`, `icaldiff.py`), and exempts a merging write — a stale client's `NEEDS-ACTION` is ignorance, not a question, and the reference merges the stored answers in before diffing (`_organizerMerge`). That exemption was found by the corpus: without it `implicitscheduletag` lost a test and the RFC-required queue opened.
+
+* **A re-invitation is a change worth sending** (`Dav.Cal.Scheduling`). `implicitauto9.xml` 17 to 19, complete; the Apple queue fell 24 to 22. An organiser writes a re-invitation as `PARTSTAT=NEEDS-ACTION` and nothing else, and the test deciding whether a save is worth announcing deleted `PARTSTAT` before comparing — so the whole of the change compared equal to the stored copy and no `REQUEST` went out. The filed label — "a second scheduling round" — was wrong: dumping the components stage by stage showed the resource already re-accepting on the first pass. The first form of the fix put `PARTSTAT` into that comparison and was too broad; see the entry above.
 
 * **A room answers the asking it was given** (`Dav.Cal.Scheduling`). `implicitauto10.xml` 22 to 23; the Apple queue fell 25 to 24. The room's auto-accept was computed correctly and then wiped by RFC 6638 section 7.1's `SCHEDULE-FORCE-SEND` reset, which ran *after* the rooms had answered. Being asked again is what a room answers to, so the reset now runs first. Found by bisecting the organiser branch with a probe at each stage rather than by reading; nothing else in the corpus moved.
 

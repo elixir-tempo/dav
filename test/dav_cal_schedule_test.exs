@@ -39,9 +39,37 @@ defmodule Dav.Cal.ScheduleTest do
             types: [Cal.calendar()],
             owner: "/principals/bob/"
           },
-          %Resource{path: ["bob", "inbox"], collection?: true, types: [Schedule.inbox()]}
+          %Resource{path: ["bob", "inbox"], collection?: true, types: [Schedule.inbox()]},
+          %Resource{path: ["carol"], collection?: true, owner: "/principals/carol/"},
+          %Resource{
+            path: ["carol", "calendar"],
+            collection?: true,
+            types: [Cal.calendar()],
+            owner: "/principals/carol/"
+          },
+          %Resource{path: ["carol", "inbox"], collection?: true, types: [Schedule.inbox()]},
+          %Resource{path: ["room"], collection?: true, owner: "/principals/room/"},
+          %Resource{
+            path: ["room", "calendar"],
+            collection?: true,
+            types: [Cal.calendar()],
+            owner: "/principals/room/"
+          },
+          %Resource{path: ["room", "inbox"], collection?: true, types: [Schedule.inbox()]}
         ],
-        %{"mailto:alice@example.com" => ["alice"], "mailto:bob@example.com" => ["bob"]}
+        %{
+          "mailto:alice@example.com" => ["alice"],
+          "mailto:bob@example.com" => ["bob"],
+          "mailto:carol@example.com" => ["carol"],
+          "mailto:room@example.com" => ["room"]
+        },
+        %{},
+        %{},
+        %{},
+        # `room` is a room: nobody reads its Inbox, and the server
+        # answers for it. Without this the store reports every address
+        # as attended and no auto-scheduling runs at all.
+        MapSet.new(["mailto:room@example.com"])
       )
 
     options =
@@ -643,6 +671,33 @@ defmodule Dav.Cal.ScheduleTest do
       assert theirs =~ "PARTSTAT=NEEDS-ACTION"
     end
 
+    test "a force-send re-invitation asks again without renumbering", context do
+      forced =
+        String.replace(
+          accepted(),
+          "PARTSTAT=ACCEPTED:mailto:bob@example.com",
+          "PARTSTAT=ACCEPTED;SCHEDULE-FORCE-SEND=REQUEST:mailto:bob@example.com"
+        )
+
+      DavPlug.call(conn("PUT", "/alice/calendar/f.ics", meeting("One")), context.options)
+      DavPlug.call(conn("PUT", "/bob/calendar/parts.ics", accepted()), context.options)
+
+      DavPlug.call(conn("PUT", "/alice/calendar/f.ics", forced), context.options)
+
+      stored = DavPlug.call(conn("GET", "/alice/calendar/f.ics", ""), context.options).resp_body
+      theirs = DavPlug.call(conn("GET", "/bob/calendar/parts.ics", ""), context.options).resp_body
+
+      # RFC 6638 section 7.1: the attendee is asked again and the
+      # event is not otherwise touched, so the reference sends without
+      # numbering — its re-invite branch skips the bump the
+      # significant-change branch makes. The organiser did not write
+      # anybody back to `NEEDS-ACTION` here; the reset is this
+      # server's own doing, and reading it back off the processed copy
+      # would renumber a revision nobody made.
+      assert theirs =~ "PARTSTAT=NEEDS-ACTION"
+      refute stored =~ "SEQUENCE:1"
+    end
+
     test "an organiser does not answer for an attendee", context do
       DavPlug.call(conn("PUT", "/alice/calendar/p.ics", meeting("One")), context.options)
       DavPlug.call(conn("PUT", "/bob/calendar/parts.ics", accepted()), context.options)
@@ -681,6 +736,98 @@ defmodule Dav.Cal.ScheduleTest do
       # suite than it won.
       assert stored =~ "PARTSTAT=NEEDS-ACTION"
       assert stored =~ "RSVP=TRUE"
+    end
+  end
+
+  describe "a forced re-invitation" do
+    # Folded lines make a per-attendee assertion unreadable, and the
+    # question here is always about one line among several.
+    defp line_for(body, who) do
+      body
+      |> String.replace("\r\n ", "")
+      |> String.split("\r\n")
+      |> Enum.find(&String.contains?(&1, who))
+    end
+
+    # Dated ahead of the suite's own clock: a room judges each
+    # occurrence as it answers, and one already over keeps its
+    # `NEEDS-ACTION` however free the room is.
+    defp gathering(attendees, start \\ "20271215T090000Z") do
+      Enum.join(
+        [
+          "BEGIN:VCALENDAR",
+          "BEGIN:VEVENT",
+          "UID:gathering",
+          "SUMMARY:Gathering",
+          "ORGANIZER:mailto:alice@example.com"
+        ] ++
+          attendees ++ ["DTSTART:" <> start, "END:VEVENT", "END:VCALENDAR"],
+        "\r\n"
+      ) <> "\r\n"
+    end
+
+    @invited ["ATTENDEE:mailto:bob@example.com", "ATTENDEE:mailto:carol@example.com"]
+
+    test "one attendee is asked again and the other's record stands", context do
+      forced =
+        gathering([
+          "ATTENDEE;SCHEDULE-FORCE-SEND=REQUEST:mailto:bob@example.com",
+          "ATTENDEE;PARTSTAT=ACCEPTED;SCHEDULE-STATUS=2.0:mailto:carol@example.com"
+        ])
+
+      DavPlug.call(conn("PUT", "/alice/calendar/g.ics", gathering(@invited)), context.options)
+
+      DavPlug.call(
+        conn(
+          "PUT",
+          "/carol/calendar/gathering.ics",
+          gathering([
+            "ATTENDEE:mailto:bob@example.com",
+            "ATTENDEE;PARTSTAT=ACCEPTED:mailto:carol@example.com"
+          ])
+        ),
+        context.options
+      )
+
+      DavPlug.call(conn("PUT", "/alice/calendar/g.ics", forced), context.options)
+
+      stored = DavPlug.call(conn("GET", "/alice/calendar/g.ics", ""), context.options).resp_body
+
+      # RFC 6638 section 7.1 sends a forced re-invitation to the
+      # attendees it names and to nobody else, so `SCHEDULE-STATUS`
+      # may only be restated for those. Clearing every line and
+      # re-stamping the round's own recipients reported Carol's reply
+      # as though it had never arrived.
+      assert line_for(stored, "bob@example.com") =~ "SCHEDULE-STATUS=1.2"
+      assert line_for(stored, "carol@example.com") =~ "SCHEDULE-STATUS=2.0"
+    end
+
+    test "a room keeps the answer it gave to being asked again", context do
+      booked = fn line ->
+        gathering(["ATTENDEE;CUTYPE=RESOURCE#{line}:mailto:room@example.com"])
+      end
+
+      DavPlug.call(conn("PUT", "/alice/calendar/r2.ics", booked.("")), context.options)
+
+      theirs =
+        DavPlug.call(conn("GET", "/room/calendar/gathering.ics", ""), context.options).resp_body
+
+      assert line_for(theirs, "room@example.com") =~ "PARTSTAT=ACCEPTED"
+
+      DavPlug.call(
+        conn("PUT", "/alice/calendar/r2.ics", booked.(";SCHEDULE-FORCE-SEND=REQUEST")),
+        context.options
+      )
+
+      after_forcing =
+        DavPlug.call(conn("GET", "/room/calendar/gathering.ics", ""), context.options).resp_body
+
+      # Being asked again is what an auto-managed room answers *to*,
+      # and the answer it just gave travels in the very message that
+      # asks. Putting the question back over it on the recipient's
+      # side left the room holding an invitation it had taken up,
+      # while the organiser's copy recorded the reply.
+      assert line_for(after_forcing, "room@example.com") =~ "PARTSTAT=ACCEPTED"
     end
   end
 

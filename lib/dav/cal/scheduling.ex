@@ -3509,14 +3509,22 @@ defmodule Dav.Cal.Scheduling do
   end
 
   # A delivering save re-states the delivery record: `SCHEDULE-STATUS`
-  # says what became of *this* round of messages, so an attendee who
-  # was not sent one this time — their agent is `NONE`, or they were
-  # dropped from the round — carries none. A save that delivers
-  # nothing preserves the record of the last one that did.
-  defp cleared_status(property, []), do: property
-
-  defp cleared_status(%{name: "ATTENDEE"} = property, _recipients),
-    do: %{property | parameters: Map.delete(property.parameters, "SCHEDULE-STATUS")}
+  # says what became of *this* round of messages, so an attendee the
+  # round took in and could not reach — their agent is `NONE`, or they
+  # were dropped from it — carries none, `delivered/2` having marked
+  # only those a message actually went to.
+  #
+  # An attendee the round never took in keeps the record of the last
+  # one that did. A `SCHEDULE-FORCE-SEND` re-invitation is sent to the
+  # attendees it names and nobody else, and clearing every other line
+  # would report the replies already in hand as though they had never
+  # arrived. A save that delivers nothing clears nothing at all, for
+  # the same reason.
+  defp cleared_status(%{name: "ATTENDEE", value: value} = property, recipients) do
+    if value in recipients,
+      do: %{property | parameters: Map.delete(property.parameters, "SCHEDULE-STATUS")},
+      else: property
+  end
 
   defp cleared_status(property, _recipients), do: property
 
@@ -3866,8 +3874,58 @@ defmodule Dav.Cal.Scheduling do
   # anybody is there to hear about it.
   defp revised?(_components, %{previous: nil}, _options), do: false
 
-  defp revised?(components, %{previous: previous}, options),
-    do: shared_components(components, options) != shared(previous, options)
+  defp revised?(components, %{previous: previous} = change, options),
+    do:
+      shared_components(components, options) != shared(previous, options) or
+        re_asked?(change, options)
+
+  # RFC 6638 leaves an organiser one way to say "I am asking you
+  # again": writing the attendee back to `NEEDS-ACTION`. Nothing else
+  # about the event need move, so the set comparison above sees a save
+  # that changed nothing and the question is never put.
+  #
+  # Asked of the *client's* data rather than of the processed copy,
+  # which is where the reference asks it too (`_diffNeedsAction`,
+  # `icaldiff.py`: an attendee the new data leaves `NEEDS-ACTION` who
+  # was answered in the old). By the time the components above are
+  # built, an auto-managed room may have answered the very question
+  # being put — and a room answering `SCHEDULE-FORCE-SEND` is not the
+  # organiser changing the event, so reading `PARTSTAT` off them would
+  # renumber a re-invitation the reference numbers not at all.
+  # A merging write is the exception `participating/5` already draws:
+  # the client asked the server to reconcile a copy it knows is stale,
+  # so its `NEEDS-ACTION` is ignorance of a reply that already
+  # arrived, not a question being put again. The reference reaches the
+  # same place by merging the stored answers in before it diffs at all
+  # (`_organizerMerge`).
+  defp re_asked?(%{merge: true}, _options), do: false
+
+  defp re_asked?(%{body: body, previous: previous}, options)
+       when is_binary(body) and is_binary(previous) do
+    with {:ok, sent} <- ICalendar.parse(body),
+         {:ok, before} <- ICalendar.parse(previous) do
+      held = schedulable(before)
+
+      Enum.any?(schedulable(sent), &unanswered_again?(&1, held, options))
+    else
+      _unreadable -> false
+    end
+  end
+
+  defp re_asked?(_change, _options), do: false
+
+  defp unanswered_again?(component, held, options) do
+    answers = stated(held, value(component, "RECURRENCE-ID"), options)
+
+    Enum.any?(component.properties, fn property ->
+      property.name == "ATTENDEE" and
+        Map.get(property.parameters, "PARTSTAT", "NEEDS-ACTION") == "NEEDS-ACTION" and
+        match?(
+          {answer, _delivery} when answer != "NEEDS-ACTION",
+          Map.get(answers, canonical_address(property.value, options))
+        )
+    end)
+  end
 
   defp notified(recipients, _components, %{previous: nil}, _options), do: recipients
 
@@ -3876,10 +3934,11 @@ defmodule Dav.Cal.Scheduling do
   # typed; the processed one says what actually changed, and a raised
   # `SEQUENCE` counts (the reference re-sends on it) while a lowered
   # one was already pulled back up and so compares equal.
-  defp notified(recipients, components, %{previous: previous}, options) do
-    if shared_components(components, options) == shared(previous, options),
-      do: [],
-      else: recipients
+  defp notified(recipients, components, %{previous: previous} = change, options) do
+    if shared_components(components, options) == shared(previous, options) and
+         not re_asked?(change, options),
+       do: [],
+       else: recipients
   end
 
   defp still_holds?(address, components, options) do
@@ -3909,16 +3968,11 @@ defmodule Dav.Cal.Scheduling do
   # maintains because they record what became of past messages rather
   # than anything this one carries.
   #
-  # `PARTSTAT` is not one of those. An organiser who writes an
-  # attendee back to `NEEDS-ACTION` is asking them again, and that is
-  # the whole of the change — the reference keeps `PARTSTAT` in
-  # `organizerDiff` for exactly this, dropping only `RSVP`,
-  # `SCHEDULE-STATUS` and `SCHEDULE-FORCE-SEND` (`icaldiff.py`).
-  # Comparing it does not make every reply look like an organiser's
-  # doing, because `prepared/3` has already put each stored answer
-  # back over the client's: what is left differing is the answer the
-  # organiser deliberately took away, and the one an auto-managed room
-  # gave to being asked.
+  # `PARTSTAT` is left out here and asked separately, by `re_asked?/2`.
+  # The reference keeps it in `organizerDiff`, but the reference is
+  # comparing the client's data: by the time these components are
+  # built a room may have answered the very question being put, and
+  # its answer is not the organiser's doing.
   defp shared_components([], _options), do: nil
 
   defp shared_components(components, options) do
@@ -3931,7 +3985,7 @@ defmodule Dav.Cal.Scheduling do
         into: MapSet.new(),
         do:
           {value(component, "RECURRENCE-ID"), property.name, addressed_as(property, options),
-           comparable(property.parameters), delivers?(property)}
+           Map.delete(comparable(property.parameters), "PARTSTAT"), delivers?(property)}
   end
 
   # A person, not a spelling. The client writes `mailto:` where the
@@ -5558,10 +5612,19 @@ defmodule Dav.Cal.Scheduling do
   # A forced re-invitation overrules the carried answer: the organiser
   # asked again, so the recipient's copy shows the question, not the
   # answer they gave last time.
+  #
+  # Unless this round has already answered for them. Being asked again
+  # is what an auto-managed room answers *to*, and the answer it just
+  # gave is travelling in this very message — putting the question
+  # back over it leaves the room's own calendar holding an invitation
+  # it has taken up, while the organiser's copy records the reply.
   defp asked_afresh(component, recipient, options) do
-    if canonical_address(recipient, options) in Map.get(options, :reinvited, []),
-      do: reasked_by_force(component, [canonical_address(recipient, options)], options),
-      else: component
+    address = canonical_address(recipient, options)
+
+    if address in Map.get(options, :reinvited, []) and
+         address not in Map.get(options, :auto_replied, []),
+       do: reasked_by_force(component, [address], options),
+       else: component
   end
 
   # A first invitation carries only what the recipient was invited to.

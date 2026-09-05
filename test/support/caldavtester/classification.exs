@@ -21,21 +21,13 @@
   # --- apple: the open auto-schedule tail --------------------------------
   # Room auto-accept (RFC 6638 with CalendarServer's answering modes)
   # landed with the `auto-accept` feature and most of it now passes:
-  # `implicitauto2`, `implicitauto3`, `implicitauto4` and
-  # `implicitauto9` are complete and no longer listed here. Three
-  # tests remain, in two unrelated places rather than the single
-  # "two-phase delivery" this was once filed as, and each is named for
-  # what it actually wants. Narrowed to the suite so a new failure
-  # elsewhere in these files still reports as unclassified.
+  # `implicitauto2`, `implicitauto3`, `implicitauto4`, `implicitauto9`
+  # and `implicitauto10` are complete and no longer listed here. One
+  # test remains, and it is not the "two-phase delivery" the group was
+  # once filed as; it is named for what it actually wants. Narrowed to
+  # the suite so a new failure elsewhere in these files still reports
+  # as unclassified.
   #
-  # Two left in this suite, both about `SCHEDULE-STATUS` on somebody
-  # else's line: the organiser's copy should record `2.0` against the
-  # attendee who accepted, and the room's copy `1.2` against the
-  # organiser. The room's own answer is right now — the force-send
-  # ordering that was eating it is fixed; see CONFORMANCE.md.
-  {"implicitauto10.xml", "#1 Non-recurring"} =>
-    {:apple, "delivery marks on the other party's line; see CONFORMANCE.md"},
-
   # `RSVP` on a *derived* override. Both of this event's overrides are
   # in the past, so being past is not what separates them: the one the
   # client sent keeps `RSVP=TRUE` and the one the server split out to
