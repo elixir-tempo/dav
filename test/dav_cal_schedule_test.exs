@@ -621,6 +621,28 @@ defmodule Dav.Cal.ScheduleTest do
       assert stored =~ "RSVP=TRUE"
     end
 
+    test "putting the question again is worth sending on its own", context do
+      asked = String.replace(meeting("One"), "PARTSTAT=DECLINED", "PARTSTAT=NEEDS-ACTION")
+
+      DavPlug.call(conn("PUT", "/alice/calendar/r.ics", meeting("One")), context.options)
+      DavPlug.call(conn("PUT", "/bob/calendar/parts.ics", accepted()), context.options)
+
+      DavPlug.call(conn("PUT", "/alice/calendar/r.ics", asked), context.options)
+
+      stored = DavPlug.call(conn("GET", "/alice/calendar/r.ics", ""), context.options).resp_body
+      theirs = DavPlug.call(conn("GET", "/bob/calendar/parts.ics", ""), context.options).resp_body
+
+      # Nothing else about the event moved, so the reset is the whole
+      # change. Leaving `PARTSTAT` out of the comparison that decides
+      # whether a save is worth announcing had the question asked in
+      # the organiser's own copy and never put to anybody: the version
+      # stayed where it was, the delivery mark stayed at the old
+      # reply, and the attendee went on holding their acceptance.
+      assert stored =~ "SEQUENCE:1"
+      assert stored =~ "SCHEDULE-STATUS=1.2"
+      assert theirs =~ "PARTSTAT=NEEDS-ACTION"
+    end
+
     test "an organiser does not answer for an attendee", context do
       DavPlug.call(conn("PUT", "/alice/calendar/p.ics", meeting("One")), context.options)
       DavPlug.call(conn("PUT", "/bob/calendar/parts.ics", accepted()), context.options)

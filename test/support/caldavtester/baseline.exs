@@ -50,7 +50,7 @@
   "implicitauto6.xml" => 36,
   "implicitauto7.xml" => 48,
   "implicitauto8.xml" => 18,
-  "implicitauto9.xml" => 17,
+  "implicitauto9.xml" => 19,
   "implicitautogroup.xml" => 32,
   "implicitautomodes.xml" => 126,
   "implicitautomultiple.xml" => 10,

@@ -21,19 +21,13 @@
   # --- apple: the open auto-schedule tail --------------------------------
   # Room auto-accept (RFC 6638 with CalendarServer's answering modes)
   # landed with the `auto-accept` feature and most of it now passes:
-  # `implicitauto2`, `implicitauto3` and `implicitauto4` are complete
-  # and no longer listed here. Six tests remain, in three unrelated
-  # places rather than the single "two-phase delivery" this was once
-  # filed as, and each is named for what it actually wants. Narrowed
-  # to the suite so a new failure elsewhere in these files still
-  # reports as unclassified.
+  # `implicitauto2`, `implicitauto3`, `implicitauto4` and
+  # `implicitauto9` are complete and no longer listed here. Three
+  # tests remain, in two unrelated places rather than the single
+  # "two-phase delivery" this was once filed as, and each is named for
+  # what it actually wants. Narrowed to the suite so a new failure
+  # elsewhere in these files still reports as unclassified.
   #
-  # An organiser declining one instance should start a second
-  # scheduling round: the resource re-accepts and `SEQUENCE` reaches
-  # 2. This engine answers once, on the organiser's side.
-  {"implicitauto9.xml", "#1 Decline one valid instance"} =>
-    {:apple, "a second scheduling round after an instance is declined; see CONFORMANCE.md"},
-
   # Two left in this suite, both about `SCHEDULE-STATUS` on somebody
   # else's line: the organiser's copy should record `2.0` against the
   # attendee who accepted, and the room's copy `1.2` against the

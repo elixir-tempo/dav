@@ -3882,11 +3882,6 @@ defmodule Dav.Cal.Scheduling do
       else: recipients
   end
 
-  # The event as the attendees see it. Alarms are removed because they
-  # are personal; the timestamps because every save moves them and no
-  # attendee is waiting to hear it; and the parameters the server
-  # maintains because they record what became of past messages rather
-  # than anything this one carries.
   defp still_holds?(address, components, options) do
     uid = Enum.find_value(components, &value(&1, "UID"))
 
@@ -3908,6 +3903,22 @@ defmodule Dav.Cal.Scheduling do
 
   @unremarkable ~w(DTSTAMP LAST-MODIFIED CREATED)
 
+  # The event as the attendees see it. Alarms are removed because they
+  # are personal; the timestamps because every save moves them and no
+  # attendee is waiting to hear it; and the parameters the server
+  # maintains because they record what became of past messages rather
+  # than anything this one carries.
+  #
+  # `PARTSTAT` is not one of those. An organiser who writes an
+  # attendee back to `NEEDS-ACTION` is asking them again, and that is
+  # the whole of the change — the reference keeps `PARTSTAT` in
+  # `organizerDiff` for exactly this, dropping only `RSVP`,
+  # `SCHEDULE-STATUS` and `SCHEDULE-FORCE-SEND` (`icaldiff.py`).
+  # Comparing it does not make every reply look like an organiser's
+  # doing, because `prepared/3` has already put each stored answer
+  # back over the client's: what is left differing is the answer the
+  # organiser deliberately took away, and the one an auto-managed room
+  # gave to being asked.
   defp shared_components([], _options), do: nil
 
   defp shared_components(components, options) do
@@ -3920,7 +3931,7 @@ defmodule Dav.Cal.Scheduling do
         into: MapSet.new(),
         do:
           {value(component, "RECURRENCE-ID"), property.name, addressed_as(property, options),
-           Map.delete(comparable(property.parameters), "PARTSTAT"), delivers?(property)}
+           comparable(property.parameters), delivers?(property)}
   end
 
   # A person, not a spelling. The client writes `mailto:` where the
