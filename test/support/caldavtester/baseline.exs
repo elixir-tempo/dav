@@ -160,7 +160,7 @@
   "timezonestdservice.xml" => 39,
   "trash-implicitgroup.xml" => 0,
   "trash-sync-report.xml" => 5,
-  "trash.xml" => 91,
+  "trash.xml" => 92,
   "vtodos.xml" => 1,
   "webcal.xml" => 0,
   "well-known.xml" => 10
