@@ -129,8 +129,21 @@
   {"implicitcalendartransp.xml", nil} => {:rfc, "RFC 6638 section 9.1 schedule-calendar-transp"},
 
   # --- apple: the trash's open edges -------------------------------------
+  # Confirmed, and the label was right — the only one in this queue
+  # that was. The expected VEVENT carries the owner's per-user
+  # `VALARM`; a sharee's rendering of the object does not, so the copy
+  # kept when they delete is 70 bytes shorter than the owner's, and
+  # recovery restores that stripped copy over what the owner had.
+  #
+  # `Dav.Web.Plug`'s delete path reads `contents(resource, options)`
+  # before removing, which is the object *as the deleting viewer sees
+  # it*. By the time `c:Dav.Web.Hook.deleted/2` runs the object is
+  # gone, so the trash cannot go back for the rest of it. Fixing this
+  # means the delete hooks are handed the object rather than one
+  # viewer's view of it — a change to that path for every hook, not
+  # to the trash.
   {"trash.xml", "Sharee trashes event"} =>
-    {:apple, "a sharee's delete keeps their view, not the owner's full copy"},
+    {:apple, "the trash keeps the deleting viewer's rendering, not the object"},
   {"trash.xml", "Attendee trashes event, then Organizer splits it"} =>
     {:apple, "splitting an event with a trashed attendee copy"},
   {"trash.xml", "Attachments and trash"} =>
