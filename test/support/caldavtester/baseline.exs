@@ -19,7 +19,7 @@
   "copymove.xml" => 15,
   "ctag.xml" => 23,
   "current-user-principal.xml" => 3,
-  "default-alarms.xml" => 33,
+  "default-alarms.xml" => 34,
   "delete.xml" => 3,
   "depthreports.xml" => 24,
   "depthreportsacl.xml" => 3,

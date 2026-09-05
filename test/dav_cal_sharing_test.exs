@@ -152,6 +152,55 @@ defmodule Dav.Cal.SharingTest do
     assert listing.resp_body =~ "can-be-shared"
   end
 
+  describe "a sharee's view of a shared calendar" do
+    defp accepted(options) do
+      share(
+        ~s(<CS:set><D:href>mailto:bob@example.com</D:href><CS:summary>Team</CS:summary><CS:read-write/></CS:set>),
+        options
+      )
+
+      DavPlug.call(
+        conn(
+          "POST",
+          "/bob/",
+          ~s(<?xml version="1.0"?><CS:invite-reply xmlns:D="DAV:" xmlns:CS="http://calendarserver.org/ns/"><D:href>mailto:bob@example.com</D:href><CS:invite-accepted/><CS:hosturl><D:href>/alice/shared</D:href></CS:hosturl><CS:in-reply-to>x</CS:in-reply-to><CS:summary>Team</CS:summary></CS:invite-reply>)
+        ),
+        options
+      )
+    end
+
+    test "reports every default alarm as present and empty", context do
+      answer = accepted(context.options)
+      assert answer.status in [200, 201]
+
+      # As Bob: an invited view is recognised by the invitation naming
+      # whoever is asking, and an anonymous request is nobody's view.
+      as_bob = %{context.options | principal: "/p/bob/"}
+
+      view =
+        propfind(
+          "/bob/shared",
+          Enum.map_join(
+            ~w(vevent-datetime vevent-date vtodo-datetime vtodo-date),
+            &~s(<default-alarm-#{&1} xmlns="urn:ietf:params:xml:ns:caldav"/>)
+          ),
+          as_bob
+        )
+
+      # A sharee holds no default alarm until they set one, and the
+      # answer to "what is mine here" is *none* rather than "this
+      # calendar has no such property". Reporting them absent leaves a
+      # client unable to tell an unset reminder from an unsupported
+      # one, and the reference answers all four empty from the moment
+      # the view exists.
+      for kind <- ~w(vevent-datetime vevent-date vtodo-datetime vtodo-date) do
+        assert view.resp_body =~ "default-alarm-#{kind}"
+      end
+
+      refute view.resp_body =~ "404"
+    end
+  end
+
   describe "sharing with groups" do
     setup do
       # Two groups, one member each way: `both` is in each of them, so

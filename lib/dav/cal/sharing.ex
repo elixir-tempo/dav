@@ -701,13 +701,30 @@ defmodule Dav.Cal.Sharing do
       # calendar's own description shows through.
       invited? = invited_view?(original, options)
 
-      for {name, value} <- properties,
-          not private_to_origin?(name),
-          not (invited? and per_user?(name)),
-          do: {name, value}
+      shown =
+        for {name, value} <- properties,
+            not private_to_origin?(name),
+            not (invited? and per_user?(name)),
+            do: {name, value}
+
+      shown ++ if invited?, do: unset_alarms(), else: []
     else
       _not_a_view -> []
     end
+  end
+
+  # A sharee holds no default alarm until they set one, and the
+  # answer to "what is my default alarm here" is *none* rather than
+  # "this calendar has no such property". The reference reports all
+  # four empty on a view the moment it is accepted, so a client can
+  # tell an unset reminder from an unsupported one.
+  #
+  # Inherited rather than stored, so the sharee's own value wins the
+  # moment they set one: `Dav.Web.Plug` merges these under whatever
+  # the view has of its own.
+  defp unset_alarms do
+    for kind <- ~w(vevent-datetime vevent-date vtodo-datetime vtodo-date),
+        do: {{Xml.caldav(), "default-alarm-" <> kind}, ""}
   end
 
   defp invited_view?(original, %{store: store, context: context} = options) do

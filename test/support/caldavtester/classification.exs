@@ -149,8 +149,19 @@
     {:apple, "the organiser's copy is restamped when only a comment changed"},
 
   # --- apple: default alarms on shared and delivered copies ---------------
+  # The "empty defaults" half of this is done — a sharee's view now
+  # reports all four present and empty. What is left is one `ETag`.
+  # The sharee sets a default alarm on the view, writes an event, and
+  # the alarm the server adds is *theirs*: it goes to their overlay
+  # and the object is stored as they sent it, so the reference answers
+  # with an `ETag`. RFC 4791 section 5.3.4 withholds one only when the
+  # server changed what it was given, and it did not. `rewritten?/3`
+  # compares against `Write.contents/2`, which reads the object as
+  # this viewer sees it — overlay included — so it cannot tell the two
+  # apart. Telling them apart means knowing whether the writer owns
+  # the calendar, which that seam does not have.
   {"default-alarms.xml", "Shared calendars - initially empty default"} =>
-    {:apple, "a sharee's four defaults exist and are empty before they set any"},
+    {:apple, "an ETag withheld for a sharee's own default alarm"},
   {"default-alarms.xml", "Scheduling"} =>
     {:apple, "a delivered invitation takes the recipient's default alarm"},
 

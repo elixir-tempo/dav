@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,090 |
+| Passing | 5,091 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 14 |
+| Apple/interop failing | 13 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,14 +62,14 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 14, and it sits in four files:
+The Apple queue is now 13, and it sits in four files:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `privatecomments.xml` | 1 | the organiser's copy restamped when only a comment changed |
 | `implicitschedulechanges.xml` | 5 | three mechanisms — see below |
 | `trash.xml` | 5 | four separate edges of recovery and splitting |
-| `default-alarms.xml` | 3 | a sharee's empty defaults, and an invitation taking one |
+| `default-alarms.xml` | 2 | an `ETag` on a sharee's own write, and an invitation taking a default |
 
 **This table was wrong until 2026-09-05 and is worth reading twice.** It listed fourteen of what were then nineteen as `sharing-quota.xml` and called the queue closed. `sharing-quota.xml` is classified `:incidental`, not `:apple` — it is part of the forty, and always was. Nobody had listed the Apple queue test by test, because `Corpus.headline/1` breaks down only `:unclassified` and `:rfc`; the summary line was taken on trust through several edits. Run the listing before planning against this table.
 
@@ -136,6 +136,10 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **A sharee starts with no alarm, and says so** (`Dav.Cal.Sharing`). `default-alarms.xml` 33 to 34; the Apple queue fell 14 to 13. An invited view now reports all four `default-alarm-*` properties present and empty rather than absent, so a client can tell an unset reminder from an unsupported one. They go through `inherited/3`, which `Dav.Web.Plug` merges *under* the view's own properties, so the sharee's value wins the moment they set one.
+
+  One wrong turn worth recording: a probe looked like the sharee's *home* alarm was leaking into the view, and stopping shared views inheriting from the home above them fixed nothing — the alarm was the sharee's own, set on the view two tests earlier. Reverted. Read the fixtures before believing a probe about where a value came from.
 
 * **What an attendee said is theirs** (`Dav.Cal.Scheduling`, `Dav.Cal.Object`). `privatecomments.xml` 68 to 73; the Apple queue fell 19 to 14. Three faults, none of them what its citation said. An *empty* `X-CALENDARSERVER-PRIVATE-COMMENT` is a client taking back what it wrote, not silence, and the tagged line stays with nothing in it — dropping it lost the record that the attendee ever commented, and every later round then disagreed. An organiser's client that does not understand `X-CALENDARSERVER-ATTENDEE-COMMENT` drops it from every save, so the lines a save leaves out are restored — and only those, because the fixtures show a save that *carries* a line with new text keeps the organiser's edit. And two lines tagged with the same attendee are refused as `CS:no-duplicate-private-comments` rather than accepted, because nothing decides which the organiser's copy should keep.
 
