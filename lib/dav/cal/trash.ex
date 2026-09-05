@@ -116,15 +116,11 @@ defmodule Dav.Cal.Trash do
   def deleted(%{resource: resource, body: body, collection: collection}, options) do
     origin = underlying(resource.path, options)
 
-    result =
-      with true <- keepable?(resource, collection, body),
-           home when is_list(home) <- home_of(origin, options),
-           {:ok, area} <- opened(home, options) do
-        kept(area, origin, body, options)
-      end
-
-    if System.get_env("DBGTRASH"),
-      do: IO.puts("DBGTRASH deleted #{inspect(resource.path)} -> #{inspect(result, limit: 3)}")
+    with true <- keepable?(resource, collection, body),
+         home when is_list(home) <- home_of(origin, options),
+         {:ok, area} <- opened(home, options) do
+      kept(area, origin, body, options)
+    end
 
     :ok
   end
@@ -302,23 +298,24 @@ defmodule Dav.Cal.Trash do
   # a restoration triggers: the attendee who declined by deleting says
   # again what they had said before.
   defp recovered(kept, %{store: store, context: context} = options) do
-    if System.get_env("DBGTRASH"),
-      do:
-        IO.puts(
-          "DBGTRASH recover #{inspect(kept.path)} origin=#{inspect(origin_of(kept, options))}"
-        )
-
     with origin when is_list(origin) <- origin_of(kept, options),
-         {:ok, body} <- store.read(kept, context),
+         {:ok, held} <- store.read(kept, context),
+         body = IO.iodata_to_binary(held),
          {:ok, collection} <- store.resolve(Enum.drop(origin, -1), context),
          {:ok, _created_or_replaced, %Resource{} = restored} <-
-           store.put(origin, IO.iodata_to_binary(body), @calendar_type, context) do
+           store.put(origin, body, @calendar_type, context) do
+      # `recovered:` marks this as a restoration rather than a fresh
+      # save. Trashing an invitation sent a cancellation; putting it
+      # back has to outrank that cancellation, and the scheduling
+      # engine is where the numbering — and the knowledge of whether
+      # anybody was told at all — lives.
       Hook.saving(
         %{
           resource: restored,
-          body: IO.iodata_to_binary(body),
+          body: body,
           previous: nil,
-          collection: collection
+          collection: collection,
+          recovered: true
         },
         options
       )

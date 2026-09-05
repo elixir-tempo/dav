@@ -10,9 +10,9 @@ Where the CalDAVTester conformance work stands, and how to continue it. Written 
 | --- | ---: |
 | Scenarios | 162 |
 | Tests | 5,144 |
-| Passing | 5,091 |
+| Passing | 5,092 |
 | **RFC-required failing** | **0** |
-| Apple/interop failing | 13 |
+| Apple/interop failing | 12 |
 | Incidental, cited | 40 |
 | **Unclassified** | **0** |
 | Features declared | 50 |
@@ -62,13 +62,13 @@ Each is gated shut by a feature this server does not implement. Declaring a feat
 
 **Those counts are upstream's `<test>` elements and they over-count.** Several files comment whole suites out — `availability.xml` was listed at 29 and yielded 7 live tests when it opened. Treat the column as an upper bound, and measure the file before planning around it.
 
-The Apple queue is now 13, and it sits in four files:
+The Apple queue is now 12, and it sits in four files:
 
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `privatecomments.xml` | 1 | the organiser's copy restamped when only a comment changed |
 | `implicitschedulechanges.xml` | 5 | three mechanisms — see below |
-| `trash.xml` | 5 | four separate edges of recovery and splitting |
+| `trash.xml` | 4 | a sharee's delete, splitting round a trashed copy, an attachment |
 | `default-alarms.xml` | 2 | an `ETag` on a sharee's own write, and an invitation taking a default |
 
 **This table was wrong until 2026-09-05 and is worth reading twice.** It listed fourteen of what were then nineteen as `sharing-quota.xml` and called the queue closed. `sharing-quota.xml` is classified `:incidental`, not `:apple` — it is part of the forty, and always was. Nobody had listed the Apple queue test by test, because `Corpus.headline/1` breaks down only `:unclassified` and `:rfc`; the summary line was taken on trust through several edits. Run the listing before planning against this table.
@@ -136,6 +136,10 @@ None of these is a defect against an RFC. They are behaviours beyond the specifi
 * **The harness is the deployment.** `Dav.CalDAVTester.Runner` routes `/stdtimezones` and `/timezones` to the two timezone plugs and everything else to `Dav.Web.Plug`, because those services are not DAV. New non-DAV surfaces get routed the same way rather than being folded into the DAV plug.
 
 ## Recently landed
+
+* **A restoration outranks the cancellation that withdrew it** (`Dav.Cal.Trash`, `Dav.Cal.Scheduling`). `trash.xml` 91 to 92; the Apple queue fell 13 to 12. Trashing an invitation sends a `CANCEL` numbered one past the copy it withdrew, so putting the event back at its old number hands every attendee a `REQUEST` older than the cancellation they hold, and a client that honours `SEQUENCE` keeps the meeting struck through. `Dav.Cal.Trash` marks the restoring save `recovered: true` and the numbering happens in `sequenced/2`, where it belongs.
+
+  The first attempt renumbered the body inside `Dav.Cal.Trash` and cost five other tests: a plain event came back carrying a `SEQUENCE` it never had, and the organiser case landed on `1001` because the engine's own restore rule (`maxseq + 1000`, from `implicit.py`) then fired on top of it. Putting the rule in the engine fixed both for free — `renumbered/4` numbers nothing when nobody is being told, so an event with no attendees and one with `SCHEDULE-AGENT=NONE` need no special case. `Dav.Cal.Trash` also had `DBGTRASH` debug output committed in it, printing on every delete and recovery; removed. `test/dav_cal_trash_test.exs` is new — the module had no unit coverage at all.
 
 * **A sharee starts with no alarm, and says so** (`Dav.Cal.Sharing`). `default-alarms.xml` 33 to 34; the Apple queue fell 14 to 13. An invited view now reports all four `default-alarm-*` properties present and empty rather than absent, so a client can tell an unset reminder from an unsupported one. They go through `inherited/3`, which `Dav.Web.Plug` merges *under* the view's own properties, so the sharee's value wins the moment they set one.
 

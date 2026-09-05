@@ -1169,6 +1169,21 @@ defmodule Dav.Cal.Scheduling do
   # new value that is significantly higher than the highest one
   # present" — `maxseq + 1000` — so the restored invitation outranks
   # any cancellation in flight, and this does the same.
+  # A restoration from the trash. Trashing an invitation sent a
+  # cancellation numbered one past the copy it withdrew (RFC 5546
+  # section 3.2.5), so putting the event back at its old number would
+  # hand every attendee a `REQUEST` older than the `CANCEL` they hold,
+  # and a client that honours `SEQUENCE` keeps the meeting struck
+  # through. One past is enough: the cancellation is the only thing to
+  # outrank, unlike a client restoring a copy of its own from who
+  # knows when.
+  #
+  # Reached only when somebody is being told — `renumbered/4` numbers
+  # nothing otherwise — so an event nobody was asked to, and one whose
+  # organiser does its own scheduling, come back exactly as they were.
+  defp sequenced(components, %{recovered: true}),
+    do: Enum.map(components, &restored(&1, sequence_number(&1) + 1))
+
   defp sequenced(components, %{previous: nil}) do
     case Enum.max(Enum.map(components, &sequence_number/1)) do
       0 -> components
