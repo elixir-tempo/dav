@@ -1623,7 +1623,23 @@ defmodule Dav.CalDAVTester.Runner do
 
   defp segments(path), do: path |> String.split("/", trim: true)
 
-  defp plug_options(context, substitutions) do
+  @doc """
+  The plug options the conformance deployment is served with.
+
+  ### Arguments
+
+  * `context` is the store's context, from `provision/2`.
+
+  * `substitutions` is the environment from
+    `Dav.CalDAVTester.ServerInfo.read/1`.
+
+  ### Returns
+
+  * The options `Dav.Web.Plug.call/2` takes.
+
+  """
+  @spec plug_options(pid(), map()) :: map()
+  def plug_options(context, substitutions) do
     DavPlug.init(
       store: SchedulingStore,
       context: context,

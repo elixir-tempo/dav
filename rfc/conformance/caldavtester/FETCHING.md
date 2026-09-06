@@ -27,11 +27,52 @@ and why the pinned commit above will not move.
   is guesswork where the reference implementation is simply the
   answer.
 
-**The harness itself is not vendored** — `caldavtester.py` and its
-`src/` are not here, only the data it reads. Running the suite would
-also need a populated `serverinfo.xml`, authentication and provisioned
-principals, none of which this library has. The scenarios are used
-here as a corpus of what real clients send, not as a test runner.
+**The harness is vendored in part.** `src/` holds the files our own
+runner had to answer the same questions as; the driver and the pieces
+it needs to *run* are not here. That gap is now worth closing — see
+below — because `Dav.CalDAVTester.Endpoint` serves the deployment over
+real HTTP, which is the thing that was missing when the decision was
+first made.
+
+## Running the real harness against this server
+
+`test/support/caldavtester/endpoint.ex` provisions the deployment and
+serves it with Bandit, authenticating the accounts the scenarios use:
+
+    MIX_ENV=test mix run --no-halt priv/serve.exs 8008
+
+That half is done and answers `401` with a challenge, and `207` to an
+authenticated `PROPFIND`. What the *client* half still needs, all from
+the same pinned commit:
+
+* `testcaldav.py` — the driver. Note the name: it is not
+  `caldavtester.py`, which is why an earlier note here called it that
+  and a fetch for it answers `404`.
+
+* Nine files missing from `src/`: `__init__.py`, `httpshandler.py`,
+  `jsonPointer.py`, `xmlDefs.py`, and `observers/` (`__init__.py`,
+  `base.py`, `jsondump.py`, `loadfiles.py`, `log.py`, `trace.py`).
+  `src/unittest/` is the harness's own tests and is not needed.
+
+* **`pycalendar`** — Apple's iCalendar library, from
+  `github.com/apple/ccs-pycalendar`, which `requirements.txt` names.
+  Five of the vendored verifiers import it (`calendarDataMatch`,
+  `freeBusy`, `postFreeBusy`, `addressDataMatch`, `xmlElementMatch`),
+  so it is not optional. Also archived, and the larger unknown here.
+
+* **A Python 3 port, of unknown size.** The vendored files carry three
+  `iteritems` calls (`serverinfo.py:123`, `request.py:540,607`) and
+  `xml.etree.cElementTree`, which still imports on 3.9. Whether
+  `pycalendar` and the unvendored files are as close is not yet known.
+
+* A `serverinfo.xml` whose `<host>`/`<nonsslport>` name the endpoint
+  above. The vendored one says `www.example.com`, which the in-process
+  runner never has to dial.
+
+The payoff is worth the work twice over: it exercises Bandit, the
+wire and authentication — which `Dav.CalDAVTester.Runner` says
+outright it does not — and it checks the in-process port against the
+original, where a disagreement means the port is wrong.
 
 The fixtures were left out at first, to keep the repository small. That
 was a mistake worth recording: **189 of the 193 scenarios reference
