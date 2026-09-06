@@ -41,11 +41,21 @@ defmodule Dav.Cal.ICalendar do
                   CATEGORIES RESOURCES RELATED-TO TZNAME X-WR-CALNAME
                   X-CALENDARSERVER-PRIVATE-COMMENT X-CALENDARSERVER-ATTENDEE-COMMENT)
 
-  @typedoc "One `NAME;PARAM=value:value` line."
+  @typedoc """
+  One `NAME;PARAM=value:value` line.
+
+  `:name` is upper-cased, because RFC 5545 section 3.1 makes property
+  names case-insensitive and every comparison in this library is
+  written against one spelling. `:spelling` holds the client's own
+  where it differed, so what they wrote is what they read back; a
+  property this server builds for itself has none and is written as
+  named.
+  """
   @type property :: %{
-          name: String.t(),
-          parameters: %{optional(String.t()) => String.t()},
-          value: String.t()
+          :name => String.t(),
+          :parameters => %{optional(String.t()) => String.t()},
+          :value => String.t(),
+          optional(:spelling) => String.t()
         }
 
   @typedoc "A `BEGIN:X` … `END:X` block."
@@ -110,8 +120,15 @@ defmodule Dav.Cal.ICalendar do
         ";" <> name <> "=" <> encode_parameter(value)
       end)
 
-    property.name <> parameters <> ":" <> encode(property)
+    spelled(property) <> parameters <> ":" <> encode(property)
   end
+
+  # As the client wrote it. Upper-casing every name is safe for
+  # comparison and lossy on the way out: a client that stored
+  # `X-Test` and read back `X-TEST` is being handed something it did
+  # not write, and the reference hands back what it was given.
+  defp spelled(%{spelling: spelling}), do: spelling
+  defp spelled(%{name: name}), do: name
 
   # Only TEXT values are escaped. `RRULE:FREQ=WEEKLY;BYDAY=MO,TU` uses
   # `;` and `,` as *structure*, and escaping them turns a recurrence
@@ -283,14 +300,16 @@ defmodule Dav.Cal.ICalendar do
   end
 
   defp build(head, value) do
-    [name | parameters] = split_on_semicolons(head)
-    name = String.upcase(name)
+    [spelling | parameters] = split_on_semicolons(head)
+    name = String.upcase(spelling)
 
-    %{
+    property = %{
       name: name,
       parameters: Map.new(parameters, &parameter/1),
       value: valued(name, value)
     }
+
+    if spelling == name, do: property, else: Map.put(property, :spelling, spelling)
   end
 
   # A property this knows the type of is interpreted: `TEXT` is

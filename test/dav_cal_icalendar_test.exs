@@ -183,6 +183,45 @@ defmodule Dav.Cal.ICalendarTest do
       assert ICalendar.write(calendar) =~ "URL:http://x.example,y"
     end
 
+    test "a property is written as the client spelled it" do
+      # RFC 5545 section 3.1 makes names case-insensitive, so `:name`
+      # is upper-cased and every comparison in the library is written
+      # against one spelling. Handing that back is a different matter:
+      # a client that stored `X-Test` and read `X-TEST` is given
+      # something it did not write.
+      ics =
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nX-Test:a\r\nsummary:b\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      {:ok, calendar} = ICalendar.parse(ics)
+      written = ICalendar.write(calendar)
+
+      assert written =~ "X-Test:a"
+      assert written =~ "summary:b"
+    end
+
+    test "and is still matched under one" do
+      ics =
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nX-Test:a\r\nsummary:b\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      {:ok, calendar} = ICalendar.parse(ics)
+      [event] = calendar.components
+
+      # The half that makes the other half safe: nothing downstream
+      # has to learn about spelling to keep working.
+      assert "X-TEST" in Enum.map(event.properties, & &1.name)
+      assert "SUMMARY" in Enum.map(event.properties, & &1.name)
+    end
+
+    test "and a property the server built is written as named" do
+      built = %{
+        name: "VERSION",
+        properties: [%{name: "X-MADE-HERE", parameters: %{}, value: "yes"}],
+        components: []
+      }
+
+      assert ICalendar.write(%{built | name: "VCALENDAR"}) =~ "X-MADE-HERE:yes"
+    end
+
     test "a whole calendar survives a round trip" do
       ics =
         Enum.join(
