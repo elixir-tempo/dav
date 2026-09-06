@@ -144,8 +144,20 @@
   # to the trash.
   {"trash.xml", "Sharee trashes event"} =>
     {:apple, "the trash keeps the deleting viewer's rendering, not the object"},
+  # The hardest of the four, and the label understates it. The
+  # attendee trashes their copy (which declines), the organiser then
+  # *splits* the event into two resources while that copy sits in the
+  # trash, and the attendee recovers. Test 16 wants two events back
+  # from the one that was trashed, and 18/19 want the organiser's
+  # halves to carry the attendee's original answer again rather than
+  # the decline the trashing sent.
+  #
+  # So a recovery has to notice the object was split while it waited
+  # and re-derive both halves against what the organiser now holds —
+  # `Dav.Cal.Trash.recovered/2` puts back exactly what it kept, by
+  # `UID`, and nothing there knows about splitting.
   {"trash.xml", "Attendee trashes event, then Organizer splits it"} =>
-    {:apple, "splitting an event with a trashed attendee copy"},
+    {:apple, "a copy split while it waited in the trash comes back as one event"},
   # Traced. `Dav.Cal.Attachments.collections_of/2` skips concealed
   # collections, so a copy waiting in the trash keeps nothing alive
   # and `deleted/2`'s sweep removes the file outright. Test 5 then
