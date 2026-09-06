@@ -19,67 +19,83 @@ and why the pinned commit above will not move.
 
 * `verifiers/` — the response checks the scenarios refer to.
 
-* `src/` — the harness itself: `caldavtest.py` runs a scenario,
-  `request.py` models one request and its grabs, `serverinfo.py` the
-  substitutions. Vendored because our own runner has to answer the
-  same questions — when `end-delete` fires, what `change-uid` scopes,
-  what `WAITCOUNT` waits for — and deriving those from the scenarios
-  is guesswork where the reference implementation is simply the
-  answer.
+* `src/` and `testcaldav.py` — the harness itself: `caldavtest.py`
+  runs a scenario, `request.py` models one request and its grabs,
+  `serverinfo.py` the substitutions. Vendored at first because our own
+  runner has to answer the same questions — when `end-delete` fires,
+  what `change-uid` scopes, what `WAITCOUNT` waits for — and deriving
+  those from the scenarios is guesswork where the reference
+  implementation is simply the answer. Completed later so it can be
+  *run*; see below.
 
-**The harness is vendored in part.** `src/` holds the files our own
-runner had to answer the same questions as; the driver and the pieces
-it needs to *run* are not here. That gap is now worth closing — see
-below — because `Dav.CalDAVTester.Endpoint` serves the deployment over
-real HTTP, which is the thing that was missing when the decision was
-first made.
+The harness was vendored in part at first — only the files our own
+runner had to answer the same questions as — because running it needed
+a real server, authentication and provisioned principals, none of
+which this library had. `Dav.CalDAVTester.Endpoint` supplies all
+three, so the rest was fetched and it runs; see below.
 
 ## Running the real harness against this server
 
-`test/support/caldavtester/endpoint.ex` provisions the deployment and
-serves it with Bandit, authenticating the accounts the scenarios use:
+The whole harness is vendored now — `testcaldav.py`, `src/` and its
+`observers/` — at the same pinned commit, and byte-identical to it.
 
-    MIX_ENV=test mix run --no-halt priv/serve.exs 8008
+It is Python 2, and upstream is archived, so there is nothing to
+track and no port coming. Rather than modify what is vendored, the
+port is a build step: `priv/caldavtester.py` copies the tree into
+`_build/`, applies the transformation and leaves a runnable harness.
+`git diff` against upstream stays empty, the transformation is
+reviewable as code rather than as a 110-line patch, and re-running it
+after a re-fetch costs nothing.
 
-That half is done and answers `401` with a challenge, and `207` to an
-authenticated `PROPFIND`. What the *client* half still needs, all from
-the same pinned commit:
+    MIX_ENV=test mix run --no-halt priv/serve.exs 8008    # one shell
+    python3 priv/caldavtester.py                          # another
+    cd _build/caldavtester/caldavtester
+    PYTHONPATH=../pycalendar:src python3 testcaldav.py \
+        -s scripts/server/serverinfo.xml CalDAV/propfind.xml
 
-* `testcaldav.py` — the driver. Note the name: it is not
-  `caldavtester.py`, which is why an earlier note here called it that
-  and a fetch for it answers `404`.
+`priv/serve.exs` is the deployment over real HTTP — the same store,
+plug options and provisioning the in-process runner uses, behind
+Bandit, with the Basic authentication the scenarios assume. The
+vendored `serverinfo.xml` already names `localhost:8008`.
 
-* Nine files missing from `src/`: `__init__.py`, `httpshandler.py`,
-  `jsonPointer.py`, `xmlDefs.py`, and `observers/` (`__init__.py`,
-  `base.py`, `jsondump.py`, `loadfiles.py`, `log.py`, `trace.py`).
-  `src/unittest/` is the harness's own tests and is not needed.
+### What the port does
 
-* **`pycalendar`** — Apple's iCalendar library, from
-  `github.com/apple/ccs-pycalendar`, which `requirements.txt` names.
-  Five of the vendored verifiers import it (`calendarDataMatch`,
-  `freeBusy`, `postFreeBusy`, `addressDataMatch`, `xmlElementMatch`),
-  so it is not optional. Also archived, and the larger unknown here.
+Mostly `2to3` — print statements, `except X, e`, relative imports —
+and then what `2to3` does not know about:
 
-* **A Python 3 port, of unknown size.** The vendored files carry three
-  `iteritems` calls (`serverinfo.py:123`, `request.py:540,607`) and
-  `xml.etree.cElementTree`, which still imports on 3.9. Whether
-  `pycalendar` and the unvendored files are as close is not yet known.
+* `getchildren()`, which ElementTree dropped in 3.9;
 
-* A `serverinfo.xml` whose `<host>`/`<nonsslport>` name the endpoint
-  above. The vendored one says `www.example.com`, which the in-process
-  runner never has to dial.
+* `.text.encode("utf-8")`, which existed to get Python 2's `str` and
+  inverts the meaning on 3, where the parser already returns `str`;
 
-The payoff is worth the work twice over: it exercises Bandit, the
-wire and authentication — which `Dav.CalDAVTester.Runner` says
-outright it does not — and it checks the in-process port against the
-original, where a disagreement means the port is wrong.
+* `rfc822` and `base64.encodestring`, both renamed; and
 
-The fixtures were left out at first, to keep the repository small. That
-was a mistake worth recording: **189 of the 193 scenarios reference
-them**, and none carry request bodies inline, so without them the
-scenarios were not merely un-runnable but largely unreadable. A
-scenario that points at `Resource/CardDAV/vpropfinds/1.xml` tells you
-nothing if that file is absent.
+* two places where Python 3 hands back bytes and everything
+  downstream is written for text — the raw request the harness
+  records, and the response body every verifier reads.
+
+**`pycalendar`** is Apple's iCalendar library, which five verifiers
+import, and it needs the same treatment. The script clones and ports
+it, which is why this step wants the network. Take it from
+`github.com/apple/ccs-pycalendar` and not PyPI: the published 2.0 has
+a flat layout, while the verifiers want `pycalendar.icalendar.calendar`.
+
+### What it is worth
+
+`Dav.CalDAVTester.Runner` says outright that nothing in it exercises
+Bandit, TLS, authentication or concurrency — it measures the protocol,
+not the deployment. This measures the deployment.
+
+It also checks the port against the original. `propfind.xml` runs 27
+tests here against 26 in-process, and where the two disagree about a
+scenario the in-process port is the thing to suspect. Neither runner
+alone can tell you that.
+
+Not every disagreement is ours: the ported harness still carries
+Python 2 assumptions of its own — one failure reads `HTTP Status Code
+Wrong (expected 2xx): 207`, which is a comparison bug in the verifier
+rather than anything the server did. Read a disagreement before
+believing it.
 
 ## Deliberate changes from upstream
 
