@@ -185,8 +185,21 @@
     {:apple, "membership changes propagating to shares; see CONFORMANCE.md"},
 
   # --- apple: the schedule-changes tail ----------------------------------
+  # One problem, three failing tests. When the *start* moves and the
+  # end is written as a `DURATION`, the reference names `DTEND` among
+  # the changed properties; neither copy has a `DTEND` at all, so
+  # `Dav.Cal.Changes` reports none. `Component.normalizeAll` has
+  # materialised the end before the reference diffs, and that call is
+  # not in the vendored subset (`ical.py` is not there) — confirm the
+  # behaviour before building to it.
+  #
+  # `Organizer Changes` 8 is not a fault of its own. `run_test/2` in
+  # the harness halts a test at its first failing request, so when 6's
+  # verify fails the `DELETEALL` after it never runs, the attendee's
+  # Inbox keeps that message, and 8's `WAITCOUNT 1` then counts two.
+  # Fixing the `DTEND` naming closes both.
   {"implicitschedulechanges.xml", "Organizer Changes"} =>
-    {:apple, "a changed DTEND is not named among the changed properties"},
+    {:apple, "a changed DTEND is not named, and the count that follows from it"},
   {"implicitschedulechanges.xml", "Multi-instance change"} =>
     {:apple, "a changed DTEND across instances is not named"},
 

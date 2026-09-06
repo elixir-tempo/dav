@@ -67,7 +67,7 @@ The Apple queue is now 10, and it sits in four files:
 | where | failing | what it wants |
 | --- | ---: | --- |
 | `privatecomments.xml` | 1 | the organiser's copy restamped when only a comment changed |
-| `implicitschedulechanges.xml` | 3 | two mechanisms — see below |
+| `implicitschedulechanges.xml` | 3 | one problem — see below |
 | `trash.xml` | 4 | a sharee's delete, splitting round a trashed copy, an attachment |
 | `default-alarms.xml` | 2 | an `ETag` on a sharee's own write, and an invitation taking a default |
 
@@ -79,11 +79,13 @@ The Apple queue is now 10, and it sits in four files:
 
 **The auto-scheduling work is finished. What is left is four clusters of real behaviour, not a closed queue.**
 
-`implicitschedulechanges` was three mechanisms, and one is closed:
+`implicitschedulechanges` looked like three mechanisms and is really one, plus its own fallout:
 
 * **Two** want `DTEND` named when the *start* moved and the end is written as a `DURATION` (`Organizer Changes` 6, `Multi-instance change` 6). Neither copy has a `DTEND` at all, so `Dav.Cal.Changes` correctly reports none; the reference names it because `Component.normalizeAll` has materialised the end before it diffs. That call is not in the vendored subset — `ical.py` is not there — so confirm it before building to it.
 
-* **One** is a resource count, not a property list at all (`Organizer Changes` 8: "2 resources, expected 1"). Not yet read.
+* **One** is not a fault at all. `Organizer Changes` 8 counts two Inbox items where one is wanted, and the second is there because `Runner.run_test/2` halts a test at its first failing request — so when 6's verify fails, the `DELETEALL` after it never runs and the message stays. Fixing the `DTEND` naming closes both.
+
+  Worth knowing generally: **a failing test can leave state that fails a later one**, and the queue's per-test listing cannot show that. Before treating two failures in one file as two problems, check whether the first one's test had cleanup after the failing request.
 
 `Attendee instance change` and `Private Comment` are both closed — see below. `scratchpad/suite.exs` (the pattern, not the file) is what cracked the second: `Scenario.read/1` gives a struct whose `suites` can be filtered before `Runner.run/2`, so a probe's output belongs to a known round. This file runs ten suites and probe output from all of them is unattributable otherwise.
 
