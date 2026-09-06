@@ -63,16 +63,38 @@ vendored `serverinfo.xml` already names `localhost:8008`.
 Mostly `2to3` — print statements, `except X, e`, relative imports —
 and then what `2to3` does not know about:
 
-* `getchildren()`, which ElementTree dropped in 3.9;
+* `getchildren()` and `getiterator()`, which ElementTree dropped in
+  3.9, and `HTTPMessage.getheaders`, which went the same way;
 
 * `.text.encode("utf-8")`, which existed to get Python 2's `str` and
   inverts the meaning on 3, where the parser already returns `str`;
 
-* `rfc822` and `base64.encodestring`, both renamed; and
+* `rfc822` and `base64.encodestring`, both renamed;
 
-* two places where Python 3 hands back bytes and everything
-  downstream is written for text — the raw request the harness
-  records, and the response body every verifier reads.
+* `response.status / 100 == 2`, the "is this 2xx" test. On Python 2
+  that divided to `2`; on 3 it is `2.07`, so **every multi-status
+  answer read as a wrong status code**. `2to3` cannot help — it has no
+  way to know which `/` meant floor division;
+
+* `cmp`, which pycalendar's date comparisons are built on, restored as
+  a shim rather than rewritten at ten call sites; and
+
+* `__hash__`, which Python 3 unsets on any class defining `__eq__`.
+  Python 2 left the identity hash alone, and the verifiers put
+  components in sets, so without it a calendar comparison fails with
+  `unhashable type: 'VEvent'`.
+
+Two places also hand back bytes where everything downstream is written
+for text: the raw request the harness records, and the response body
+every verifier reads.
+
+### One server per run
+
+Scenarios leave state, and enough of it accumulates that a server
+which has already run several files starts failing ones it passed
+clean — `propfind.xml` goes from 27/27 to 5/27. Restart
+`priv/serve.exs` between files. `Dav.CalDAVTester.Runner` provisions
+one store per scenario for the same reason.
 
 **`pycalendar`** is Apple's iCalendar library, which five verifiers
 import, and it needs the same treatment. The script clones and ports

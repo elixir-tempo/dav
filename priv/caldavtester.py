@@ -28,6 +28,7 @@ Pass `--no-pycalendar` to skip it when it is already in place.
 """
 
 import argparse
+import ast
 import pathlib
 import re
 import shutil
@@ -67,9 +68,22 @@ def port_harness(root):
                 # ElementTree dropped getchildren() in 3.9. Iterating the
                 # element is the documented replacement.
                 (r"([A-Za-z_][A-Za-z0-9_.\[\]()]*)\.getchildren\(\)", r"list(\1)"),
+                # Same removal, same release: `iter` took its place.
+                (r"\.getiterator\(", ".iter("),
                 # Python 2 encoded text to get its `str`. On 3 the parser
                 # already hands back `str`, so these invert the meaning.
                 (r"\.text\.(?:en|de)code\(\s*[\"']utf-8[\"']\s*\)", ".text"),
+                # `status / 100 == 2` asks "is this a 2xx". On Python 2
+                # that divided to 2; on 3 it is 2.07 and every
+                # multi-status answer reads as a wrong status code.
+                # `2to3` cannot fix this — it has no way to know which
+                # `/` meant floor division.
+                (r"response\.status / 100", "response.status // 100"),
+                # `HTTPMessage.getheaders` went in Python 3; `get_all`
+                # is the same thing, except that it answers `None`
+                # rather than `[]` for a header that is not there, so
+                # the callers' `len(hdrs)` tests need the `or []`.
+                (r"\.msg\.getheaders\(([^)]*)\)", r".msg.get_all(\1) or []"),
             ],
             regex=True,
         )
@@ -120,6 +134,69 @@ def port_harness(root):
     )
 
 
+# Python 3 dropped `cmp`. pycalendar's date comparisons are written
+# around it, and ten call sites read better with the builtin restored
+# than rewritten one by one into `(a > b) - (a < b)`.
+CMP_SHIM = """def cmp(a, b):
+    return (a > b) - (a < b)
+
+
+"""
+
+
+def restore_cmp(root):
+    for path in root.rglob("*.py"):
+        text = path.read_text()
+
+        if not re.search(r"(?<![.\w])cmp\(", text) or text.startswith("def cmp("):
+            continue
+
+        lines = text.splitlines(keepends=True)
+        # After the licence header, before the first statement: a `def`
+        # placed above a module docstring would silently demote it.
+        at = next(
+            (i for i, line in enumerate(lines) if line.strip() and not line.startswith("#")),
+            0,
+        )
+        path.write_text("".join(lines[:at]) + CMP_SHIM + "".join(lines[at:]))
+
+
+def restore_hash(root):
+    """Python 3 unsets `__hash__` on any class that defines `__eq__`.
+
+    Python 2 left the identity hash in place, and pycalendar's
+    components are put in sets by the verifiers, so without this a
+    calendar comparison fails with `unhashable type: 'VEvent'`.
+    """
+    for path in root.rglob("*.py"):
+        text = path.read_text()
+
+        if "__eq__" not in text:
+            continue
+
+        lines = text.splitlines(keepends=True)
+        inserts = []
+
+        for node in ast.walk(ast.parse(text)):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            defines = {
+                child.name for child in node.body if isinstance(child, ast.FunctionDef)
+            }
+
+            if "__eq__" in defines and "__hash__" not in defines:
+                first = node.body[0]
+                indent = " " * first.col_offset
+                inserts.append((first.lineno - 1, f"{indent}__hash__ = object.__hash__\n\n"))
+
+        for at, text_to_add in sorted(inserts, reverse=True):
+            lines.insert(at, text_to_add)
+
+        if inserts:
+            path.write_text("".join(lines))
+
+
 def port_pycalendar(out):
     """Apple's iCalendar library, which the verifiers import."""
     clone = out / "ccs-pycalendar"
@@ -144,6 +221,9 @@ def port_pycalendar(out):
         [(r"^from \. import ([a-z_]+)\.([a-z_]+)$", r"from .\1 import \2")],
         regex=True,
     )
+
+    restore_cmp(target)
+    restore_hash(target)
 
 
 def main():
