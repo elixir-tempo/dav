@@ -583,6 +583,78 @@ defmodule Dav.Cal.ScheduleTest do
       refute stored =~ "Made Up"
     end
 
+    test "an attendee whose address is spelled MAILTO: still states an EMAIL" do
+      # A `urn:` canonical address hides where mail for this person
+      # goes, so the server states it back as an `EMAIL` parameter.
+      # Finding the `mailto:` spelling is a case-insensitive question —
+      # RFC 3986 section 3.1 — and so is taking the scheme off it. Ask
+      # it one way and answer it the other and the address is lost:
+      # every spelling matches, and none of them is the one read.
+      agent =
+        SchedulingStore.start(
+          [
+            %Resource{path: [], collection?: true},
+            %Resource{path: ["alice"], collection?: true, owner: "/principals/alice/"},
+            %Resource{
+              path: ["alice", "calendar"],
+              collection?: true,
+              types: [Cal.calendar()],
+              owner: "/principals/alice/"
+            },
+            %Resource{path: ["alice", "inbox"], collection?: true, types: [Schedule.inbox()]},
+            %Resource{
+              path: ["dave"],
+              collection?: true,
+              owner: "/principals/dave/",
+              display_name: "Dave Davis"
+            },
+            %Resource{
+              path: ["dave", "calendar"],
+              collection?: true,
+              types: [Cal.calendar()],
+              owner: "/principals/dave/"
+            },
+            %Resource{path: ["dave", "inbox"], collection?: true, types: [Schedule.inbox()]}
+          ],
+          %{
+            "mailto:alice@example.com" => ["alice"],
+            "MAILTO:dave@example.com" => ["dave"],
+            "urn:x-uid:dave" => ["dave"]
+          },
+          %{},
+          %{"mailto:dave@example.com" => "urn:x-uid:dave"}
+        )
+
+      options =
+        DavPlug.init(
+          store: SchedulingStore,
+          context: agent,
+          methods: [{"POST", Dav.Cal.Outbox}],
+          hooks: [Dav.Cal.Scheduling]
+        )
+
+      event =
+        Enum.join(
+          [
+            "BEGIN:VCALENDAR",
+            "BEGIN:VEVENT",
+            "UID:spelled",
+            "ORGANIZER:mailto:alice@example.com",
+            "ATTENDEE;RSVP=TRUE:MAILTO:dave@example.com",
+            "DTSTART:20260615T090000Z",
+            "END:VEVENT",
+            "END:VCALENDAR"
+          ],
+          "\r\n"
+        ) <> "\r\n"
+
+      DavPlug.call(conn("PUT", "/alice/calendar/spelled.ics", event), options)
+
+      stored = DavPlug.call(conn("GET", "/alice/calendar/spelled.ics", ""), options).resp_body
+
+      assert stored =~ "EMAIL=dave@example.com"
+    end
+
     test "an object already in canonical form is not rewritten", context do
       event =
         Enum.join(

@@ -14,7 +14,8 @@ defmodule Dav.CalDAVTester.Calendars do
   Three forms, all seen in the suite:
 
   * `DTSTAMP` — drop the property wherever it appears.
-  * `ATTENDEE:EMAIL` — drop that *parameter* from that property.
+  * `ATTENDEE:X-CALENDARSERVER-AUTO` — drop that *parameter* from that
+    property.
   * `TRANSP=OPAQUE` — drop the property when it carries the default
     value, so a server that writes the default explicitly and one that
     omits it compare equal.
@@ -31,7 +32,7 @@ defmodule Dav.CalDAVTester.Calendars do
   # comparison, and a test that adds to them expects these underneath.
   @standing ~w(PRODID CALSCALE DTSTAMP CREATED LAST-MODIFIED X-WR-CALNAME
                ATTENDEE:X-CALENDARSERVER-DTSTAMP ATTENDEE:X-CALENDARSERVER-AUTO
-               ATTENDEE:X-CALENDARSERVER-RESET-PARTSTAT ATTENDEE:EMAIL ORGANIZER:EMAIL
+               ATTENDEE:X-CALENDARSERVER-RESET-PARTSTAT
                CLASS=PUBLIC PRIORITY=0 TRANSP=OPAQUE SEQUENCE=0)
 
   @typedoc "The outcome of a comparison."

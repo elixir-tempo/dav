@@ -245,6 +245,16 @@ def port_pycalendar(out):
     restore_cmp(target)
     restore_hash(target)
 
+    # Folding a long value steps back off a UTF-8 continuation byte.
+    # On Python 2 `temp` was a byte string and `str > int` was allowed;
+    # on 3 it raises, and every value long enough to fold takes the
+    # comparison down with it — which is every scheduling message,
+    # whose `urn:x-uid:` attendee lines are always over the limit.
+    edit(
+        target / "property.py",
+        [("while (temp[offset] > 0x7F)", "while (ord(temp[offset]) > 0x7F)")],
+    )
+
 
 def main():
     here = pathlib.Path(__file__).resolve().parent.parent

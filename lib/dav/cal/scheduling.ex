@@ -3627,19 +3627,24 @@ defmodule Dav.Cal.Scheduling do
   # so the reference states it back as an `EMAIL` parameter. A
   # `mailto:` address already says so itself.
   defp stated_email(address, %{store: store, context: context}) do
-    with false <- String.starts_with?(String.downcase(address), "mailto:"),
+    with false <- mailto?(address),
          true <- function_exported?(store, :principal, 2),
          {:ok, %Resource{owner: owner}} when is_binary(owner) <-
            store.principal(address, context),
          true <- function_exported?(store, :addresses, 2),
          {:ok, addresses} <- store.addresses(owner, context),
-         "mailto:" <> email <-
-           Enum.find(addresses, &String.starts_with?(String.downcase(&1), "mailto:")) do
-      email
+         spelling when is_binary(spelling) <- Enum.find(addresses, &mailto?/1) do
+      String.slice(spelling, 7..-1//1)
     else
       _no_mailto_spelling -> nil
     end
   end
+
+  # A URI scheme is case-insensitive (RFC 3986 section 3.1), and the
+  # suite spells one of its own accounts `MAILTO:` to say so. Reading
+  # the scheme one way and stripping it another loses the address:
+  # every spelling matches, and none of them is the one taken apart.
+  defp mailto?(address), do: String.starts_with?(String.downcase(address), "mailto:")
 
   defp common_name(address, %{store: store, context: context}) do
     with true <- function_exported?(store, :principal, 2),
