@@ -68,7 +68,7 @@ The Apple queue is now 10, and it sits in four files:
 | --- | ---: | --- |
 | `privatecomments.xml` | 1 | the organiser's copy restamped when only a comment changed |
 | `implicitschedulechanges.xml` | 3 | one problem — see below |
-| `trash.xml` | 4 | a sharee's delete, splitting round a trashed copy, an attachment |
+| `trash.xml` | 4 | a sharee's delete, splitting round a trashed copy, an attachment reclaimed too early |
 | `default-alarms.xml` | 2 | an `ETag` on a sharee's own write, and an invitation taking a default |
 
 **This table was wrong until 2026-09-05 and is worth reading twice.** It listed fourteen of what were then nineteen as `sharing-quota.xml` and called the queue closed. `sharing-quota.xml` is classified `:incidental`, not `:apple` — it is part of the forty, and always was. Nobody had listed the Apple queue test by test, because `Corpus.headline/1` breaks down only `:unclassified` and `:rfc`; the summary line was taken on trust through several edits. Run the listing before planning against this table.
@@ -92,6 +92,8 @@ The Apple queue is now 10, and it sits in four files:
 `privatecomments` was six and is now one; see below. It went the same way as the auto-schedule tail: three separate faults, none of them what its citation said.
 
 The "auto-schedule tail" is closed. All six of its files pass in full, and none of the four faults was what its label said — most were the same shape: **an answer computed correctly and then overwritten while the outgoing copy is built.** That is worth knowing before anyone models a "two-phase delivery" that was never the problem; CONFORMANCE.md traces each to the line, along with the engine difference that produced three of them.
+
+`trash`'s four are three problems and are the least explored. Two are traced: a sharee's delete keeps their *rendering* rather than the object, so recovery restores a copy stripped of the owner's per-user parts; and an attachment is reclaimed when its event is trashed rather than when the trash is emptied, which makes one test pass for the wrong reason (`readable/2` answers `403` for a file that is not there, which reads the same as "hidden while trashed"). The two `Organizer splits it` tests are unread.
 
 The remaining gated pools are all Apple legacy (`dropbox`, 66), a dead draft (`VPOLL`, 28), a deployment topology (`partitioning-*`), or a suite feature that is not a protocol (`implicitgroup`'s directory-driving half). Those are a judgement about whether the feature is worth building. The nineteen above are not: they are behaviour this server already claims.
 

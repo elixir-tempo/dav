@@ -146,8 +146,22 @@
     {:apple, "the trash keeps the deleting viewer's rendering, not the object"},
   {"trash.xml", "Attendee trashes event, then Organizer splits it"} =>
     {:apple, "splitting an event with a trashed attendee copy"},
+  # Traced. `Dav.Cal.Attachments.collections_of/2` skips concealed
+  # collections, so a copy waiting in the trash keeps nothing alive
+  # and `deleted/2`'s sweep removes the file outright. Test 5 then
+  # passes for the wrong reason — `readable/2` answers `403` for an
+  # attachment that is not there, which reads the same as "hidden
+  # while trashed" — and test 8 fails because recovery has nothing to
+  # restore. Test 11 wants it gone only once the trash is emptied.
+  #
+  # A fix needs both halves, and the second is the awkward one: count
+  # the trash when deciding what stays alive, *and* refuse a read
+  # whose only reference is a trashed copy — otherwise test 5 starts
+  # answering 200. The obvious way to know that is to scan the home
+  # per `GET`, which is not a cost library code should carry; a mark
+  # on the file when its last visible reference goes would be better.
   {"trash.xml", "Attachments and trash"} =>
-    {:apple, "a trashed event's attachment file is reclaimed; see CONFORMANCE.md"},
+    {:apple, "an attachment reclaimed when its event is trashed, not when the trash is emptied"},
 
   # --- apple: the private-comment tail -----------------------------------
   # Four of the five here are closed, and none of their citations
