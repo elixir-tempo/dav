@@ -97,7 +97,8 @@ defmodule Dav.Cal.Alarms do
   defp alarm?(_unreadable), do: false
 
   @doc """
-  Put the collection's default alarm on what was just stored.
+  Settle the alarms on what was just stored: repeats removed, and the
+  collection's default added where a component carries none.
 
   ### Arguments
 
@@ -138,23 +139,36 @@ defmodule Dav.Cal.Alarms do
     end
   end
 
-  # Only a component that carries no alarm of its own takes the
-  # collection's: a client that said what it wanted has said it.
   defp alarmed(calendar, collection, options) do
     components =
-      Enum.map(calendar.components, fn component ->
-        with true <- component.name in ~w(VEVENT VTODO),
-             [] <- Enum.filter(component.components, &(&1.name == "VALARM")),
-             %{} = alarm <- default_for(component, collection, options) do
-          %{component | components: component.components ++ [marked(alarm)]}
-        else
-          _alarmed_already_or_undefaulted -> component
-        end
-      end)
+      calendar.components
+      |> Enum.map(&deduplicated/1)
+      |> Enum.map(&defaulted(&1, collection, options))
 
     if components == calendar.components,
       do: :none,
       else: {:ok, %{calendar | components: components}}
+  end
+
+  # The same alarm twice is one reminder, and a client that sent it
+  # twice gets one back — the repeats go where they stand, the first
+  # kept. RFC 5545 section 3.6.1 allows a `VEVENT` no sub-component
+  # but `VALARM`, so comparing them whole is comparing alarms.
+  defp deduplicated(%{name: name} = component) when name in ~w(VEVENT VTODO),
+    do: %{component | components: Enum.uniq(component.components)}
+
+  defp deduplicated(component), do: component
+
+  # Only a component that carries no alarm of its own takes the
+  # collection's: a client that said what it wanted has said it.
+  defp defaulted(component, collection, options) do
+    with true <- component.name in ~w(VEVENT VTODO),
+         [] <- Enum.filter(component.components, &(&1.name == "VALARM")),
+         %{} = alarm <- default_for(component, collection, options) do
+      %{component | components: component.components ++ [marked(alarm)]}
+    else
+      _alarmed_already_or_undefaulted -> component
+    end
   end
 
   # The calendar's own answer first, then the home's — a calendar that
