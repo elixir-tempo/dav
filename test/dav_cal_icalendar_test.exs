@@ -145,6 +145,44 @@ defmodule Dav.Cal.ICalendarTest do
       assert ICalendar.write(calendar) =~ "SUMMARY:one\\, two"
     end
 
+    test "an extension property keeps the escapes it arrived with" do
+      # Found by Apple's harness against the real server, and invisible
+      # to the corpus, whose comparison parses both sides. Parsing
+      # unescaped every value while writing re-escaped only the known
+      # `TEXT` ones, so anything else lost `\,` for good: a client
+      # storing `a\,b` read back `a,b`, a different value.
+      ics =
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nX-TEST:one\\, two\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      {:ok, calendar} = ICalendar.parse(ics)
+
+      assert ICalendar.write(calendar) =~ "X-TEST:one\\, two"
+    end
+
+    test "and gains none it did not" do
+      # The other half, and why the fix is not "treat X- as TEXT": the
+      # suite sends both spellings and wants both back untouched.
+      ics =
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nX-TEST:geo:1.1,2.2\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      {:ok, calendar} = ICalendar.parse(ics)
+
+      assert ICalendar.write(calendar) =~ "X-TEST:geo:1.1,2.2"
+    end
+
+    test "a URI a client wrongly escaped is repaired" do
+      # `put.xml`'s "relaxed parsing": a known property whose type is
+      # not `TEXT` is unescaped on the way in and not escaped again,
+      # and that asymmetry is deliberate. Stopping it to fix the
+      # extension case cost this test.
+      ics =
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nURL:http://x.example\\,y\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      {:ok, calendar} = ICalendar.parse(ics)
+
+      assert ICalendar.write(calendar) =~ "URL:http://x.example,y"
+    end
+
     test "a whole calendar survives a round trip" do
       ics =
         Enum.join(

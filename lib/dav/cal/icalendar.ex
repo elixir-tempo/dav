@@ -62,11 +62,14 @@ defmodule Dav.Cal.ICalendar do
   rebuilt rather than passed through: a `calendar-data` subset, or a
   scheduling message being stored in an Inbox.
 
-  Values are **re-escaped**. Parsing turns `\\n` into a newline and
-  `\\,` into a comma, so writing the parsed value back unchanged
-  produces a line that means something different from the one that
-  came in — and, in the case of an embedded newline, a line that ends
-  the object early.
+  Values are **re-escaped**, and exactly the ones `parse/1` unescaped:
+  parsing turns `\\n` into a newline and `\\,` into a comma for a
+  `TEXT` property, so writing the parsed value back unchanged produces
+  a line that means something different from the one that came in —
+  and, in the case of an embedded newline, a line that ends the object
+  early. Everything else is carried through as it arrived, escapes
+  included, because a value whose type this does not know is not one
+  it can safely reinterpret.
 
   ### Arguments
 
@@ -281,12 +284,31 @@ defmodule Dav.Cal.ICalendar do
 
   defp build(head, value) do
     [name | parameters] = split_on_semicolons(head)
+    name = String.upcase(name)
 
     %{
-      name: String.upcase(name),
+      name: name,
       parameters: Map.new(parameters, &parameter/1),
-      value: unescape(value)
+      value: valued(name, value)
     }
+  end
+
+  # A property this knows the type of is interpreted: `TEXT` is
+  # unescaped and `encode/1` escapes it again, and a `URI` that a
+  # client wrongly escaped is repaired on the way in — which is what
+  # `put.xml`'s "relaxed parsing" asks for, and why the two are not
+  # symmetrical.
+  #
+  # An extension property is neither. Its type is not ours to know, so
+  # unescaping it discards something the writer will never put back: a
+  # client that stored `X-Foo:a\,b` read back `a,b`, a different
+  # value. Those are carried through exactly as they arrived.
+  defp valued(name, value) do
+    cond do
+      name in @text_valued -> unescape(value)
+      String.starts_with?(name, "X-") -> value
+      true -> unescape(value)
+    end
   end
 
   defp parameter(text) do
