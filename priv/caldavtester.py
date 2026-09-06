@@ -113,6 +113,26 @@ def port_harness(root):
         regex=True,
     )
 
+    # `os.path.walk` went too, and `os.walk` inverts it: a generator of
+    # `(dir, dirs, names)` rather than a visitor called with each. Only
+    # `--all` reaches this, which is why running single files never
+    # tripped it.
+    edit(
+        root / "src" / "manager.py",
+        [
+            (
+                "            os.path.walk(dname, lambda arg, dir, names: "
+                "files.extend([os.path.join(dir, name) for name in names]) "
+                'if not dir.startswith("test") else None, None)\n',
+                "            for walked, _dirs, names in os.walk(dname):\n"
+                '                if not walked.startswith("test"):\n'
+                "                    files.extend(\n"
+                "                        [os.path.join(walked, name) for name in names]\n"
+                "                    )\n",
+            )
+        ],
+    )
+
     # Two places where py3 hands back bytes and everything downstream is
     # written for text: the raw request the harness records for its own
     # logs, and the response body every verifier reads.
