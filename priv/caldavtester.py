@@ -154,6 +154,50 @@ def port_harness(root):
     )
 
 
+# `ElementTree.tostring` returned a `str` on Python 2 and returns
+# `bytes` on 3 unless told otherwise. Every one of these call sites
+# feeds the result straight into string concatenation or comparison,
+# so each raises `TypeError` the moment a property carries child
+# elements — which is precisely when these verifiers have work to do.
+AS_TEXT = {
+    ("verifiers", "propfindItems.py"): [
+        "value = tostring(tree.getroot())",
+        "temp = tostring(p)",
+    ],
+    ("verifiers", "propfindValues.py"): [
+        "value = tostring(tree.getroot())",
+        "value += tostring(p)",
+    ],
+    ("verifiers", "dataMatch.py"): [
+        "respdata = tostring(ElementTree(file=StringIO(respdata)).getroot())",
+        "data = tostring(ElementTree(file=StringIO(data)).getroot())",
+    ],
+    ("verifiers", "xmlDataMatch.py"): ["return tostring(tree.getroot())"],
+    ("src", "caldavtest.py"): ["temp = tostring(p)"],
+}
+
+
+def text_tostring(root):
+    for parts, calls in AS_TEXT.items():
+        edit(
+            root.joinpath(*parts),
+            [(call, call[:-1] + ', encoding="unicode")') for call in calls],
+        )
+
+
+# `lib2to3`'s `getchildren` fixer rewrites `X.getchildren()` as
+# `list(X)`, and when the call was already wrapped it wraps the wrong
+# expression: `len(node.getchildren())` comes out as `list(len(node))`,
+# which raises `TypeError` the moment the line is reached. An Element
+# is sized by its children, so `len(node)` is the whole of it.
+def counted_children(root):
+    for path in root.rglob("*.py"):
+        text = path.read_text()
+
+        if "list(len(" in text:
+            path.write_text(re.sub(r"list\(len\((\w+)\)\)", r"len(\1)", text))
+
+
 # Python 3 dropped `cmp`. pycalendar's date comparisons are written
 # around it, and ten call sites read better with the builtin restored
 # than rewritten one by one into `(a > b) - (a < b)`.
@@ -276,6 +320,8 @@ def main():
 
     two_to_three(harness)
     port_harness(harness)
+    text_tostring(harness)
+    counted_children(harness)
 
     if not arguments.no_pycalendar:
         port_pycalendar(out)
