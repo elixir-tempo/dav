@@ -198,6 +198,23 @@ def counted_children(root):
             path.write_text(re.sub(r"list\(len\((\w+)\)\)", r"len(\1)", text))
 
 
+# `lib2to3`'s `getheaders` fixer rewrites `msg.getheaders(h)` as
+# `msg.get_all(h) or []`, and where the call was subscripted it does
+# not parenthesise: `msg.getheaders(h)[0]` becomes
+# `msg.get_all(h) or [][0]`, which `or` binds loosest of all — so the
+# whole list survives and the subscript is applied to an empty one
+# that is never reached. The name then holds a list where the next
+# line wants a string.
+def parenthesised_headers(root):
+    for path in root.rglob("*.py"):
+        text = path.read_text()
+
+        if " or [][" in text:
+            path.write_text(
+                re.sub(r"([\w.]+\.get_all\([^)]*\)) or \[\]\[", r"(\1 or [])[", text)
+            )
+
+
 # Python 3 dropped `cmp`. pycalendar's date comparisons are written
 # around it, and ten call sites read better with the builtin restored
 # than rewritten one by one into `(a > b) - (a < b)`.
@@ -322,6 +339,7 @@ def main():
     port_harness(harness)
     text_tostring(harness)
     counted_children(harness)
+    parenthesised_headers(harness)
 
     if not arguments.no_pycalendar:
         port_pycalendar(out)

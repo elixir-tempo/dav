@@ -618,15 +618,35 @@ defmodule Dav.CalDAVTester.Runner do
         Conn.put_req_header(conn, name, value)
       end)
 
-    routed(conn, state.options)
+    route(conn, state.options)
   rescue
     _error -> %Plug.Conn{status: 500, resp_body: ""}
   end
 
-  # The time zone service is not DAV and is not served by the DAV
-  # plug: a deployment forwards to it from its own router, and for
-  # these scenarios the harness is that router.
-  defp routed(conn, options) do
+  @doc """
+  Dispatch one request the way this deployment mounts its services.
+
+  The time zone services are not DAV and are not served by the DAV
+  plug: a deployment forwards to them from its own router. Both
+  drivers share this one so that they cannot drift apart —
+  `Dav.CalDAVTester.Endpoint` handed everything to `Dav.Web.Plug`
+  while this routed three paths elsewhere, and the whole of
+  `timezoneservice` failed over HTTP while passing in process.
+
+  ### Arguments
+
+  * `conn` is the request.
+
+  * `options` are the plug options from `plug_options/2`, carrying the
+    principal the request is made as.
+
+  ### Returns
+
+  * The connection, answered by whichever service owns the path.
+
+  """
+  @spec route(Conn.t(), map()) :: Conn.t()
+  def route(conn, options) do
     case List.first(conn.path_info) do
       @timezone_mount -> TimezoneService.call(conn, @timezone_options)
       @timezone_query_mount -> TimezoneQuery.call(conn, @timezone_query_options)
@@ -878,7 +898,7 @@ defmodule Dav.CalDAVTester.Runner do
       |> put_headers(request.headers, substitutions)
       |> put_content_type(request.data)
 
-    {:ok, routed(conn, options)}
+    {:ok, route(conn, options)}
   rescue
     error ->
       {:failed,

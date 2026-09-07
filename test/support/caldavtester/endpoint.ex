@@ -8,9 +8,10 @@ defmodule Dav.CalDAVTester.Endpoint do
   TLS, authentication or concurrency. It measures the protocol, not
   the deployment.
 
-  This is the other half. The same store, the same plug options and
-  the same provisioning, behind a socket, so Apple's own harness can
-  drive it the way a client would. Two things come of that:
+  This is the other half. The same store, the same plug options, the
+  same provisioning and the same routing, behind a socket, so Apple's
+  own harness can drive it the way a client would. Two things come of
+  that:
 
   * the parts the in-process runner cannot reach are exercised — the
     server, the wire, and the authentication the scenarios assume; and
@@ -31,6 +32,14 @@ defmodule Dav.CalDAVTester.Endpoint do
   the deployment's, which is why it happens here: a library that
   parsed credentials would be choosing a scheme for everybody.
 
+  Deciding *whether* anyone need be asking is the plug's, which is why
+  it does not happen here. Some requests are answerable by a stranger:
+  RFC 6764's `/.well-known/caldav` is how a client holding nothing but
+  a hostname finds the service, and a server-to-server receiver takes
+  messages from senders who hold no account at all. The plug knows
+  both; a deployment that challenged first would refuse the one
+  request discovery exists for.
+
   ## Running it
 
       MIX_ENV=test mix run --no-halt priv/serve.exs
@@ -42,9 +51,6 @@ defmodule Dav.CalDAVTester.Endpoint do
   import Plug.Conn
 
   alias Dav.CalDAVTester.Runner
-  alias Dav.Web.Plug, as: DavPlug
-
-  @realm "CalDAV conformance"
 
   @doc """
   Provision the deployment and describe how to serve it.
@@ -94,28 +100,15 @@ defmodule Dav.CalDAVTester.Endpoint do
 
   ### Returns
 
-  * The connection, answered — or challenged, when the credentials
-    are missing or name nobody.
+  * The connection, answered — or challenged by the plug, when the
+    request needs a principal and the credentials are missing or name
+    nobody.
 
   """
   @impl Plug
   @spec call(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def call(conn, %{options: options, principals: principals}) do
-    case named(conn, principals) do
-      nil -> challenged(conn)
-      principal -> DavPlug.call(conn, %{options | principal: principal})
-    end
-  end
-
-  # RFC 9110 section 11.6.1. A request with no credentials is told how
-  # to offer them rather than simply refused, because the harness —
-  # like any client — waits to be asked. The realm is ours to name:
-  # `serverinfo.xml` states `basic`, and only Digest derives anything
-  # from the realm.
-  defp challenged(conn) do
-    conn
-    |> put_resp_header("www-authenticate", ~s(Basic realm="#{@realm}"))
-    |> send_resp(401, "")
+    Runner.route(conn, %{options | principal: named(conn, principals)})
   end
 
   defp named(conn, principals) do
