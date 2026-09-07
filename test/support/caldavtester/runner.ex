@@ -612,10 +612,32 @@ defmodule Dav.CalDAVTester.Runner do
     end
   end
 
+  # Made to the host `serverinfo.xml` declares, because the suite's
+  # `Destination` headers name that host and `Dav.Web.Plug` refuses a
+  # destination on another server (RFC 4918 section 9.9.4). Left at
+  # `Plug.Test`'s own `www.example.com`, every COPY and MOVE reads as
+  # an attempt to move a resource off this server.
+  #
+  # A `ruri` that already names a host is left alone: the suite writes
+  # a few absolute, and prefixing one gives a URI naming two servers.
+  defp addressed("/" <> _rest = uri, %{substitutions: substitutions}),
+    do: addressed(uri, substitutions)
+
+  defp addressed("/" <> _rest = uri, substitutions) when is_map(substitutions) do
+    case Map.get(substitutions, "$host:") do
+      host when is_binary(host) -> host <> uri
+      _undeclared -> uri
+    end
+  end
+
+  defp addressed(uri, _substitutions), do: uri
+
   defp requested(method, uri, state, headers, body) do
+    conn = PlugTest.conn(method, addressed(uri, state.substitutions), body)
+
     conn =
-      Enum.reduce(headers, PlugTest.conn(method, uri, body), fn {name, value}, conn ->
-        Conn.put_req_header(conn, name, value)
+      Enum.reduce(headers, conn, fn {name, value}, so_far ->
+        Conn.put_req_header(so_far, name, value)
       end)
 
     route(conn, state.options)
@@ -894,7 +916,7 @@ defmodule Dav.CalDAVTester.Runner do
     body = body(request, substitutions)
 
     conn =
-      PlugTest.conn(request.method, uri, body)
+      PlugTest.conn(request.method, addressed(uri, substitutions), body)
       |> put_headers(request.headers, substitutions)
       |> put_content_type(request.data)
 

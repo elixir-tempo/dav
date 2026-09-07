@@ -220,22 +220,6 @@ defmodule Dav.CalDAVTester.ServerInfo do
 
   ## --- reading ----------------------------------------------------
 
-  # The harness's own variables, which upstream computes from the
-  # server it is pointed at rather than declaring in the file. `$host:`
-  # prefixes every `Destination` header in the suite, and left
-  # unexpanded it makes each COPY and MOVE look like a request to
-  # another server — answered `502`, with no body, so the test reports
-  # "not valid XML" and the real cause stays hidden.
-  #
-  # Requests here go straight to the plug, so the host is the one
-  # `Plug.Test` gives them.
-  @harness %{
-    "$host:" => "http://www.example.com",
-    "$hostssl:" => "https://www.example.com",
-    "$port:" => "80",
-    "$sslport:" => "443"
-  }
-
   # A server that does not declare `split-calendars` keeps VTODOs in
   # the main calendar rather than a separate collection, and the
   # suite's expectations say so — `101.ics`, written to the tasks path,
@@ -248,8 +232,43 @@ defmodule Dav.CalDAVTester.ServerInfo do
     |> elements("substitutions")
     |> Enum.flat_map(&entries/1)
     |> Map.new()
-    |> Map.merge(@harness)
+    |> Map.merge(harness(document))
     |> unsplit()
+  end
+
+  # The harness's own variables, which upstream computes from the
+  # server it is pointed at rather than declaring in the file — so
+  # these are computed the same way, from the same three elements.
+  # `$host:` prefixes every `Destination` header in the suite, and
+  # left unexpanded it makes each COPY and MOVE look like a request to
+  # another server: answered `502`, with no body, so the test reports
+  # "not valid XML" and the real cause stays hidden.
+  #
+  # They have to be the address the server actually answers at, and
+  # not a placeholder. Held at `Plug.Test`'s own `www.example.com`,
+  # the in-process driver compared our expansion against itself and
+  # agreed every time, while the real one put Python's expansion —
+  # computed from these same three elements — beside ours and found
+  # them different: `well-known` expects a `Location` of `$hostssl:/`
+  # and got `https://www.example.com/`.
+  defp harness(document) do
+    host = declared(document, "host")
+    port = declared(document, "nonsslport")
+    secure = declared(document, "sslport")
+
+    %{
+      "$host:" => "http://#{host}:#{port}",
+      "$hostssl:" => "https://#{host}:#{secure}",
+      "$port:" => port,
+      "$sslport:" => secure
+    }
+  end
+
+  defp declared(document, name) do
+    case elements(document, name) do
+      [%{text: text} | _rest] -> text
+      [] -> ""
+    end
   end
 
   defp unsplit(substitutions) do
