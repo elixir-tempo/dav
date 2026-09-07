@@ -1575,6 +1575,10 @@ defmodule Dav.Cal.Scheduling do
       components =
         components |> Enum.map(&unforced/1) |> Enum.map(&reasked_by_force(&1, reinvited, options))
 
+      # Held for the announcement below: the copy as it stood with the
+      # rooms' lines still unanswered is what the reply is a reply to.
+      unanswered = components
+
       {components, auto_replied} = auto_answers(components, options)
 
       options =
@@ -1719,6 +1723,8 @@ defmodule Dav.Cal.Scheduling do
       withdrawal = withdrawal_numbered(components, asked, change)
 
       send_to(dropped, "CANCEL", withdrawal, zones(calendar), options, every(withdrawal))
+
+      announce_answers(auto_replied, components, unanswered, calendar, organizer, options)
 
       record(
         resource,
@@ -3098,6 +3104,69 @@ defmodule Dav.Cal.Scheduling do
 
   defp participating(property, _known, _organizer, _merging, _options), do: property
 
+  # A room answers the moment it is invited, and this server answers
+  # for it in place — inside the organiser's own write, so no `REPLY`
+  # ever travels. The reference's room replies for itself, and the
+  # organiser's `doImplicitOrganizerUpdate` stores that message:
+  # `store_inbox` is `True` for every reply it processes
+  # (`processing.py`). Without this the organiser's copy changes
+  # underneath their client with nothing to say the room said yes.
+  #
+  # The message alone is deposited. The answer is already in the copy
+  # about to be recorded, so delivering the reply properly would write
+  # it a second time and refresh every other attendee with news the
+  # same save is already sending them.
+  defp announce_answers(replied, components, unanswered, calendar, organizer, options)
+       when map_size(replied) > 0 do
+    with true <- hosted?(organizer, options),
+         %Resource{} = home <- home_of(organizer, options),
+         scoped = as(home, options),
+         %Resource{} = inbox <- collection(home, &Schedule.inbox?/1, scoped) do
+      for {address, _how} <- replied,
+          told = answered_about(components, unanswered, address, options),
+          told != [],
+          do: announce(inbox, told, unanswered, organizer, calendar, scoped)
+    end
+
+    :ok
+  end
+
+  defp announce_answers(_none, _components, _unanswered, _calendar, _organizer, _options), do: :ok
+
+  defp announce(inbox, told, unanswered, organizer, calendar, options) do
+    described = Changes.describe("REPLY", told, unanswered, originator("REPLY", told))
+
+    deposit(
+      inbox,
+      message("REPLY", told, zones(calendar)),
+      Enum.find_value(told, &value(&1, "UID")),
+      options,
+      addressing("REPLY", told, organizer) ++
+        [{:set, {@calendarserver, "schedule-changes"}, described}]
+    )
+  end
+
+  # The occurrences the answer actually moved, each cut down to the
+  # one line it speaks for. A reply says what its sender decided and
+  # nothing else: an occurrence whose line the room left where it was
+  # is not news, and naming it would show the organiser an answer
+  # nobody gave.
+  defp answered_about(components, unanswered, address, options) do
+    for component <- components,
+        component.name != "VTIMEZONE",
+        line_partstat(component, address) != held_partstat(unanswered, component, address),
+        do: as_message(only(confirmed(component), [address]), "REPLY", options)
+  end
+
+  defp held_partstat(unanswered, component, address) do
+    rid = utc_rid(component)
+
+    case Enum.find(unanswered, &(&1.name != "VTIMEZONE" and utc_rid(&1) == rid)) do
+      nil -> nil
+      held -> line_partstat(held, address)
+    end
+  end
+
   # The reference's `checkAttendeeAutoReply`: every occurrence inside
   # a year-long window is judged — an occurrence already over keeps
   # its `NEEDS-ACTION`, a free one is accepted, a booked one declined.
@@ -3731,15 +3800,7 @@ defmodule Dav.Cal.Scheduling do
     # The delivered copy carries canonical addresses too. Sending one
     # spelling and storing another is how an attendee's reply stops
     # matching the invitation it answers.
-    normalised =
-      for component <- components,
-          do:
-            component
-            |> stamp([], options)
-            |> unstamped()
-            |> without_alarms()
-            |> unagented()
-            |> unextended(extensions(options) ++ confided(method))
+    normalised = for component <- components, do: as_message(component, method, options)
 
     told =
       for component <- normalised, value(component, "RECURRENCE-ID") in announced, do: component
@@ -3760,6 +3821,19 @@ defmodule Dav.Cal.Scheduling do
             options
           ),
         do: recipient
+  end
+
+  # What a component looks like once it is a message rather than a
+  # copy: canonical addresses, no per-copy bookkeeping, none of the
+  # recipient's own alarms, and only the extensions this method
+  # carries.
+  defp as_message(component, method, options) do
+    component
+    |> stamp([], options)
+    |> unstamped()
+    |> without_alarms()
+    |> unagented()
+    |> unextended(extensions(options) ++ confided(method))
   end
 
   # Each recipient sees the instances that name them. An update whose

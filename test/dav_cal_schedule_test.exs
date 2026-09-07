@@ -874,6 +874,33 @@ defmodule Dav.Cal.ScheduleTest do
       assert line_for(stored, "carol@example.com") =~ "SCHEDULE-STATUS=2.0"
     end
 
+    test "the organiser is told the room answered", context do
+      DavPlug.call(
+        conn(
+          "PUT",
+          "/alice/calendar/r3.ics",
+          gathering(["ATTENDEE;CUTYPE=RESOURCE:mailto:room@example.com"])
+        ),
+        context.options
+      )
+
+      message =
+        DavPlug.call(conn("GET", "/alice/inbox/gathering.ics", ""), context.options).resp_body
+
+      # The server answers for the room inside the organiser's own
+      # write, so no reply ever travels — and without this the
+      # organiser's copy changed underneath their client with nothing
+      # to say the room had said yes. The reference's room replies for
+      # itself and the organiser stores that message.
+      assert message =~ "METHOD:REPLY"
+      assert line_for(message, "room@example.com") =~ "PARTSTAT=ACCEPTED"
+
+      # An iTIP reply answers for one attendee. Carrying the rest of
+      # the guest list would have the organiser's copy record every
+      # participant as having just replied.
+      assert line_for(message, "bob@example.com") == nil
+    end
+
     test "a room keeps the answer it gave to being asked again", context do
       booked = fn line ->
         gathering(["ATTENDEE;CUTYPE=RESOURCE#{line}:mailto:room@example.com"])
