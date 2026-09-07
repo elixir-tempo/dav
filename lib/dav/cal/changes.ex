@@ -40,6 +40,21 @@ defmodule Dav.Cal.Changes do
   @incidental ~w(DTSTAMP SEQUENCE X-CALENDARSERVER-DTSTAMP LAST-MODIFIED CREATED
                  SCHEDULE-STATUS SCHEDULE-AGENT REQUEST-STATUS)
 
+  # The same, one level down — and for answers only. An answer speaks
+  # for its sender, and the reference records exactly one thing it
+  # moved: `updateAttendeeDataFromReply` appends `PARTSTAT` and
+  # nothing else, deleting `RSVP` in the same breath without saying
+  # so. `SCHEDULE-STATUS` is restamped on every message the server
+  # sends, and `SCHEDULE-FORCE-SEND` is consumed by the round that
+  # carried it.
+  #
+  # An organiser's update is not filtered this way, because there the
+  # same parameters are the organiser's to write: `8.ics` in
+  # `implicitschedulechanges` adds `RSVP=TRUE` and nothing else to a
+  # line, and the suite asks that the attendee be told the `ATTENDEE`
+  # property changed.
+  @maintained ~w(RSVP SCHEDULE-STATUS SCHEDULE-FORCE-SEND)
+
   @doc """
   Describe what a message does to the copy its recipient holds.
 
@@ -193,7 +208,7 @@ defmodule Dav.Cal.Changes do
     cond do
       told == held -> nil
       gained_or_lost?(told, held, kind) -> changed_property(name, [])
-      true -> parameter_change(name, told, held)
+      true -> parameter_change(name, told, held, kind)
     end
   end
 
@@ -211,7 +226,7 @@ defmodule Dav.Cal.Changes do
     values_of(told) -- values_of(held) != [] or values_of(held) -- values_of(told) != []
   end
 
-  defp parameter_change(name, told, held) do
+  defp parameter_change(name, told, held, kind) do
     was = by_value(held)
 
     moved =
@@ -219,12 +234,16 @@ defmodule Dav.Cal.Changes do
           previous = was[line.value],
           previous != nil,
           parameter <- Map.keys(line.parameters) ++ Map.keys(previous),
+          reportable?(parameter, kind),
           Map.get(line.parameters, parameter) != Map.get(previous, parameter),
           uniq: true,
           do: parameter
 
     if moved == [], do: nil, else: changed_property(name, moved)
   end
+
+  defp reportable?(parameter, :answered), do: parameter not in @maintained
+  defp reportable?(_parameter, :stated), do: true
 
   defp by_value(properties) do
     for property <- properties, into: %{}, do: {property.value, property.parameters}

@@ -78,4 +78,52 @@ defmodule Dav.Cal.ChangesTest do
       refute answered =~ ~s(changed-property name="ATTENDEE")
     end
   end
+
+  describe "the bookkeeping beside an answer" do
+    defp asked(parameters) do
+      components([
+        "BEGIN:VEVENT",
+        "UID:s",
+        "DTSTART:20271201T090000Z",
+        "SUMMARY:Meeting",
+        "ORGANIZER:mailto:alice@example.com",
+        "ATTENDEE#{parameters}:mailto:bob@example.com",
+        "END:VEVENT"
+      ])
+    end
+
+    test "is not reported as having moved", context do
+      _ = context
+
+      answered =
+        markup(
+          "REPLY",
+          asked(";PARTSTAT=ACCEPTED;SCHEDULE-STATUS=2.0"),
+          asked(";PARTSTAT=NEEDS-ACTION;RSVP=TRUE;SCHEDULE-FORCE-SEND=REQUEST")
+        )
+
+      # `icaldiff`'s `duplicateAndNormalize` strips these three from
+      # every `ATTENDEE` before it compares anything, so the reference
+      # can never report them. Each is the server's own: `RSVP` is
+      # cleared as part of setting the `PARTSTAT`, `SCHEDULE-STATUS`
+      # is restamped on every message, and `SCHEDULE-FORCE-SEND` is
+      # consumed by the round that carried it. A client told they
+      # moved learns nothing — they move on every answer.
+      assert answered =~ ~s(changed-parameter name="PARTSTAT")
+      refute answered =~ ~s(changed-parameter name="RSVP")
+      refute answered =~ ~s(changed-parameter name="SCHEDULE-STATUS")
+      refute answered =~ ~s(changed-parameter name="SCHEDULE-FORCE-SEND")
+    end
+
+    test "leaves a property with nothing else to say unreported", context do
+      _ = context
+
+      answered =
+        markup("REPLY", asked(";PARTSTAT=ACCEPTED"), asked(";PARTSTAT=ACCEPTED;RSVP=TRUE"))
+
+      # An answer that restates itself has changed nothing. Before
+      # this, the cleared `RSVP` alone made the line look like news.
+      refute answered =~ ~s(changed-property name="ATTENDEE")
+    end
+  end
 end
