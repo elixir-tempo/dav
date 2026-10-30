@@ -7,6 +7,11 @@
 #
 # Then point CalDAVTester at it with a `serverinfo.xml` whose host and
 # port match. See rfc/conformance/caldavtester/FETCHING.md.
+#
+# Starting the server also restates the built harness's own copy of
+# `serverinfo.xml` for this deployment — see `ServerInfo.deployed/1`.
+# Rebuilding the harness with `priv/caldavtester.py` puts Apple's back,
+# so restart the server after a rebuild.
 alias Dav.CalDAVTester.Endpoint
 alias Dav.CalDAVTester.ServerInfo
 
@@ -19,12 +24,28 @@ port =
 {:ok, substitutions} = ServerInfo.read()
 options = Endpoint.provisioned(substitutions)
 
+# CalDAVTester reads its own copy of `serverinfo.xml`, and Apple's
+# describes CalendarServer — every feature it has, tasks kept apart
+# from events. Written here, as the listener comes up, so the harness
+# is only ever pointed at a description of the server that answers.
+harness = "_build/caldavtester/caldavtester/scripts/server/serverinfo.xml"
+
+restated =
+  if File.dir?(Path.dirname(harness)) do
+    {:ok, document} = ServerInfo.deployed()
+    File.write!(harness, document)
+    "restated for this deployment"
+  else
+    "not built — run priv/caldavtester.py first"
+  end
+
 {:ok, _server} =
   Bandit.start_link(plug: {Endpoint, options}, scheme: :http, port: port, ip: {127, 0, 0, 1})
 
 IO.puts("""
 CalDAV conformance deployment on http://localhost:#{port}
   accounts: #{map_size(options.principals)} (password is the account name)
+  harness serverinfo.xml: #{restated}
   stop with ctrl-c
 """)
 

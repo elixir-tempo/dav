@@ -21,8 +21,39 @@ defmodule Dav.CalDAVTester.ServerInfo do
   """
 
   alias Dav.CalDAVTester.Document
+  alias Dav.CalDAVTester.Features
+  alias Dav.Xml
 
   @path "rfc/conformance/caldavtester/scripts/server/serverinfo.xml"
+
+  # The suite has named accounts as well as numbered ones — an
+  # internationalised login among them — and every other part of the
+  # harness addresses a person by number: `$calendarhome41:`,
+  # `$principaluri41:`, `$userid41:`. Giving the named ones a number
+  # provisions them, authenticates them and resolves their addresses
+  # through the machinery that already exists, rather than a second
+  # path beside it.
+  @named [{41, "i18n"}]
+
+  # A server that does not declare `split-calendars` keeps VTODOs and
+  # VPOLLs in the main calendar rather than collections of their own,
+  # and the suite's expectations say so — `101.ics`, written to the
+  # tasks path, is expected back from a query on the calendar. Pointing
+  # the paths at one collection is what "no split calendars" means.
+  #
+  # Named as `serverinfo.xml` names them. This read `polls` for a while,
+  # which aliased `$polls1:` — a key nothing uses — and left the real
+  # `$pollspath1:` pointing at a collection that does not exist. Only
+  # `polls.xml` reads it, and it requires `vpoll`, so nothing noticed.
+  @unsplit ~w(taskspath pollspath)
+
+  # The block `deployed/1` rewrites, and the value it copies onto each
+  # unsplit path. Matched as text rather than through `Document`: the
+  # point is to hand CalDAVTester its own file back with two edits, not
+  # to re-serialise it and risk every other byte.
+  @features_block ~r/<features>.*?<\/features>/s
+
+  @calendar_path ~r/<key>\$calendarpath%d:<\/key>\s*<value>([^<]*)<\/value>/
 
   @doc """
   Read the substitution environment.
@@ -56,14 +87,97 @@ defmodule Dav.CalDAVTester.ServerInfo do
     end
   end
 
-  # The suite has named accounts as well as numbered ones — an
-  # internationalised login among them — and every other part of the
-  # harness addresses a person by number: `$calendarhome41:`,
-  # `$principaluri41:`, `$userid41:`. Giving the named ones a number
-  # provisions them, authenticates them and resolves their addresses
-  # through the machinery that already exists, rather than a second
-  # path beside it.
-  @named [{41, "i18n"}]
+  @doc """
+  The suite's `serverinfo.xml`, restated for this deployment.
+
+  Apple's file describes CalendarServer: it declares every feature
+  that server has and keeps tasks and polls in collections of their
+  own. The in-process runner corrects for both — it declares
+  `Dav.CalDAVTester.Features.declared/0` and aliases the split paths
+  onto the calendar — but CalDAVTester reads the file itself, so over
+  real HTTP it measured a different server: one that splits calendars,
+  answers polls and implements every REPORT Apple's does.
+
+  Two edits, and nothing else: the `<features>` block declares exactly
+  what this deployment builds, and each split path is pointed at the
+  calendar, the way `read/1` aliases it.
+
+  ### Arguments
+
+  * `path` is the serverinfo file, defaulting to the vendored one.
+
+  ### Returns
+
+  * `{:ok, document}`, the restated file as a string, or
+
+  * `{:error, :malformed}` if the file cannot be read.
+
+  ### Examples
+
+      iex> {:ok, document} = Dav.CalDAVTester.ServerInfo.deployed()
+      iex> String.contains?(document, "<feature>split-calendars</feature>")
+      false
+
+      iex> {:ok, document} = Dav.CalDAVTester.ServerInfo.deployed()
+      iex> String.contains?(document, "$calendarhome%d:/$tasks:")
+      false
+
+  """
+  @spec deployed(Path.t()) :: {:ok, String.t()} | {:error, :malformed}
+  def deployed(path \\ @path) do
+    case File.read(path) do
+      {:ok, text} ->
+        restated =
+          text
+          |> with_declared_features()
+          |> with_unsplit_paths()
+
+        {:ok, restated}
+
+      {:error, _unreadable} ->
+        {:error, :malformed}
+    end
+  end
+
+  # Exactly what this deployment builds. Every feature on Apple's list
+  # that is not ours turns a scenario we never claimed into a failure,
+  # and a measurement that includes them is measuring CalendarServer.
+  defp with_declared_features(text) do
+    declared =
+      Features.declared()
+      |> Enum.sort()
+      |> Enum.map_join("\n", &feature_line/1)
+
+    Regex.replace(@features_block, text, fn _block ->
+      "<features>\n" <> declared <> "\n\t</features>"
+    end)
+  end
+
+  defp feature_line(name) do
+    "\t\t<feature>" <> Xml.escape(name) <> "</feature>"
+  end
+
+  # Copied from `$calendarpath%d:` rather than written out, so the
+  # aliases cannot drift from the path they stand in for.
+  defp with_unsplit_paths(text) do
+    case Regex.run(@calendar_path, text, capture: :all_but_first) do
+      [calendar] ->
+        Enum.reduce(@unsplit, text, fn name, restated ->
+          repointed(restated, name, calendar)
+        end)
+
+      nil ->
+        text
+    end
+  end
+
+  defp repointed(text, name, calendar) do
+    pattern = ~r/(<key>\$#{name}%d:<\/key>\s*<value>)[^<]*(<\/value>)/
+
+    Regex.replace(pattern, text, fn _whole, open, close ->
+      open <> calendar <> close
+    end)
+  end
 
   defp numbered(substitutions) do
     Enum.reduce(@named, substitutions, fn {index, name}, found ->
@@ -219,13 +333,6 @@ defmodule Dav.CalDAVTester.ServerInfo do
   end
 
   ## --- reading ----------------------------------------------------
-
-  # A server that does not declare `split-calendars` keeps VTODOs in
-  # the main calendar rather than a separate collection, and the
-  # suite's expectations say so — `101.ics`, written to the tasks path,
-  # is expected back from a query on the calendar. Pointing the two
-  # paths at one collection is what "no split calendars" means.
-  @unsplit ~w(taskspath polls)
 
   defp pairs(document) do
     document
