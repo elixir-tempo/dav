@@ -22,3 +22,6 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 dav-*.tar
 
+
+# Per-checkout session context for Claude Code; never committed.
+CLAUDE.local.md
