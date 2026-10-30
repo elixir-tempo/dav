@@ -215,6 +215,62 @@ def parenthesised_headers(root):
             )
 
 
+# A fixture is bytes, and Python 3 wants to treat it as text at both
+# ends of the journey. Python 2 read a file in text mode as bytes and
+# handed those same bytes to the socket; on 3 the read decodes as
+# UTF-8 and the write encodes as latin-1, so a fixture that is neither
+# dies twice over — once in `getData`, once in `http.request`.
+#
+# `nonascii`'s "Non-utf-8 calendar data" suite exists to PUT exactly
+# such a fixture and require the server to refuse it: `10.ics` and
+# `11.ics` carry MacRoman curly quotes, which is the whole point of
+# them. Decoding them is not a thing to be fixed by choosing a better
+# encoding, because the test needs the original bytes on the wire.
+#
+# `errors="surrogateescape"` is Python 3's answer to this: an
+# undecodable byte becomes a lone surrogate, string substitution runs
+# over it untouched, and encoding back with the same handler restores
+# the byte exactly. Verified byte-for-byte on `10.ics`, with `6.ics`
+# (UTF-8 with a BOM) and `9.xml` unharmed.
+#
+# All five fixture reads get it, not just the request body: each of
+# the `*DataMatch` verifiers reads an expected-data file the same way,
+# and any of them can be pointed at a fixture that is not UTF-8.
+VERBATIM_READS = [
+    ("src", "request.py"),
+    ("verifiers", "dataMatch.py"),
+    ("verifiers", "addressDataMatch.py"),
+    ("verifiers", "xmlDataMatch.py"),
+    ("verifiers", "calendarDataMatch.py"),
+]
+
+
+def verbatim_bodies(root):
+    for parts in VERBATIM_READS:
+        edit(
+            root.joinpath(*parts),
+            [(', "r")', ', "r", errors="surrogateescape")')],
+        )
+
+    edit(
+        root / "src" / "caldavtest.py",
+        [
+            (
+                "http.request(method, quri, data, headers)",
+                "http.request(\n"
+                "                method,\n"
+                "                quri,\n"
+                "                data.encode"
+                '("utf-8", "surrogateescape")\n'
+                "                if isinstance(data, str)\n"
+                "                else data,\n"
+                "                headers,\n"
+                "            )",
+            )
+        ],
+    )
+
+
 # Python 3 dropped `cmp`. pycalendar's date comparisons are written
 # around it, and ten call sites read better with the builtin restored
 # than rewritten one by one into `(a > b) - (a < b)`.
@@ -340,6 +396,7 @@ def main():
     text_tostring(harness)
     counted_children(harness)
     parenthesised_headers(harness)
+    verbatim_bodies(harness)
 
     if not arguments.no_pycalendar:
         port_pycalendar(out)
